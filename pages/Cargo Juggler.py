@@ -14,8 +14,7 @@ st.title("Aircraft Cargo Fit Checker")
 st.markdown(
     "⚠️ **Disclaimer:** This tool provides an *estimated* packing feasibility only. "
     "Actual results may vary depending on actual baggage size, materials, fullness, and shape. "
-    "Always verify in practice before flight."
-)
+    )
 
 # ============================================================
 # Predefined Containers
