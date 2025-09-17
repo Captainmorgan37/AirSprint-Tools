@@ -31,3 +31,7 @@ scipy>=1.11.0
 
 # For web scraping or HTML parsing (if you expand Slot Parser / NOTAM tools)
 html5lib>=1.1
+
+# ASP Tracking Dashboard
+streamlit-autorefresh
+tzdata
