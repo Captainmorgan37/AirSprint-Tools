@@ -14,7 +14,7 @@ st.title("✈️ Aircraft Presence — McCall & Palmer")
 
 # Disclaimer
 st.markdown(
-    "> ⚠️ **Note:** CFSDO does not currently contain a tracker, so the location cannot be displayed."
+    "> ⚠️ **Note:** CGFSJ does not currently contain a tracker, so the location cannot be displayed."
 )
 
 # Auto-refresh every 60s
