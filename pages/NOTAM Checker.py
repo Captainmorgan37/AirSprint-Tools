@@ -137,6 +137,19 @@ METAR_SUMMARY_LABELS = {
 }
 
 
+_METAR_WIND_REGEX = re.compile(
+    r"\b(?P<dir>\d{3}|VRB)(?P<speed>\d{2,3})(?:G(?P<gust>\d{2,3}))?KT\b"
+)
+_METAR_VIS_REGEX = re.compile(
+    r"\b(?P<prefix>P|M)?(?:"
+    r"(?P<whole>\d+)\s(?P<fraction>\d+/\d+)"
+    r"|(?P<only_fraction>\d+/\d+)"
+    r"|(?P<only_number>\d+)"
+    r")SM\b"
+)
+_METAR_TEMP_DEW_REGEX = re.compile(r"\b(?P<temp>M?\d{2})/(?P<dew>M?\d{2})\b")
+
+
 def _format_numeric(value, decimals: int | None = None) -> str | None:
     if value in (None, "", [], "M"):
         return None
@@ -160,7 +173,11 @@ def _format_wind_direction(value) -> str | None:
         num = float(value)
     except (TypeError, ValueError):
         text = str(value).strip()
-        return text or None
+        if not text:
+            return None
+        if text.upper() == "VRB":
+            return "variable"
+        return text
     return f"{int(round(num))}°"
 
 
@@ -236,10 +253,104 @@ def _format_weather(metar_data: dict) -> str | None:
     return weather or None
 
 
+def _parse_fraction(value: str) -> float | None:
+    try:
+        numerator, denominator = value.split("/", 1)
+        return float(numerator) / float(denominator)
+    except (ValueError, ZeroDivisionError):
+        return None
+
+
+def _parse_visibility_from_match(match: re.Match) -> float | str | None:
+    prefix = match.group("prefix") or ""
+    value_text = None
+    if match.group("whole") and match.group("fraction"):
+        value_text = f"{match.group('whole')} {match.group('fraction')}"
+        fraction_value = _parse_fraction(match.group("fraction"))
+        if fraction_value is None:
+            numeric_value = None
+        else:
+            numeric_value = float(match.group("whole")) + fraction_value
+    elif match.group("only_fraction"):
+        value_text = match.group("only_fraction")
+        numeric_value = _parse_fraction(value_text)
+    else:
+        value_text = match.group("only_number")
+        numeric_value = float(value_text) if value_text is not None else None
+
+    if value_text is None:
+        return None
+
+    if prefix:
+        return f"{prefix}{value_text}".strip()
+    if numeric_value is not None:
+        return numeric_value
+    return value_text
+
+
+def _parse_signed_temperature(value: str) -> int | None:
+    if not value:
+        return None
+    sign = -1 if value.startswith("M") else 1
+    digits = value.lstrip("M")
+    if not digits.isdigit():
+        return None
+    return sign * int(digits)
+
+
+def parse_metar_raw(raw_text: str) -> dict:
+    if not isinstance(raw_text, str) or not raw_text:
+        return {}
+
+    parsed: dict[str, object] = {}
+
+    wind_match = _METAR_WIND_REGEX.search(raw_text)
+    if wind_match:
+        wind_dir = wind_match.group("dir")
+        wind_speed = wind_match.group("speed")
+        wind_gust = wind_match.group("gust")
+        if wind_dir:
+            parsed["windDir"] = wind_dir
+        if wind_speed:
+            try:
+                parsed["windSpeed"] = int(wind_speed)
+            except ValueError:
+                parsed["windSpeed"] = wind_speed
+        if wind_gust:
+            try:
+                parsed["windGust"] = int(wind_gust)
+            except ValueError:
+                parsed["windGust"] = wind_gust
+
+    vis_match = _METAR_VIS_REGEX.search(raw_text)
+    if vis_match:
+        visibility_value = _parse_visibility_from_match(vis_match)
+        if visibility_value is not None:
+            parsed["visibility"] = visibility_value
+
+    temp_match = _METAR_TEMP_DEW_REGEX.search(raw_text)
+    if temp_match:
+        temp_value = _parse_signed_temperature(temp_match.group("temp"))
+        dew_value = _parse_signed_temperature(temp_match.group("dew"))
+        if temp_value is not None:
+            parsed["temp"] = temp_value
+        if dew_value is not None:
+            parsed["dewpoint"] = dew_value
+
+    return parsed
+
+
 def build_metar_summary(report_entry: dict) -> list[str]:
     metar_data = report_entry.get("metar_data") or {}
     if not isinstance(metar_data, dict):
         metar_data = {}
+
+    raw_text = report_entry.get("raw", "")
+    fallback_data = parse_metar_raw(raw_text)
+    if fallback_data:
+        combined_data = dict(fallback_data)
+        combined_data.update(metar_data)
+        metar_data = combined_data
 
     summary_lines: list[str] = []
 
