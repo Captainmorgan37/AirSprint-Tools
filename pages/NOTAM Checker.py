@@ -1359,7 +1359,7 @@ if uploaded_file:
         st.error(f"Error reading file: {e}")
 
 # ----- TABS -----
-tab1, tab2, tab3 = st.tabs(["CFPS/FAA Viewer", "FAA Debug", "METAR/TAF"])
+tab1, tab2 = st.tabs(["CFPS/FAA Viewer", "METAR/TAF"])
 
 # ---------------- Tab 1: CFPS/FAA Viewer ----------------
 with tab1:
@@ -1452,56 +1452,8 @@ with tab1:
 
 
 
-# ---------------- Tab 2: FAA Debug ----------------
+# ---------------- Tab 2: METAR/TAF ----------------
 with tab2:
-    st.header("FAA NOTAM Debug - Raw Data")
-    debug_icao = st.text_input("Enter ICAO for raw FAA NOTAM debug", value="KSFO").upper().strip()
-
-    if debug_icao:
-        st.write(f"Fetching raw FAA NOTAMs for {debug_icao}...")
-        try:
-            url = "https://external-api.faa.gov/notamapi/v1/notams"
-            headers = {
-                "client_id": FAA_CLIENT_ID,
-                "client_secret": FAA_CLIENT_SECRET
-            }
-            params = {
-                "icaoLocation": debug_icao,
-                "responseFormat": "geoJson",
-                "pageSize": 200
-            }
-
-            all_items = []
-            page_cursor = None
-
-            while True:
-                if page_cursor:
-                    params["pageCursor"] = page_cursor
-
-                response = requests.get(url, headers=headers, params=params)
-                response.raise_for_status()
-                data = response.json()
-                items = data.get("items", [])
-                all_items.extend(items)
-                page_cursor = data.get("nextPageCursor")
-                if not page_cursor:
-                    break
-
-            st.write(f"Total NOTAMs received: {len(all_items)}")
-
-            for feature in all_items:
-                props = feature.get("properties", {})
-                core = props.get("coreNOTAMData", {})
-                notam_data = core.get("notam", {})
-                text = notam_data.get("text", "")
-                st.text(text)
-
-        except Exception as e:
-            st.error(f"FAA fetch failed for {debug_icao}: {e}")
-
-
-# ---------------- Tab 3: METAR/TAF ----------------
-with tab3:
     st.header("METAR & TAF Data")
 
     if not icao_list:
