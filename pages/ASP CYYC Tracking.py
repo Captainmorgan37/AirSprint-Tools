@@ -13,8 +13,8 @@ st.set_page_config(page_title="Aircraft Presence (McCall/Palmer)", layout="wide"
 st.title("✈️ Aircraft Presence — McCall & Palmer")
 
 
-# Auto-refresh every 60s
-st_autorefresh(interval=60 * 1000, key="gpsfeedrefresh")
+# Auto-refresh every 180s
+st_autorefresh(interval=180 * 1000, key="gpsfeedrefresh")
 
 # Load credentials from secrets
 EMAIL_ACCOUNT = st.secrets["EMAIL_ACCOUNT"]
