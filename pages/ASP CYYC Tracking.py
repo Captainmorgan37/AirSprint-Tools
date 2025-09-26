@@ -12,10 +12,6 @@ from zoneinfo import ZoneInfo
 st.set_page_config(page_title="Aircraft Presence (McCall/Palmer)", layout="wide")
 st.title("✈️ Aircraft Presence — McCall & Palmer")
 
-# Disclaimer
-st.markdown(
-    "> ⚠️ **Note:** CGFSJ does not currently contain a tracker, so the location cannot be displayed."
-)
 
 # Auto-refresh every 60s
 st_autorefresh(interval=60 * 1000, key="gpsfeedrefresh")
