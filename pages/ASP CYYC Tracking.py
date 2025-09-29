@@ -51,7 +51,14 @@ def fetch_latest_csv() -> pd.DataFrame:
             if part.get("Content-Disposition") is None:
                 continue
             filename = part.get_filename()
-            if filename and filename == FILENAME:
+            if not filename:
+                continue
+
+            filename = filename.strip()
+            is_expected_file = filename == FILENAME
+            is_csv_attachment = filename.lower().endswith(".csv")
+
+            if is_expected_file or is_csv_attachment:
                 payload = part.get_payload(decode=True)
                 df = pd.read_csv(pd.io.common.BytesIO(payload))
                 return df
@@ -71,8 +78,16 @@ def parse_df(df: pd.DataFrame):
 
     df.columns = [c.strip() for c in df.columns]
 
-    if "Last Seen UTC" in df.columns:
-        df.rename(columns={"Last Seen UTC": "Last Seen (MT)"}, inplace=True)
+    column_aliases = {
+        "Last Seen UTC": "Last Seen (MT)",
+        "Last Connected Date Time": "Last Seen (MT)",
+        "Last Location": "Last Location",
+        "Location": "Last Location",
+    }
+
+    for original, alias in column_aliases.items():
+        if original in df.columns and alias not in df.columns:
+            df.rename(columns={original: alias}, inplace=True)
 
     def parse_local(ts: str):
         try:
@@ -80,8 +95,15 @@ def parse_df(df: pd.DataFrame):
         except Exception:
             return pd.NaT
 
-    df["Last Seen (MT)"] = df["Last Seen (MT)"].apply(parse_local)
-    df["Last Location"] = df["Last Location"].astype(str).str.strip()
+    if "Last Seen (MT)" in df.columns:
+        df["Last Seen (MT)"] = df["Last Seen (MT)"].apply(parse_local)
+    else:
+        df["Last Seen (MT)"] = pd.NaT
+
+    if "Last Location" in df.columns:
+        df["Last Location"] = df["Last Location"].astype(str).str.strip()
+    else:
+        df["Last Location"] = ""
 
     # Extract only the tail registration (first token of the Name column)
     if "Name" in df.columns:
