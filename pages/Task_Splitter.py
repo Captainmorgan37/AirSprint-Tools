@@ -363,7 +363,29 @@ def _filter_rows_by_departure_window(
 
 
 def _airport_tz_path() -> Path:
-    return Path(__file__).with_name(AIRPORT_TZ_FILENAME)
+    """Locate the airport timezone lookup file.
+
+    When the Tail Splitter app lived at the project root the timezone file sat
+    next to the main module. After moving the app into ``pages/`` Streamlit
+    continues to execute it from that location, but the data file remained at
+    the repository root. ``Path(__file__).with_name`` therefore points to the
+    wrong directory.  To keep supporting both layouts we search the current
+    file's parent directories (``pages/`` and the repo root) and finally fall
+    back to the previous behaviour if nothing is found.
+    """
+
+    this_file = Path(__file__).resolve()
+
+    for directory in this_file.parents:
+        candidate = directory / AIRPORT_TZ_FILENAME
+        if candidate.exists():
+            return candidate
+
+    cwd_candidate = Path.cwd() / AIRPORT_TZ_FILENAME
+    if cwd_candidate.exists():
+        return cwd_candidate
+
+    return this_file.with_name(AIRPORT_TZ_FILENAME)
 
 
 @lru_cache(maxsize=1)
