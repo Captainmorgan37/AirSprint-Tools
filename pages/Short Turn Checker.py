@@ -491,8 +491,24 @@ def fetch_fl3xx_legs(token: str, start_utc: datetime, end_utc: datetime) -> pd.D
         st.error("No FL3XX API token found. Provide a token or configure it in Streamlit secrets.")
         return pd.DataFrame()
 
-    from_date = start_utc.date()
-    to_date = end_utc.date()
+    requested_from = start_utc.date()
+    requested_to = end_utc.date()
+    from_date = requested_from
+    to_date = requested_to
+
+    utc_today = datetime.now(ZoneInfo("UTC")).date()
+    if from_date < utc_today:
+        shift_days = (utc_today - from_date).days
+        from_date = utc_today
+        to_date = requested_to + timedelta(days=shift_days)
+        if to_date <= from_date:
+            to_date = from_date + timedelta(days=1)
+        st.info(
+            "FL3XX only allows fetching flights from today onwards. "
+            f"Adjusted the request window to {from_date.isoformat()} → {to_date.isoformat()}."
+        )
+    elif to_date <= from_date:
+        to_date = from_date + timedelta(days=1)
 
     try:
         flights, metadata = fetch_flights(config, from_date=from_date, to_date=to_date)
@@ -742,7 +758,9 @@ def compute_short_turns(
 
     out = pd.DataFrame(short_turn_rows)
     if not out.empty:
-        out = out.sort_values(["dep_offblock", "tail", "station"]).reset_index(drop=True)
+        out = out.sort_values(
+            ["dep_offblock", "turn_min", "tail", "station"]
+        ).reset_index(drop=True)
     return out
 
 
