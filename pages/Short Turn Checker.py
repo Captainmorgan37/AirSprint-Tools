@@ -310,6 +310,16 @@ def _normalise_flights(flights):
         "uuid",
     ]
 
+    booking_code_keys = [
+        "bookingCode",
+        "booking.code",
+        "booking.bookingCode",
+        "booking.codeName",
+        "bookingCodeName",
+        "bookingReference",
+        "booking.reference",
+    ]
+
     priority_label_keys = [
         "workflowCustomName",
         "workflow_custom_name",
@@ -343,6 +353,7 @@ def _normalise_flights(flights):
         flight_id = _extract_field(flight, flight_id_keys)
         if not flight_id:
             flight_id = leg_id
+        booking_code = _extract_field(flight, booking_code_keys)
         priority_label = _extract_field(flight, priority_label_keys)
         is_priority, priority_text = _detect_priority(priority_label)
         if not is_priority:
@@ -400,6 +411,7 @@ def _normalise_flights(flights):
                 "arr_onblock": arr_time,
                 "leg_id": leg_id,
                 "flight_id": flight_id,
+                "booking_code": booking_code,
                 "is_priority": is_priority,
                 "priority_label": priority_text,
             }
@@ -523,6 +535,19 @@ def load_uploaded(file) -> pd.DataFrame:
     arr_on_col = pick("arr_onblock", "scheduledin", "intime", "onblock")
     leg_id_col = pick("leg_id", "bookingidentifier", "id", "legid", "uuid")
     flight_id_col = pick("flight_id", "flightid", "scheduleid", "legid", "uuid", "id")
+    booking_code_col = pick(
+        "booking_code",
+        "bookingcode",
+        "booking code",
+        "bookingcodename",
+        "booking code name",
+        "bookingreference",
+        "booking_reference",
+        "bookingcode_name",
+        "bookingcodeidentifier",
+        "booking_reference_code",
+        "bookingref",
+    )
     priority_label_col = pick(
         "priority_label",
         "prioritydetail",
@@ -545,6 +570,11 @@ def load_uploaded(file) -> pd.DataFrame:
         df["flight_id"] = raw[flight_id_col]
     else:
         df["flight_id"] = df.get("leg_id")
+
+    if booking_code_col:
+        df["booking_code"] = raw[booking_code_col]
+    else:
+        df["booking_code"] = None
 
     priority_bool = pd.Series([False] * len(raw), index=raw.index, dtype="bool")
     priority_label = pd.Series([None] * len(raw), index=raw.index, dtype="object")
@@ -594,6 +624,8 @@ def compute_short_turns(
     legs["arr_onblock"] = legs["arr_onblock"].apply(parse_dt)
     if "flight_id" not in legs.columns:
         legs["flight_id"] = legs.get("leg_id")
+    if "booking_code" not in legs.columns:
+        legs["booking_code"] = None
     if "is_priority" not in legs.columns:
         legs["is_priority"] = False
     if "priority_label" not in legs.columns:
@@ -614,6 +646,7 @@ def compute_short_turns(
             "arr_onblock",
             "leg_id",
             "flight_id",
+            "booking_code",
             "is_priority",
             "priority_label",
         ]
@@ -621,6 +654,7 @@ def compute_short_turns(
         columns={
             "leg_id": "arr_leg_id",
             "flight_id": "arr_flight_id",
+            "booking_code": "arr_booking_code",
             "is_priority": "arr_is_priority",
             "priority_label": "arr_priority_label",
         }
@@ -632,6 +666,7 @@ def compute_short_turns(
             "dep_offblock",
             "leg_id",
             "flight_id",
+            "booking_code",
             "is_priority",
             "priority_label",
         ]
@@ -639,6 +674,7 @@ def compute_short_turns(
         columns={
             "leg_id": "dep_leg_id",
             "flight_id": "dep_flight_id",
+            "booking_code": "dep_booking_code",
             "is_priority": "dep_is_priority",
             "priority_label": "dep_priority_label",
         }
@@ -673,11 +709,17 @@ def compute_short_turns(
             arr_priority = bool(r.get("arr_is_priority"))
             dep_priority = bool(next_dep.get("dep_is_priority"))
             priority_flag = arr_priority or dep_priority
-            required_threshold = (
-                max(threshold_min, priority_threshold_min)
-                if priority_flag
-                else threshold_min
-            )
+            arr_code = r.get("arr_booking_code")
+            dep_code = next_dep.get("dep_booking_code")
+            same_booking_code = False
+            if arr_code and dep_code:
+                arr_code_str = str(arr_code).strip().upper()
+                dep_code_str = str(dep_code).strip().upper()
+                same_booking_code = bool(arr_code_str and arr_code_str == dep_code_str)
+
+            required_threshold = threshold_min
+            if priority_flag and not same_booking_code:
+                required_threshold = max(threshold_min, priority_threshold_min)
             if turn_min < required_threshold:
                 short_turn_rows.append({
                     "tail": tail,
@@ -693,6 +735,9 @@ def compute_short_turns(
                     "priority_flag": priority_flag,
                     "arr_priority_label": r.get("arr_priority_label"),
                     "dep_priority_label": next_dep.get("dep_priority_label"),
+                    "arr_booking_code": arr_code,
+                    "dep_booking_code": dep_code,
+                    "same_booking_code": same_booking_code,
                 })
 
     out = pd.DataFrame(short_turn_rows)
@@ -1021,12 +1066,31 @@ if not legs_df.empty:
                 "Departure Priority Detail",
                 help="Priority metadata tied to the departure leg",
             )
+        if "arr_booking_code" in short_df.columns:
+            col_config["arr_booking_code"] = st.column_config.TextColumn(
+                "Arrival Booking Code",
+                help="Booking code associated with the arrival leg",
+            )
+        if "dep_booking_code" in short_df.columns:
+            col_config["dep_booking_code"] = st.column_config.TextColumn(
+                "Departure Booking Code",
+                help="Booking code associated with the departure leg",
+            )
+        if "same_booking_code" in short_df.columns:
+            col_config["same_booking_code"] = st.column_config.CheckboxColumn(
+                "Same Booking",
+                help="Arrival and departure legs share the same booking code",
+                disabled=True,
+            )
 
         desired_order = [
             "tail",
             "station",
             "arr_leg_id",
+            "arr_booking_code",
             "dep_leg_id",
+            "dep_booking_code",
+            "same_booking_code",
             "turn_min",
             "required_threshold_min",
             "priority_flag",
