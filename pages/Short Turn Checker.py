@@ -491,8 +491,24 @@ def fetch_fl3xx_legs(token: str, start_utc: datetime, end_utc: datetime) -> pd.D
         st.error("No FL3XX API token found. Provide a token or configure it in Streamlit secrets.")
         return pd.DataFrame()
 
-    from_date = start_utc.date()
-    to_date = end_utc.date()
+    requested_from = start_utc.date()
+    requested_to = end_utc.date()
+    from_date = requested_from
+    to_date = requested_to
+
+    utc_today = datetime.now(ZoneInfo("UTC")).date()
+    if from_date < utc_today:
+        shift_days = (utc_today - from_date).days
+        from_date = utc_today
+        to_date = requested_to + timedelta(days=shift_days)
+        if to_date <= from_date:
+            to_date = from_date + timedelta(days=1)
+        st.info(
+            "FL3XX only allows fetching flights from today onwards. "
+            f"Adjusted the request window to {from_date.isoformat()} → {to_date.isoformat()}."
+        )
+    elif to_date <= from_date:
+        to_date = from_date + timedelta(days=1)
 
     try:
         flights, metadata = fetch_flights(config, from_date=from_date, to_date=to_date)
@@ -742,7 +758,9 @@ def compute_short_turns(
 
     out = pd.DataFrame(short_turn_rows)
     if not out.empty:
-        out = out.sort_values(["turn_min", "tail", "station"]).reset_index(drop=True)
+        out = out.sort_values(
+            ["dep_offblock", "turn_min", "tail", "station"]
+        ).reset_index(drop=True)
     return out
 
 
@@ -896,9 +914,9 @@ st.sidebar.header("Data Source")
 source = st.sidebar.radio("Choose source", ["FL3XX API", "Upload CSV/JSON"], index=0)
 threshold = st.sidebar.number_input("Short-turn threshold (minutes)", min_value=5, max_value=240, value=DEFAULT_TURN_THRESHOLD_MIN, step=5)
 
-# Date selector defaults: night shift usually looks at "tomorrow" for the next few days
 local_today = datetime.now(LOCAL_TZ).date()
-default_start = local_today + timedelta(days=1)
+# Date selector defaults: show today's legs first, then the next few days
+default_start = local_today
 default_end = default_start + timedelta(days=4)
 selected_dates = st.sidebar.date_input(
     "Date range (local)",
@@ -1107,16 +1125,6 @@ if not legs_df.empty:
             file_name=f"short_turns_{start_date.strftime('%Y%m%d')}_{end_date.strftime('%Y%m%d')}.csv",
             mime="text/csv",
         )
-
-        # Quick summary chips
-        st.markdown("### Summary")
-        by_tail = (
-            short_df.groupby("tail")
-            .size()
-            .reset_index(name="count")
-            .sort_values("count", ascending=False)
-        )
-        st.dataframe(by_tail, use_container_width=True, hide_index=True)
 
     if source == "FL3XX API":
         priority_warnings, priority_errors, evaluated_total = compute_priority_checkin_warnings(
