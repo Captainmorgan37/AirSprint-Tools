@@ -136,6 +136,13 @@ def _build_flight_endpoint(base_url: str, flight_id: Any) -> str:
     return f"{base}/{flight_id}/crew"
 
 
+def _build_migration_endpoint(base_url: str, flight_id: Any) -> str:
+    base = base_url.rstrip("/")
+    if base.lower().endswith("/flights"):
+        base = base[: -len("/flights")]
+    return f"{base}/{flight_id}/migration"
+
+
 def _normalise_crew_payload(payload: Any) -> List[Dict[str, Any]]:
     """Return a list of crew member dictionaries from various payload layouts."""
 
@@ -196,6 +203,36 @@ def fetch_flight_crew(
         response.raise_for_status()
         payload = response.json()
         return _normalise_crew_payload(payload)
+    finally:
+        if close_session:
+            try:
+                http.close()
+            except AttributeError:
+                pass
+
+
+def fetch_flight_migration(
+    config: Fl3xxApiConfig,
+    flight_id: Any,
+    *,
+    session: Optional[requests.Session] = None,
+) -> Dict[str, Any]:
+    """Return the customs migration payload for a specific flight."""
+
+    http = session or requests.Session()
+    close_session = session is None
+    try:
+        response = http.get(
+            _build_migration_endpoint(config.base_url, flight_id),
+            headers=config.build_headers(),
+            timeout=config.timeout,
+            verify=config.verify_ssl,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if isinstance(payload, MutableMapping):
+            return dict(payload)
+        raise ValueError("Unsupported FL3XX migration payload structure")
     finally:
         if close_session:
             try:
@@ -295,5 +332,6 @@ __all__ = [
     "compute_flights_digest",
     "fetch_flights",
     "fetch_flight_crew",
+    "fetch_flight_migration",
     "enrich_flights_with_crew",
 ]
