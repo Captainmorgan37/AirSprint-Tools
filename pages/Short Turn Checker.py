@@ -1066,16 +1066,6 @@ if not legs_df.empty:
                 "Departure Priority Detail",
                 help="Priority metadata tied to the departure leg",
             )
-        if "arr_booking_code" in short_df.columns:
-            col_config["arr_booking_code"] = st.column_config.TextColumn(
-                "Arrival Booking Code",
-                help="Booking code associated with the arrival leg",
-            )
-        if "dep_booking_code" in short_df.columns:
-            col_config["dep_booking_code"] = st.column_config.TextColumn(
-                "Departure Booking Code",
-                help="Booking code associated with the departure leg",
-            )
         if "same_booking_code" in short_df.columns:
             col_config["same_booking_code"] = st.column_config.CheckboxColumn(
                 "Same Booking",
@@ -1087,9 +1077,7 @@ if not legs_df.empty:
             "tail",
             "station",
             "arr_leg_id",
-            "arr_booking_code",
             "dep_leg_id",
-            "dep_booking_code",
             "same_booking_code",
             "turn_min",
             "required_threshold_min",
@@ -1099,9 +1087,12 @@ if not legs_df.empty:
             "arr_onblock",
             "dep_offblock",
         ]
-        column_order = [col for col in desired_order if col in short_df.columns]
+        display_short_df = short_df.drop(
+            columns=["arr_booking_code", "dep_booking_code"], errors="ignore"
+        )
+        column_order = [col for col in desired_order if col in display_short_df.columns]
         st.dataframe(
-            short_df,
+            display_short_df,
             use_container_width=True,
             hide_index=True,
             column_config=col_config,
@@ -1149,6 +1140,23 @@ if not legs_df.empty:
             )
         else:
             warning_col_config = {
+                "tail": st.column_config.TextColumn("Tail"),
+                "dep_date": st.column_config.TextColumn(
+                    "Departure Date",
+                    help="Date of the priority departure",
+                ),
+                "dep_airport": st.column_config.TextColumn(
+                    "Departure Airport",
+                    help="Airport code for the departure",
+                ),
+                "dep_leg_id": st.column_config.TextColumn(
+                    "Departure Booking",
+                    help="Booking identifier for the departure leg",
+                ),
+                "priority_label": st.column_config.TextColumn(
+                    "Priority Detail",
+                    help="Priority metadata associated with the departure",
+                ),
                 "departure_time": st.column_config.DatetimeColumn(
                     format="YYYY-MM-DD HH:mm",
                     help="Scheduled/actual departure time for the priority leg",
@@ -1162,7 +1170,7 @@ if not legs_df.empty:
                     help="Latest crew check-in returned by FL3XX",
                 ),
                 "minutes_before_departure": st.column_config.NumberColumn(
-                    "Minutes Before Dep",
+                    "Minutes Before Departure",
                     help="Actual gap between earliest check-in and departure",
                     step=0.1,
                 ),
@@ -1175,6 +1183,10 @@ if not legs_df.empty:
                     "Check-ins",
                     help="Number of crew check-in entries returned",
                 ),
+                "checkin_times": st.column_config.TextColumn(
+                    "Check-in Times",
+                    help="Crew check-in timestamps returned by FL3XX",
+                ),
             }
 
             priority_order = [
@@ -1182,7 +1194,6 @@ if not legs_df.empty:
                 "dep_date",
                 "dep_airport",
                 "dep_leg_id",
-                "flight_id",
                 "priority_label",
                 "departure_time",
                 "earliest_checkin",
@@ -1192,13 +1203,18 @@ if not legs_df.empty:
                 "checkin_count",
                 "checkin_times",
             ]
+            display_priority_warnings = priority_warnings.drop(
+                columns=["flight_id"], errors="ignore"
+            )
             st.dataframe(
-                priority_warnings,
+                display_priority_warnings,
                 use_container_width=True,
                 hide_index=True,
                 column_config=warning_col_config,
                 column_order=[
-                    col for col in priority_order if col in priority_warnings.columns
+                    col
+                    for col in priority_order
+                    if col in display_priority_warnings.columns
                 ],
             )
     elif source == "FL3XX API" and not priority_errors:
