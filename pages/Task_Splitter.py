@@ -1167,7 +1167,8 @@ def assign_preference_weighted(
             eligible_labels = labels
 
         def score(lab: str) -> tuple[float, float, float, int, int]:
-            target = tz_targets[labels.index(lab)]
+            label_idx = labels.index(lab)
+            target = tz_targets[label_idx]
             if span:
                 half_span = span / 2 or 1
                 # Increase the penalty for extreme east/west packages so that
@@ -1175,16 +1176,26 @@ def assign_preference_weighted(
                 # toward earlier ones) than mid-range timezones.
                 normalized_extremity = min(abs(pkg_offset - center) / half_span, 2)
                 tz_weight = 1 + normalized_extremity
+                if len(labels) > 1:
+                    normalized_eastness = (pkg_offset - min_off) / span
+                    normalized_label_pref = 1 - (label_idx / (len(labels) - 1))
+                    shift_bias_penalty = (
+                        abs(normalized_eastness - normalized_label_pref)
+                        * (len(labels) - 1)
+                    )
+                else:
+                    shift_bias_penalty = 0.0
             else:
                 tz_weight = 1.0
-            tz_penalty = abs(pkg_offset - target) * tz_weight
+                shift_bias_penalty = 0.0
+            tz_penalty = abs(pkg_offset - target) * tz_weight + shift_bias_penalty
             projected_total = totals[lab] + _workload(pkg)
             return (
                 round(abs(projected_total - workload_targets[lab]), 4),
                 round(_normalized_total(lab, projected_total) - min_norm_total, 4),
                 round(tz_penalty, 4),
                 len(buckets[lab]),
-                labels.index(lab),
+                label_idx,
             )
 
         label = min(eligible_labels, key=score)
