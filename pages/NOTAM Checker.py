@@ -5,7 +5,7 @@ import json
 import re
 import html
 from datetime import datetime, timedelta, date
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Union
 
 from fl3xx_client import fetch_flights, compute_fetch_dates
 from flight_leg_utils import (
@@ -1341,14 +1341,33 @@ def sort_notams_for_display(notams):
 # ----- FL3XX HELPERS -----
 
 
-def _normalise_date_range(selection: Union[Tuple[date, date], date]) -> Tuple[date, date]:
+def _normalise_date_range(selection: Union[Sequence[Optional[date]], Optional[date]]) -> Tuple[date, date]:
     """Return a valid inclusive date range from a Streamlit date_input selection."""
 
-    if isinstance(selection, tuple):
-        start, end = selection
+    if isinstance(selection, (tuple, list)):
+        if len(selection) >= 2:
+            start, end = selection[0], selection[1]
+        elif len(selection) == 1:
+            start = selection[0]
+            end = selection[0]
+        else:
+            start = None
+            end = None
     else:
         start = selection
         end = selection
+
+    # Streamlit returns ``None`` while a user is still selecting the end date of a
+    # range. Default ``None`` values to the selected start date so we always
+    # operate on valid ``date`` objects.
+    if start is None and end is None:
+        today = date.today()
+        start = today
+        end = today
+    if start is None:
+        start = end
+    if end is None:
+        end = start
 
     if end < start:
         start, end = end, start
