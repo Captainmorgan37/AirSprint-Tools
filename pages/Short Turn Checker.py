@@ -708,7 +708,7 @@ def compute_short_turns(
             turn_min = (dep_t - arr_t).total_seconds() / 60.0
             arr_priority = bool(r.get("arr_is_priority"))
             dep_priority = bool(next_dep.get("dep_is_priority"))
-            priority_flag = arr_priority or dep_priority
+            priority_flag = dep_priority
             arr_code = r.get("arr_booking_code")
             dep_code = next_dep.get("dep_booking_code")
             same_booking_code = False
