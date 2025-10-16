@@ -4,7 +4,15 @@ import requests
 import json
 import re
 import html
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
+
+from fl3xx_client import fetch_flights, compute_fetch_dates
+from flight_leg_utils import (
+    FlightDataError,
+    build_fl3xx_api_config,
+    normalize_fl3xx_payload,
+)
 
 # ----- CONFIG -----
 FAA_CLIENT_ID = st.secrets["FAA_CLIENT_ID"]
@@ -1330,33 +1338,165 @@ def sort_notams_for_display(notams):
             return (4, n["sortKey"])
     return sorted(notams, key=sort_key)
 
-# ----- USER INPUT -----
-icao_input = st.text_input(
-    "Enter ICAO code(s) separated by commas (e.g., CYYC, KTEB):"
-).upper().strip()
+# ----- FL3XX HELPERS -----
 
-uploaded_file = st.file_uploader(
-    "Or upload an Excel/CSV with ICAO codes (columns: 'ICAO', 'From (ICAO)', 'To (ICAO)')",
-    type=["xlsx", "csv"]
+
+def _normalise_date_range(selection: Union[Tuple[date, date], date]) -> Tuple[date, date]:
+    """Return a valid inclusive date range from a Streamlit date_input selection."""
+
+    if isinstance(selection, tuple):
+        start, end = selection
+    else:
+        start = selection
+        end = selection
+
+    if end < start:
+        start, end = end, start
+    return start, end
+
+
+def _extract_airport_codes(rows: List[Dict[str, Any]]) -> List[str]:
+    """Collect unique ICAO codes from normalised FL3XX leg rows."""
+
+    candidates: List[str] = []
+    seen: Set[str] = set()
+    airport_fields = (
+        "departure_airport",
+        "arrival_airport",
+        "departure_airport_code",
+        "arrival_airport_code",
+    )
+
+    for row in rows:
+        for field in airport_fields:
+            if field not in row:
+                continue
+            value = row.get(field)
+            if value in (None, ""):
+                continue
+            code = str(value).strip().upper()
+            if len(code) != 4 or not code.isalnum():
+                continue
+            if code in seen:
+                continue
+            seen.add(code)
+            candidates.append(code)
+
+    return candidates
+
+
+@st.cache_data(show_spinner=True, ttl=300)
+def load_fl3xx_airports(
+    _settings: Optional[Dict[str, Any]],
+    *,
+    from_date: date,
+    to_date: date,
+) -> Tuple[List[str], Dict[str, Any], Dict[str, Any]]:
+    """Fetch FL3XX flights and return unique airport codes with metadata."""
+
+    config = build_fl3xx_api_config(_settings)
+    flights, metadata = fetch_flights(
+        config,
+        from_date=from_date,
+        to_date=to_date,
+    )
+
+    normalized_rows, normalization_stats = normalize_fl3xx_payload({"items": flights})
+    airports = _extract_airport_codes(normalized_rows)
+
+    metadata = {**metadata, "flights_returned": len(flights)}
+    return airports, metadata, normalization_stats
+
+# ----- USER INPUT -----
+st.sidebar.header("Airport Source")
+airport_source = st.sidebar.radio(
+    "Select how to populate airport codes:",
+    ("Manual entry / Upload", "FL3XX Flight Schedule"),
 )
 
-icao_list = []
-if icao_input:
-    icao_list.extend([code.strip() for code in icao_input.split(",") if code.strip()])
+icao_list: List[str] = []
+fl3xx_metadata: Optional[Dict[str, Any]] = None
+fl3xx_normalization: Optional[Dict[str, Any]] = None
 
-if uploaded_file:
-    try:
-        df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith(".csv") else pd.read_excel(uploaded_file)
-        found_codes = []
-        for col in ["ICAO", "From (ICAO)", "To (ICAO)"]:
-            if col in df.columns:
-                found_codes.extend(df[col].dropna().astype(str).str.upper().tolist())
-        if found_codes:
-            icao_list.extend(list(dict.fromkeys(found_codes)))
-        else:
-            st.error("Uploaded file must have a valid ICAO column")
-    except Exception as e:
-        st.error(f"Error reading file: {e}")
+if airport_source == "Manual entry / Upload":
+    icao_input = st.text_input(
+        "Enter ICAO code(s) separated by commas (e.g., CYYC, KTEB):",
+    ).upper().strip()
+
+    uploaded_file = st.file_uploader(
+        "Or upload an Excel/CSV with ICAO codes (columns: 'ICAO', 'From (ICAO)', 'To (ICAO)')",
+        type=["xlsx", "csv"],
+    )
+
+    if icao_input:
+        icao_list.extend([code.strip() for code in icao_input.split(",") if code.strip()])
+
+    if uploaded_file:
+        try:
+            df = (
+                pd.read_csv(uploaded_file)
+                if uploaded_file.name.endswith(".csv")
+                else pd.read_excel(uploaded_file)
+            )
+            found_codes = []
+            for col in ["ICAO", "From (ICAO)", "To (ICAO)"]:
+                if col in df.columns:
+                    found_codes.extend(df[col].dropna().astype(str).str.upper().tolist())
+            if found_codes:
+                icao_list.extend(list(dict.fromkeys(found_codes)))
+            else:
+                st.error("Uploaded file must have a valid ICAO column")
+        except Exception as e:
+            st.error(f"Error reading file: {e}")
+else:
+    st.subheader("Load airports from FL3XX schedule")
+    default_from, default_to_exclusive = compute_fetch_dates()
+    default_to_inclusive = default_to_exclusive - timedelta(days=1)
+
+    date_selection = st.date_input(
+        "Select FL3XX departure date range (UTC)",
+        value=(default_from, default_to_inclusive),
+        help="Flights departing within this inclusive date window will be scanned for airports.",
+    )
+
+    range_start, range_end = _normalise_date_range(date_selection)
+    fetch_to_date = range_end + timedelta(days=1)
+
+    if fetch_to_date <= range_start:
+        fetch_to_date = range_start + timedelta(days=1)
+
+    fl3xx_settings = st.secrets.get("fl3xx_api")
+    if not fl3xx_settings:
+        st.warning(
+            "Add your FL3XX credentials to `.streamlit/secrets.toml` under `[fl3xx_api]` to enable schedule fetching.",
+        )
+    else:
+        try:
+            airports, fl3xx_metadata, fl3xx_normalization = load_fl3xx_airports(
+                fl3xx_settings,
+                from_date=range_start,
+                to_date=fetch_to_date,
+            )
+            icao_list.extend(airports)
+        except FlightDataError as exc:
+            st.error(str(exc))
+        except requests.HTTPError as exc:
+            st.error(f"FL3XX API request failed: {exc}")
+        except Exception as exc:  # pragma: no cover - defensive fallback
+            st.error(f"Unexpected error fetching FL3XX flights: {exc}")
+
+    if fl3xx_metadata:
+        fetched_from = fl3xx_metadata.get("from_date", range_start.isoformat())
+        fetched_to = range_end.isoformat()
+        flights_returned = fl3xx_metadata.get("flights_returned", 0)
+        airport_count = len(dict.fromkeys(icao_list))
+        st.info(
+            f"Loaded {airport_count} airport(s) from {flights_returned} FL3XX flight(s) between {fetched_from} and {fetched_to}.",
+        )
+        with st.expander("FL3XX fetch metadata", expanded=False):
+            st.json({"metadata": fl3xx_metadata, "normalization": fl3xx_normalization or {}})
+
+icao_list = list(dict.fromkeys([code.strip().upper() for code in icao_list if code]))
 
 # ----- TABS -----
 tab1, tab2 = st.tabs(["CFPS/FAA Viewer", "METAR/TAF"])
