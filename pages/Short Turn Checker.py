@@ -1090,6 +1090,10 @@ if not legs_df.empty:
         display_short_df = short_df.drop(
             columns=["arr_booking_code", "dep_booking_code"], errors="ignore"
         )
+        if "arr_onblock" in display_short_df.columns:
+            display_short_df = display_short_df.sort_values(
+                "arr_onblock", ascending=True, kind="mergesort"
+            )
         column_order = [col for col in desired_order if col in display_short_df.columns]
         st.dataframe(
             display_short_df,
@@ -1196,6 +1200,10 @@ if not legs_df.empty:
             display_priority_warnings = priority_warnings.drop(
                 columns=["flight_id"], errors="ignore"
             )
+            if "departure_time" in display_priority_warnings.columns:
+                display_priority_warnings = display_priority_warnings.sort_values(
+                    "departure_time", ascending=True, kind="mergesort"
+                )
             st.dataframe(
                 display_priority_warnings,
                 use_container_width=True,
