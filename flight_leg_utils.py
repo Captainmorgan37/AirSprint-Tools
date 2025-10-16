@@ -287,7 +287,7 @@ def normalize_fl3xx_payload(payload: Any) -> Tuple[List[Dict[str, Any]], Dict[st
         "skipped_missing_dep_time": 0,
     }
     for flight in items:
-        legs = []
+        legs: List[Dict[str, Any]] = []
         if isinstance(flight, dict):
             legs_data = flight.get("legs")
             if isinstance(legs_data, list) and legs_data:
@@ -295,17 +295,13 @@ def normalize_fl3xx_payload(payload: Any) -> Tuple[List[Dict[str, Any]], Dict[st
             else:
                 legs = [flight]
         elif isinstance(flight, list):
-            legs = flight
+            legs = [leg for leg in flight if isinstance(leg, dict)]
         else:
             continue
 
-        flight_tail = {}
-        if isinstance(flight, dict):
-            flight_tail = flight
+        flight_tail = flight if isinstance(flight, dict) else {}
 
         for leg in legs:
-            if not isinstance(leg, dict):
-                continue
             stats["candidate_legs"] += 1
             tail = _extract_first(
                 leg,
@@ -335,48 +331,219 @@ def normalize_fl3xx_payload(payload: Any) -> Tuple[List[Dict[str, Any]], Dict[st
                     "registration",
                     "tailNumber",
                     "tail",
+                    "name",
                 )
             if not tail:
                 stats["skipped_missing_tail"] += 1
                 continue
 
+            leg_id = _extract_first(
+                leg,
+                "id",
+                "legId",
+                "leg_id",
+                "uuid",
+                "externalId",
+                "external_id",
+                "legNumber",
+                "number",
+            )
+            if leg_id is None and isinstance(flight_tail, dict):
+                leg_id = _extract_first(
+                    flight_tail,
+                    "id",
+                    "legId",
+                    "leg_id",
+                    "uuid",
+                    "externalId",
+                    "external_id",
+                    "legNumber",
+                    "number",
+                )
+
             dep_time = _extract_first(
                 leg,
-                "scheduledDepartureTime",
+                "departureTimeUtc",
+                "departure_time_utc",
                 "departureTime",
-                "dep_time",
+                "departure_time",
+                "offBlockTimeUtc",
+                "scheduledTimeUtc",
+                "scheduled_departure_utc",
+                "blockOffEstUTC",
+                "blockOffUtc",
+                "scheduledOffBlockUtc",
+                "blockOffTimeUtc",
+                "blockOffActualUTC",
+                "scheduledDepartureTime",
                 "scheduledDeparture",
-                "offBlockTime",
                 "startTime",
                 "departUtc",
+                "dep_time",
+                "offBlockTime",
             )
+            if not dep_time and isinstance(flight_tail, dict):
+                dep_time = _extract_first(
+                    flight_tail,
+                    "departureTimeUtc",
+                    "departure_time_utc",
+                    "departureTime",
+                    "departure_time",
+                    "scheduledDepartureTime",
+                    "scheduledDeparture",
+                )
             if not dep_time:
                 stats["skipped_missing_dep_time"] += 1
                 continue
 
-            normalized_leg = {
-                "tail": tail,
-                "leg_id": leg.get("legId") or leg.get("id") or leg.get("leg_id") or leg.get("legNumber"),
-                "dep_time": dep_time,
-                "dep_tz": leg.get("dep_tz") or leg.get("departureTimeZone") or leg.get("departureTimeZoneName"),
-                "dep_airport": _extract_first(
-                    leg,
-                    "departureAirport",
-                    "departure_airport",
-                    "dep_airport",
-                    "airportFrom",
-                    "fromAirport",
-                ),
-                "arr_airport": _extract_first(
-                    leg,
-                    "arrivalAirport",
-                    "arrival_airport",
-                    "arr_airport",
-                    "airportTo",
-                    "toAirport",
-                ),
-            }
-            normalized_leg.update({k: v for k, v in leg.items() if k not in normalized_leg})
+            dep_tz = _extract_first(
+                leg,
+                "departureTimezone",
+                "departureTimeZone",
+                "departure_timezone",
+                "departure_tz",
+                "departureTimeZoneName",
+                "blockOffTimeZone",
+                "offBlockTimeZone",
+                "dep_tz",
+            )
+            if not dep_tz and isinstance(leg.get("departure"), Mapping):
+                dep_tz = _extract_first(leg["departure"], "timezone", "timeZone")
+            if not dep_tz and isinstance(flight_tail, dict):
+                departure = flight_tail.get("departure")
+                if isinstance(departure, Mapping):
+                    dep_tz = _extract_first(departure, "timezone", "timeZone")
+
+            def _coerce_name(container: Mapping[str, Any], *keys: str) -> Optional[str]:
+                value = _extract_first(container, *keys)
+                if value is None:
+                    return None
+                text = str(value).strip()
+                return text or None
+
+            pic_name = _coerce_name(
+                leg,
+                "picName",
+                "pic",
+                "pic_name",
+                "captainName",
+                "captain",
+            )
+            if not pic_name and isinstance(flight_tail, dict):
+                pic_name = _coerce_name(
+                    flight_tail,
+                    "picName",
+                    "pic",
+                    "pic_name",
+                    "captainName",
+                    "captain",
+                )
+
+            sic_name = _coerce_name(
+                leg,
+                "sicName",
+                "sic",
+                "foName",
+                "firstOfficer",
+                "first_officer",
+            )
+            if not sic_name and isinstance(flight_tail, dict):
+                sic_name = _coerce_name(
+                    flight_tail,
+                    "sicName",
+                    "sic",
+                    "foName",
+                    "firstOfficer",
+                    "first_officer",
+                )
+
+            workflow_custom_name = _extract_first(
+                leg,
+                "workflowCustomName",
+                "workflow_custom_name",
+                "workflowName",
+                "workflow",
+            )
+            if not workflow_custom_name and isinstance(flight_tail, dict):
+                workflow_custom_name = _extract_first(
+                    flight_tail,
+                    "workflowCustomName",
+                    "workflow_custom_name",
+                    "workflowName",
+                    "workflow",
+                )
+
+            dep_airport = _extract_first(
+                leg,
+                "departureAirport",
+                "departureAirportCode",
+                "departureAirportIcao",
+                "departureAirportIata",
+                "departureAirportName",
+                "departure_airport",
+                "dep_airport",
+                "departure",
+                "airportFrom",
+                "fromAirport",
+            )
+            if isinstance(dep_airport, Mapping):
+                dep_airport = _extract_first(
+                    dep_airport,
+                    "icao",
+                    "iata",
+                    "code",
+                    "name",
+                    "airport",
+                )
+
+            arr_airport = _extract_first(
+                leg,
+                "arrivalAirport",
+                "arrivalAirportCode",
+                "arrivalAirportIcao",
+                "arrivalAirportIata",
+                "arrivalAirportName",
+                "arrival_airport",
+                "arr_airport",
+                "arrival",
+                "airportTo",
+                "toAirport",
+            )
+            if isinstance(arr_airport, Mapping):
+                arr_airport = _extract_first(
+                    arr_airport,
+                    "icao",
+                    "iata",
+                    "code",
+                    "name",
+                    "airport",
+                )
+
+            normalized_leg: Dict[str, Any] = {**leg}
+            normalized_leg.update(
+                {
+                    "tail": str(tail),
+                    "leg_id": str(leg_id) if leg_id is not None else str(len(normalized) + 1),
+                    "dep_time": dep_time,
+                    "dep_tz": dep_tz,
+                }
+            )
+            if dep_airport:
+                normalized_leg.setdefault("departure_airport", str(dep_airport))
+            if arr_airport:
+                normalized_leg.setdefault("arrival_airport", str(arr_airport))
+            if pic_name:
+                normalized_leg.setdefault("picName", pic_name)
+            if sic_name:
+                normalized_leg.setdefault("sicName", sic_name)
+            if workflow_custom_name:
+                normalized_leg.setdefault("workflowCustomName", str(workflow_custom_name))
+
+            if isinstance(leg.get("crewMembers"), list):
+                normalized_leg["crewMembers"] = leg["crewMembers"]
+            elif isinstance(flight_tail, dict) and isinstance(flight_tail.get("crewMembers"), list):
+                normalized_leg["crewMembers"] = flight_tail["crewMembers"]
+
             normalized.append(normalized_leg)
             stats["legs_normalized"] += 1
 
@@ -390,14 +557,33 @@ def _extract_first(obj: Dict[str, Any], *keys: str) -> Any:
     return None
 
 
+_SUBCHARTER_PATTERN = re.compile(r"subcharter", re.IGNORECASE)
+
+
+def _workflow_indicates_subcharter(value: Any) -> bool:
+    if value is None:
+        return False
+    return bool(_SUBCHARTER_PATTERN.search(str(value)))
+
+
 def filter_out_subcharter_rows(
     rows: List[Dict[str, Any]],
 ) -> Tuple[List[Dict[str, Any]], int]:
     skipped = 0
     filtered: List[Dict[str, Any]] = []
     for row in rows:
-        workflow = str(row.get("workflow") or "").upper()
-        if "SUBCHARTER" in workflow:
+        workflow_value: Optional[Any] = None
+        if isinstance(row, Mapping):
+            for key in (
+                "workflowCustomName",
+                "workflow_custom_name",
+                "workflowName",
+                "workflow",
+            ):
+                if key in row and row[key] not in (None, ""):
+                    workflow_value = row[key]
+                    break
+        if _workflow_indicates_subcharter(workflow_value):
             skipped += 1
             continue
         filtered.append(row)
