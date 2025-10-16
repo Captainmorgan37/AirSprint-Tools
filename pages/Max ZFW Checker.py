@@ -91,6 +91,8 @@ st.subheader("Passengers")
 
 pax_override = st.checkbox("Override passenger standard weights (enter each passenger’s actual weight)")
 
+additive_weight = 0
+
 if not pax_override:
     # Standard-weight mode — enter counts per category
     c1, c2, c3, c4 = st.columns(4)
@@ -123,7 +125,15 @@ else:
             with cols[i % 4]:
                 w = st.number_input(f"Pax {i+1}", min_value=0.0, step=1.0, value=0.0, key=f"pax_w_{i}")
                 pax_weights.append(w)
-    pax_weight = sum(pax_weights) if total_pax > 0 else 0
+    if total_pax > 0:
+        total_declared_weight = sum(pax_weights)
+        additive_weight = 18 * total_pax
+        pax_weight = total_declared_weight + additive_weight
+        st.info(
+            f"Regulatory additive applied: 18 lb × {total_pax} pax (total {additive_weight} lb) has been automatically added to the provided weights."
+        )
+    else:
+        pax_weight = 0
 
 # --------------------------
 # Cargo entry (default vs override)
@@ -169,6 +179,10 @@ with lcol:
     st.markdown("**Inputs**")
     if pax_override:
         st.write(f"Passengers (override): {total_pax}")
+        if additive_weight > 0:
+            st.caption(
+                f"Includes mandatory 18 lb additive per passenger (total added: {additive_weight} lb)."
+            )
     else:
         st.write(f"Passengers (std {season}): {total_pax}")
         stds = STD_WEIGHTS[season]
@@ -201,6 +215,10 @@ else:
         f"- Total pax + cargo: **{total_payload:.0f} lb**  \n"
         f"- Max allowed: **{max_allowed} lb**"
     )
+    if additive_weight > 0:
+        st.caption(
+            f"Passenger weight includes {additive_weight} lb regulatory additive (18 lb per voluntary passenger weight)."
+        )
 
 # Footer note
 st.caption("Note: This tool checks pax + cargo against your planning maxima for each tail type and season. It does not compute full ZFW or CG.")
