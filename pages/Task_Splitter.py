@@ -1101,57 +1101,87 @@ def _offset_hours(dt: datetime) -> float:
     return offset.total_seconds() / 3600
 
 
-def assign_preference_weighted(packages: List[TailPackage], labels: List[str]) -> Dict[str, List[TailPackage]]:
+def assign_preference_weighted(
+    packages: List[TailPackage],
+    labels: List[str],
+    label_weights: Optional[Sequence[float]] = None,
+) -> Dict[str, List[TailPackage]]:
     if not packages or not labels:
         return {lab: [] for lab in labels}
 
     offsets = [_offset_hours(pkg.first_local_dt) for pkg in packages]
     min_off, max_off = min(offsets), max(offsets)
+
     def _workload(pkg: TailPackage) -> float:
         return pkg.workload if pkg.workload else float(pkg.legs)
 
     total_workload = sum(_workload(pkg) for pkg in packages)
-    avg_workload = total_workload / len(labels) if labels else 0.0
+
+    weights: Dict[str, float] = {}
+    for idx, lab in enumerate(labels):
+        weight = 1.0
+        if label_weights and idx < len(label_weights):
+            try:
+                weight = float(label_weights[idx])
+            except (TypeError, ValueError):
+                weight = 1.0
+        if weight <= 0:
+            weight = 1.0
+        weights[lab] = weight
+
+    total_weight = sum(weights.values()) or float(len(labels))
+    baseline_target = total_workload / total_weight if total_weight else 0.0
+    workload_targets = {lab: baseline_target * weights[lab] for lab in labels}
+
     # Keep a small tolerance so we still respect the east↔west preference, but
     # not at the expense of an even split.
-    tolerance = max(0.5, round(avg_workload * 0.25, 2)) if avg_workload else 0.5
+    tolerance = max(0.5, round(baseline_target * 0.25, 2)) if baseline_target else 0.5
     if len(labels) == 1:
-        targets = [max_off]
+        tz_targets = [max_off]
     elif max_off == min_off:
-        targets = [max_off for _ in labels]
+        tz_targets = [max_off for _ in labels]
     else:
         step = (max_off - min_off) / (len(labels) - 1)
-        targets = [max_off - step * idx for idx in range(len(labels))]
+        tz_targets = [max_off - step * idx for idx in range(len(labels))]
 
     buckets: Dict[str, List[TailPackage]] = {lab: [] for lab in labels}
     totals = {lab: 0.0 for lab in labels}
+
+    def _normalized_total(lab: str, value: Optional[float] = None) -> float:
+        raw = totals[lab] if value is None else value
+        weight = weights.get(lab, 1.0)
+        if weight <= 0:
+            return raw
+        return raw / weight
 
     span = max_off - min_off
     center = min_off + span / 2 if span else min_off
 
     for pkg in sorted(packages, key=lambda p: p.first_local_dt):
         pkg_offset = _offset_hours(pkg.first_local_dt)
-        min_total = min(totals.values())
-        eligible_labels = [lab for lab in labels if totals[lab] <= min_total + tolerance]
+        min_norm_total = min(_normalized_total(lab) for lab in labels)
+        eligible_labels = [
+            lab for lab in labels if _normalized_total(lab) <= min_norm_total + tolerance
+        ]
         if not eligible_labels:
             eligible_labels = labels
 
         def score(lab: str) -> tuple[float, float, float, int, int]:
-            target = targets[labels.index(lab)]
+            target = tz_targets[labels.index(lab)]
             if span:
                 half_span = span / 2 or 1
                 # Increase the penalty for extreme east/west packages so that
                 # far-west departures lean harder toward later shifts (and far-east
                 # toward earlier ones) than mid-range timezones.
                 normalized_extremity = min(abs(pkg_offset - center) / half_span, 2)
-                weight = 1 + normalized_extremity
+                tz_weight = 1 + normalized_extremity
             else:
-                weight = 1.0
-            tz_penalty = abs(pkg_offset - target) * weight
+                tz_weight = 1.0
+            tz_penalty = abs(pkg_offset - target) * tz_weight
             projected_total = totals[lab] + _workload(pkg)
             return (
-                round(abs(projected_total - avg_workload), 4),
-                round(projected_total - min_total, 4),
+                round(abs(projected_total - workload_targets[lab]), 4),
+                round(_normalized_total(lab, projected_total) - min_norm_total, 4),
                 round(tz_penalty, 4),
                 len(buckets[lab]),
                 labels.index(lab),
@@ -1408,13 +1438,23 @@ fetch_crew = st.sidebar.toggle(
 num_people = st.sidebar.number_input("Number of on-duty people", min_value=1, max_value=12, value=4, step=1)
 
 default_labels = _default_shift_labels(int(num_people))
-labels = []
+labels: List[str] = []
+label_workloads: List[float] = []
 for i in range(int(num_people)):
     lbl = st.sidebar.text_input(
         f"Label for person {i+1}",
         value=default_labels[i] if i < len(default_labels) else f"Shift {i+1}",
+        key=f"label_{i}",
     )
-    labels.append(lbl or f"Shift {i+1}")
+    label_value = lbl or f"Shift {i+1}"
+    labels.append(label_value)
+    half_toggle = st.sidebar.checkbox(
+        f"{label_value}: half workload",
+        value=False,
+        key=f"half_workload_{i}",
+        help="Reduce this role's workload target to half of a standard shift.",
+    )
+    label_workloads.append(0.5 if half_toggle else 1.0)
 
 # Date selection (default = two days ahead in local Mountain time)
 selected_date = st.sidebar.date_input("Target date", value=_default_target_date())
@@ -1486,7 +1526,7 @@ if st.session_state.get("_run"):
 
     st.subheader("Assignments")
 
-    buckets = assign_preference_weighted(packages, labels)
+    buckets = assign_preference_weighted(packages, labels, label_workloads)
 
     # Display per-shift tables
     tabs = st.tabs(labels)
