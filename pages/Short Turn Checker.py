@@ -1108,16 +1108,6 @@ if not legs_df.empty:
             mime="text/csv",
         )
 
-        # Quick summary chips
-        st.markdown("### Summary")
-        by_tail = (
-            short_df.groupby("tail")
-            .size()
-            .reset_index(name="count")
-            .sort_values("count", ascending=False)
-        )
-        st.dataframe(by_tail, use_container_width=True, hide_index=True)
-
     if source == "FL3XX API":
         priority_warnings, priority_errors, evaluated_total = compute_priority_checkin_warnings(
             legs_df, token
