@@ -521,13 +521,12 @@ def _apply_airport_timezones(df: pd.DataFrame) -> Tuple[pd.DataFrame, Set[str], 
 
 
 # ----------------------------
-# Data Fetch (stub or real)
+# Data Fetch
 # ----------------------------
 @st.cache_data(show_spinner=False)
 def fetch_next_day_legs(
     target_date: date,
     *,
-    use_stub: bool,
     fl3xx_settings: Optional[Dict[str, Any]] = None,
     fetch_crew: bool = False,
 ) -> Tuple[pd.DataFrame, Dict[str, Any], Optional[Dict[str, Any]]]:
@@ -536,53 +535,10 @@ def fetch_next_day_legs(
       tail (str), leg_id (str/int), dep_time (ISO str), dep_tz (IANA tz name)
     You can extend with more columns if your API provides (dep_apt, arr_apt, etc.).
     """
-    if use_stub:
-        # ---------- STUB DATA (edit as desired) ----------
-        # 6 tails, uneven leg counts, mixed timezones
-        raw = [
-            {
-                "tail": "C-GASL",
-                "leg_id": "L1",
-                "dep_time": f"{target_date}T06:15:00-04:00",
-                "dep_tz": "America/New_York",
-                "workflowCustomName": "FEX Guaranteed",
-            },
-            {"tail": "C-GASL", "leg_id": "L2", "dep_time": f"{target_date}T09:40:00-04:00", "dep_tz": "America/New_York"},
-
-            {"tail": "C-FLYR", "leg_id": "L3", "dep_time": f"{target_date}T05:55:00-07:00", "dep_tz": "America/Los_Angeles"},
-
-            {"tail": "C-JETA", "leg_id": "L4", "dep_time": f"{target_date}T07:20:00-06:00", "dep_tz": "America/Denver"},
-            {"tail": "C-JETA", "leg_id": "L5", "dep_time": f"{target_date}T12:10:00-06:00", "dep_tz": "America/Denver"},
-            {"tail": "C-JETA", "leg_id": "L6", "dep_time": f"{target_date}T18:25:00-06:00", "dep_tz": "America/Denver"},
-
-            {
-                "tail": "C-LEGC",
-                "leg_id": "L7",
-                "dep_time": f"{target_date}T14:45:00+01:00",
-                "dep_tz": "Europe/London",
-                "workflowCustomName": "Priority Charter",
-            },
-            {"tail": "C-LEGC", "leg_id": "L8", "dep_time": f"{target_date}T19:30:00+01:00", "dep_tz": "Europe/London"},
-
-            {"tail": "C-CJ25", "leg_id": "L9", "dep_time": f"{target_date}T06:05:00-05:00", "dep_tz": "America/Chicago"},
-
-            {"tail": "C-HAWK", "leg_id": "L10", "dep_time": f"{target_date}T08:00:00-06:00", "dep_tz": "America/Denver"},
-            {"tail": "C-HAWK", "leg_id": "L11", "dep_time": f"{target_date}T16:40:00-06:00", "dep_tz": "America/Denver"},
-        ]
-        filtered_raw, skipped_subcharter = _filter_out_subcharter_rows(raw)
-        if skipped_subcharter:
-            st.info(
-                "Skipped %d leg%s because the workflow contains 'Subcharter'."
-                % (skipped_subcharter, "s" if skipped_subcharter != 1 else "")
-            )
-        metadata: Dict[str, Any] = {}
-        if skipped_subcharter:
-            metadata["skipped_subcharter_legs"] = skipped_subcharter
-        return pd.DataFrame(filtered_raw), metadata, None
-
-    # ---------- REAL FETCH ----------
     if not fl3xx_settings:
-        st.error("FL3XX API secrets are not configured; falling back to stub data is recommended.")
+        st.error(
+            "FL3XX API secrets are not configured; add credentials to `.streamlit/secrets.toml` to fetch live data."
+        )
         return pd.DataFrame(), {}, None
 
     def _coerce_bool(value: Any, default: bool) -> bool:
@@ -1424,13 +1380,6 @@ except Exception:
 
 has_live_credentials = bool(fl3xx_cfg.get("api_token") or fl3xx_cfg.get("auth_header"))
 
-use_stub = st.sidebar.toggle(
-    "Use stub data",
-    value=not has_live_credentials,
-    help="Uncheck to use your real FL3XX API (credentials stored in Streamlit secrets).",
-    disabled=not has_live_credentials,
-)
-
 if not has_live_credentials:
     st.sidebar.info(
         "Add your FL3XX credentials to `.streamlit/secrets.toml` under `[fl3xx_api]` to enable live fetching.",
@@ -1441,9 +1390,9 @@ else:
 fetch_crew_default = bool(fl3xx_cfg.get("fetch_crew", True))
 fetch_crew = st.sidebar.toggle(
     "Fetch crew details",
-    value=fetch_crew_default,
+    value=fetch_crew_default and has_live_credentials,
     help="Retrieve crew information (PIC/SIC) for each flight. Requires additional API calls.",
-    disabled=use_stub,
+    disabled=not has_live_credentials,
 )
 
 num_people = st.sidebar.number_input("Number of on-duty people", min_value=1, max_value=12, value=4, step=1)
@@ -1493,9 +1442,8 @@ if st.session_state.pop("_cache_cleared", False):
 if st.session_state.get("_run"):
     legs_df, _, crew_summary = fetch_next_day_legs(
         selected_date,
-        use_stub=use_stub,
-        fl3xx_settings=fl3xx_cfg if not use_stub else None,
-        fetch_crew=bool(fetch_crew and not use_stub),
+        fl3xx_settings=fl3xx_cfg if has_live_credentials else None,
+        fetch_crew=bool(fetch_crew and has_live_credentials),
     )
 
     if legs_df.empty:
