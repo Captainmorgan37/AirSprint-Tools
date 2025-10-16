@@ -1350,6 +1350,18 @@ def _normalise_date_range(selection: Union[Tuple[date, date], date]) -> Tuple[da
         start = selection
         end = selection
 
+    # Streamlit returns ``None`` while a user is still selecting the end date of a
+    # range. Default ``None`` values to the selected start date so we always
+    # operate on valid ``date`` objects.
+    if start is None and end is None:
+        today = date.today()
+        start = today
+        end = today
+    if start is None:
+        start = end
+    if end is None:
+        end = start
+
     if end < start:
         start, end = end, start
     return start, end
