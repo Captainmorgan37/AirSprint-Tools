@@ -1387,14 +1387,14 @@ def _extract_airport_codes(rows: List[Dict[str, Any]]) -> List[str]:
 
 @st.cache_data(show_spinner=True, ttl=300)
 def load_fl3xx_airports(
-    settings: Optional[Dict[str, Any]],
+    _settings: Optional[Dict[str, Any]],
     *,
     from_date: date,
     to_date: date,
 ) -> Tuple[List[str], Dict[str, Any], Dict[str, Any]]:
     """Fetch FL3XX flights and return unique airport codes with metadata."""
 
-    config = build_fl3xx_api_config(settings)
+    config = build_fl3xx_api_config(_settings)
     flights, metadata = fetch_flights(
         config,
         from_date=from_date,
