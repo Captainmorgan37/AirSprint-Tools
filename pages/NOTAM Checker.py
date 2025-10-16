@@ -1498,23 +1498,69 @@ else:
 
 icao_list = list(dict.fromkeys([code.strip().upper() for code in icao_list if code]))
 
+
+def _fetch_notams_for_airports(codes: List[str]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Tuple[str, str]]]:
+    """Retrieve NOTAMs for the provided ICAO codes grouped by data source."""
+
+    cfps_list: List[Dict[str, Any]] = []
+    faa_list: List[Dict[str, Any]] = []
+    errors: List[Tuple[str, str]] = []
+
+    for icao in codes:
+        try:
+            if icao.startswith("C"):
+                cfps_list.append({"ICAO": icao, "notams": get_cfps_notams(icao)})
+            else:
+                faa_list.append({"ICAO": icao, "notams": get_faa_notams(icao)})
+        except Exception as exc:  # pragma: no cover - defensive fallback
+            errors.append((icao, str(exc)))
+
+    return cfps_list, faa_list, errors
+
+
+SESSION_KEY_RESULTS = "notam_results"
+
+stored_results = st.session_state.get(SESSION_KEY_RESULTS)
+current_codes = tuple(icao_list)
+
+if stored_results and stored_results.get("codes") != current_codes:
+    stored_results = None
+    st.session_state[SESSION_KEY_RESULTS] = None
+
 # ----- TABS -----
 tab1, tab2 = st.tabs(["CFPS/FAA Viewer", "METAR/TAF"])
 
 # ---------------- Tab 1: CFPS/FAA Viewer ----------------
 with tab1:
-    if icao_list:
-        st.write(f"Fetching NOTAMs for {len(icao_list)} airport(s)...")
-        cfps_list, faa_list = [], []
+    fetch_button = st.button(
+        "Fetch NOTAMs",
+        type="primary",
+        disabled=not icao_list,
+        help="Fetch NOTAMs for the airport list above. Data is retained until the list changes.",
+    )
 
-        for icao in icao_list:
-            try:
-                if icao.startswith("C"):
-                    cfps_list.append({"ICAO": icao, "notams": get_cfps_notams(icao)})
-                else:
-                    faa_list.append({"ICAO": icao, "notams": get_faa_notams(icao)})
-            except Exception as e:
-                st.warning(f"Failed to fetch data for {icao}: {e}")
+    if fetch_button and not icao_list:
+        st.warning("Enter at least one ICAO code to fetch NOTAMs.")
+
+    if fetch_button and icao_list:
+        with st.spinner(f"Fetching NOTAMs for {len(icao_list)} airport(s)..."):
+            cfps_list, faa_list, errors = _fetch_notams_for_airports(icao_list)
+        stored_results = {
+            "codes": current_codes,
+            "cfps": cfps_list,
+            "faa": faa_list,
+            "errors": errors,
+        }
+        st.session_state[SESSION_KEY_RESULTS] = stored_results
+
+    if stored_results and stored_results.get("codes") == current_codes:
+        cfps_list = stored_results.get("cfps", [])
+        faa_list = stored_results.get("faa", [])
+        errors = stored_results.get("errors", [])
+
+        if errors:
+            for icao, message in errors:
+                st.warning(f"Failed to fetch data for {icao}: {message}")
 
         # Filter input
         filter_input = st.text_input("Filter NOTAMs by keywords (comma-separated):").strip().lower()
@@ -1545,7 +1591,7 @@ with tab1:
                 filtered_notams = [n for n in sort_notams_for_display(airport["notams"]) if matches_filter(n["text"])]
                 if not filtered_notams:
                     continue  # Skip airport if no NOTAMs match
-        
+
                 with st.expander(airport["ICAO"], expanded=False):
                     # Only show runway status if there are filtered NOTAMs
                     runways_status = get_runway_status(airport["ICAO"], filtered_notams)
@@ -1563,7 +1609,6 @@ with tab1:
                         notam_copy = notam.copy()
                         notam_copy["text"] = highlight_search_terms(notam_copy["text"])
                         st.markdown(format_notam_card(notam_copy), unsafe_allow_html=True)
-        
         with col2:
             st.subheader("US Airports (FAA)")
             for airport in faa_list:
@@ -1589,6 +1634,10 @@ with tab1:
                         notam_copy = notam.copy()
                         notam_copy["text"] = highlight_search_terms(notam_copy["text"])
                         st.markdown(format_notam_card(notam_copy), unsafe_allow_html=True)
+    elif icao_list:
+        st.info("Click 'Fetch NOTAMs' to retrieve data for the selected airports.")
+    else:
+        st.info("Add ICAO codes above to enable NOTAM fetching.")
 
 
 
