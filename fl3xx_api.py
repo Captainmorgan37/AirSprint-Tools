@@ -143,6 +143,13 @@ def _build_migration_endpoint(base_url: str, flight_id: Any) -> str:
     return f"{base}/{flight_id}/migration"
 
 
+def _build_postflight_endpoint(base_url: str, flight_id: Any) -> str:
+    base = base_url.rstrip("/")
+    if base.lower().endswith("/flights"):
+        base = base[: -len("/flights")]
+    return f"{base}/{flight_id}/postflight"
+
+
 def _normalise_crew_payload(payload: Any) -> List[Dict[str, Any]]:
     """Return a list of crew member dictionaries from various payload layouts."""
 
@@ -203,6 +210,33 @@ def fetch_flight_crew(
         response.raise_for_status()
         payload = response.json()
         return _normalise_crew_payload(payload)
+    finally:
+        if close_session:
+            try:
+                http.close()
+            except AttributeError:
+                pass
+
+
+def fetch_postflight(
+    config: Fl3xxApiConfig,
+    flight_id: Any,
+    *,
+    session: Optional[requests.Session] = None,
+) -> Any:
+    """Return the postflight payload (including crew check-in times) for a specific flight."""
+
+    http = session or requests.Session()
+    close_session = session is None
+    try:
+        response = http.get(
+            _build_postflight_endpoint(config.base_url, flight_id),
+            headers=config.build_headers(),
+            timeout=config.timeout,
+            verify=config.verify_ssl,
+        )
+        response.raise_for_status()
+        return response.json()
     finally:
         if close_session:
             try:
@@ -332,6 +366,7 @@ __all__ = [
     "compute_flights_digest",
     "fetch_flights",
     "fetch_flight_crew",
+    "fetch_postflight",
     "fetch_flight_migration",
     "enrich_flights_with_crew",
 ]

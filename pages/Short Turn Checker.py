@@ -1,10 +1,12 @@
 import os
+from collections.abc import Mapping
 from datetime import datetime, timedelta
+from typing import Any, Optional
 from zoneinfo import ZoneInfo
 import pandas as pd
 import streamlit as st
 
-from fl3xx_api import Fl3xxApiConfig, fetch_flights
+from fl3xx_api import Fl3xxApiConfig, fetch_flights, fetch_postflight
 
 # ----------------------------
 # App Config
@@ -25,6 +27,7 @@ _purge_autorefresh_session_state()
 
 LOCAL_TZ = ZoneInfo(os.getenv("LOCAL_TZ", "America/Edmonton"))
 DEFAULT_TURN_THRESHOLD_MIN = int(os.getenv("TURN_THRESHOLD_MIN", "45"))
+PRIORITY_TURN_THRESHOLD_MIN = int(os.getenv("PRIORITY_TURN_THRESHOLD_MIN", "90"))
 
 # ----------------------------
 # Helper: Normalize / Parse datetimes
@@ -84,6 +87,20 @@ def _get_nested(mapping, path):
         if current is None:
             return None
     return current
+
+
+def _detect_priority(value):
+    if value is None:
+        return False, None
+    if isinstance(value, str):
+        text = value.strip()
+    else:
+        text = str(value).strip()
+    if not text:
+        return False, None
+    if "priority" in text.lower():
+        return True, text
+    return False, None
 
 
 def _first_stripped(*values):
@@ -278,11 +295,37 @@ def _normalise_flights(flights):
     leg_id_keys = [
         "bookingIdentifier",
         "booking.identifier",
-        "flightId",
         "id",
         "uuid",
-        "legId",
         "scheduleId",
+    ]
+
+    flight_id_keys = [
+        "flightId",
+        "flight.id",
+        "legId",
+        "leg_id",
+        "scheduleId",
+        "id",
+        "uuid",
+    ]
+
+    priority_label_keys = [
+        "workflowCustomName",
+        "workflow_custom_name",
+        "workflowName",
+        "workflow",
+        "tags",
+        "labels",
+        "notes",
+    ]
+
+    priority_flag_keys = [
+        "priority",
+        "isPriority",
+        "priorityFlight",
+        "priority_flag",
+        "hasPriority",
     ]
 
     rows = []
@@ -297,6 +340,21 @@ def _normalise_flights(flights):
         dep_time = _extract_datetime(flight, dep_time_keys)
         arr_time = _extract_datetime(flight, arr_time_keys)
         leg_id = _extract_field(flight, leg_id_keys)
+        flight_id = _extract_field(flight, flight_id_keys)
+        if not flight_id:
+            flight_id = leg_id
+        priority_label = _extract_field(flight, priority_label_keys)
+        is_priority, priority_text = _detect_priority(priority_label)
+        if not is_priority:
+            for flag_key in priority_flag_keys:
+                value = _get_nested(flight, flag_key)
+                if value is None:
+                    continue
+                if _coerce_bool(value):
+                    is_priority = True
+                    if not priority_text:
+                        priority_text = priority_label or "Priority"
+                    break
 
         if tail:
             tail = tail.upper()
@@ -341,6 +399,9 @@ def _normalise_flights(flights):
                 "dep_offblock": dep_time,
                 "arr_onblock": arr_time,
                 "leg_id": leg_id,
+                "flight_id": flight_id,
+                "is_priority": is_priority,
+                "priority_label": priority_text,
             }
         )
 
@@ -461,6 +522,15 @@ def load_uploaded(file) -> pd.DataFrame:
     dep_off_col = pick("dep_offblock", "scheduledout", "outtime", "offblock")
     arr_on_col = pick("arr_onblock", "scheduledin", "intime", "onblock")
     leg_id_col = pick("leg_id", "bookingidentifier", "id", "legid", "uuid")
+    flight_id_col = pick("flight_id", "flightid", "scheduleid", "legid", "uuid", "id")
+    priority_label_col = pick(
+        "priority_label",
+        "prioritydetail",
+        "priority_details",
+        "workflowcustomname",
+        "workflow_name",
+    )
+    priority_flag_col = pick("is_priority", "priority", "priorityflag", "priority_flight")
 
     df = pd.DataFrame({
         "tail": raw[tail_col] if tail_col else None,
@@ -470,21 +540,64 @@ def load_uploaded(file) -> pd.DataFrame:
         "arr_onblock": raw[arr_on_col].apply(parse_dt) if arr_on_col else pd.NaT,
         "leg_id": raw[leg_id_col] if leg_id_col else None,
     })
+
+    if flight_id_col:
+        df["flight_id"] = raw[flight_id_col]
+    else:
+        df["flight_id"] = df.get("leg_id")
+
+    priority_bool = pd.Series([False] * len(raw), index=raw.index, dtype="bool")
+    priority_label = pd.Series([None] * len(raw), index=raw.index, dtype="object")
+
+    if priority_label_col:
+        detections = raw[priority_label_col].apply(_detect_priority)
+        priority_bool = detections.apply(lambda pair: pair[0])
+        priority_label = detections.apply(lambda pair: pair[1])
+
+    if priority_flag_col:
+        flag_series = raw[priority_flag_col].apply(_coerce_bool)
+        priority_bool = priority_bool | flag_series
+        missing_label_mask = flag_series & priority_label.isna()
+        priority_label.loc[missing_label_mask] = "Priority"
+
+    df["is_priority"] = priority_bool.values
+    df["priority_label"] = priority_label.values
+
     return df.dropna(subset=["tail"]) if "tail" in df else df
 
 # ----------------------------
 # Core: Compute Turns
 # ----------------------------
-def compute_short_turns(legs: pd.DataFrame, threshold_min: int) -> pd.DataFrame:
+def compute_short_turns(
+    legs: pd.DataFrame,
+    threshold_min: int,
+    priority_threshold_min: int = PRIORITY_TURN_THRESHOLD_MIN,
+) -> pd.DataFrame:
     if legs.empty:
         return pd.DataFrame(columns=[
-            "tail", "station", "arr_leg_id", "arr_onblock", "dep_leg_id", "dep_offblock", "turn_min"
+            "tail",
+            "station",
+            "arr_leg_id",
+            "arr_onblock",
+            "dep_leg_id",
+            "dep_offblock",
+            "turn_min",
+            "required_threshold_min",
+            "priority_flag",
+            "arr_priority_label",
+            "dep_priority_label",
         ])
 
     # Ensure dtypes
     legs = legs.copy()
     legs["dep_offblock"] = legs["dep_offblock"].apply(parse_dt)
     legs["arr_onblock"] = legs["arr_onblock"].apply(parse_dt)
+    if "flight_id" not in legs.columns:
+        legs["flight_id"] = legs.get("leg_id")
+    if "is_priority" not in legs.columns:
+        legs["is_priority"] = False
+    if "priority_label" not in legs.columns:
+        legs["priority_label"] = None
 
     # We'll compute turns per tail per station: find next departure from the ARR station after ARR onblock
     # Prepare two views: arrivals and departures
@@ -494,8 +607,42 @@ def compute_short_turns(legs: pd.DataFrame, threshold_min: int) -> pd.DataFrame:
     deps = legs.dropna(subset=["dep_airport", "dep_offblock"]).copy()
     deps.rename(columns={"dep_airport": "station", "dep_offblock": "dep_offblock"}, inplace=True)
 
-    arrs = arrs[["tail", "station", "arr_onblock", "leg_id"]].rename(columns={"leg_id": "arr_leg_id"})
-    deps = deps[["tail", "station", "dep_offblock", "leg_id"]].rename(columns={"leg_id": "dep_leg_id"})
+    arrs = arrs[
+        [
+            "tail",
+            "station",
+            "arr_onblock",
+            "leg_id",
+            "flight_id",
+            "is_priority",
+            "priority_label",
+        ]
+    ].rename(
+        columns={
+            "leg_id": "arr_leg_id",
+            "flight_id": "arr_flight_id",
+            "is_priority": "arr_is_priority",
+            "priority_label": "arr_priority_label",
+        }
+    )
+    deps = deps[
+        [
+            "tail",
+            "station",
+            "dep_offblock",
+            "leg_id",
+            "flight_id",
+            "is_priority",
+            "priority_label",
+        ]
+    ].rename(
+        columns={
+            "leg_id": "dep_leg_id",
+            "flight_id": "dep_flight_id",
+            "is_priority": "dep_is_priority",
+            "priority_label": "dep_priority_label",
+        }
+    )
 
     # Sort for asof merge (next departure after arrival)
     arrs = arrs.sort_values(["tail", "station", "arr_onblock"]).reset_index(drop=True)
@@ -508,32 +655,194 @@ def compute_short_turns(legs: pd.DataFrame, threshold_min: int) -> pd.DataFrame:
         dep_grp = deps[(deps["tail"] == tail) & (deps["station"] == station)]
         if dep_grp.empty:
             continue
-        dep_times = dep_grp["dep_offblock"].tolist()
-        dep_ids = dep_grp["dep_leg_id"].tolist()
+        dep_records = dep_grp.to_dict("records")
         for _, r in arr_grp.iterrows():
             arr_t = r["arr_onblock"]
             # find first dep time > arr_t
-            idx = next((i for i, t in enumerate(dep_times) if pd.notna(arr_t) and pd.notna(t) and t > arr_t), None)
-            if idx is None:
+            next_dep = None
+            for dep_row in dep_records:
+                dep_t = dep_row.get("dep_offblock")
+                if pd.notna(arr_t) and pd.notna(dep_t) and dep_t > arr_t:
+                    next_dep = dep_row
+                    break
+            if next_dep is None:
                 continue
-            dep_t = dep_times[idx]
-            dep_id = dep_ids[idx]
+            dep_t = next_dep.get("dep_offblock")
+            dep_id = next_dep.get("dep_leg_id")
             turn_min = (dep_t - arr_t).total_seconds() / 60.0
-            if turn_min < threshold_min:
+            arr_priority = bool(r.get("arr_is_priority"))
+            dep_priority = bool(next_dep.get("dep_is_priority"))
+            priority_flag = arr_priority or dep_priority
+            required_threshold = (
+                max(threshold_min, priority_threshold_min)
+                if priority_flag
+                else threshold_min
+            )
+            if turn_min < required_threshold:
                 short_turn_rows.append({
                     "tail": tail,
                     "station": station,
                     "arr_leg_id": r.get("arr_leg_id"),
+                    "arr_flight_id": r.get("arr_flight_id"),
                     "arr_onblock": arr_t,
                     "dep_leg_id": dep_id,
+                    "dep_flight_id": next_dep.get("dep_flight_id"),
                     "dep_offblock": dep_t,
                     "turn_min": round(turn_min, 1),
+                    "required_threshold_min": required_threshold,
+                    "priority_flag": priority_flag,
+                    "arr_priority_label": r.get("arr_priority_label"),
+                    "dep_priority_label": next_dep.get("dep_priority_label"),
                 })
 
     out = pd.DataFrame(short_turn_rows)
     if not out.empty:
         out = out.sort_values(["turn_min", "tail", "station"]).reset_index(drop=True)
     return out
+
+
+def _extract_checkin_values(payload: Any) -> list[Any]:
+    """Return all values stored under a ``checkin`` key in the payload."""
+
+    values: list[Any] = []
+
+    def _walk(obj: Any) -> None:
+        if isinstance(obj, Mapping):
+            for key, value in obj.items():
+                if isinstance(key, str) and key.lower() == "checkin":
+                    values.append(value)
+                _walk(value)
+        elif isinstance(obj, (list, tuple, set)):
+            for item in obj:
+                _walk(item)
+
+    _walk(payload)
+    return values
+
+
+def _checkin_to_datetime(value: Any, target_tz: ZoneInfo) -> Optional[datetime]:
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return None
+    if seconds <= 0:
+        return None
+    try:
+        dt_utc = datetime.fromtimestamp(seconds, tz=ZoneInfo("UTC"))
+    except (OverflowError, OSError, ValueError):
+        return None
+    try:
+        return dt_utc.astimezone(target_tz)
+    except Exception:
+        return dt_utc
+
+
+def compute_priority_checkin_warnings(
+    legs: pd.DataFrame,
+    token: Optional[str],
+    priority_threshold_min: int = PRIORITY_TURN_THRESHOLD_MIN,
+) -> tuple[pd.DataFrame, list[str], int]:
+    """Return priority check-in warnings, errors, and the number of evaluated flights."""
+
+    if legs.empty:
+        return pd.DataFrame(), [], 0
+
+    legs = legs.copy()
+    legs["dep_offblock"] = legs["dep_offblock"].apply(parse_dt)
+    legs = legs.dropna(subset=["dep_offblock", "tail"])
+    if legs.empty:
+        return pd.DataFrame(), [], 0
+
+    if "flight_id" not in legs.columns:
+        legs["flight_id"] = legs.get("leg_id")
+    if "is_priority" not in legs.columns:
+        legs["is_priority"] = False
+    if "priority_label" not in legs.columns:
+        legs["priority_label"] = None
+
+    legs["dep_date"] = legs["dep_offblock"].dt.date
+    legs = legs.sort_values("dep_offblock").reset_index(drop=True)
+
+    first_indices = (
+        legs.groupby(["tail", "dep_date"], sort=False)["dep_offblock"].idxmin()
+    )
+    if first_indices.empty:
+        return pd.DataFrame(), [], 0
+
+    first_rows = legs.loc[first_indices].copy()
+    priority_first = first_rows[first_rows["is_priority"]]
+    evaluated_total = len(priority_first)
+    if priority_first.empty:
+        return pd.DataFrame(), [], evaluated_total
+
+    config = _build_fl3xx_config(token)
+    if not (config.api_token or config.auth_header):
+        return pd.DataFrame(), [
+            "FL3XX credentials are missing; cannot retrieve postflight check-in data.",
+        ], evaluated_total
+
+    warnings: list[dict[str, Any]] = []
+    errors: list[str] = []
+
+    for _, row in priority_first.iterrows():
+        flight_id = row.get("flight_id") or row.get("leg_id")
+        if not flight_id:
+            errors.append(
+                f"Missing flight identifier for tail {row['tail']} on {row['dep_date']}"
+            )
+            continue
+        try:
+            payload = fetch_postflight(config, flight_id)
+        except Exception as exc:  # pragma: no cover - defensive path
+            errors.append(f"Flight {flight_id}: {exc}")
+            continue
+
+        checkin_values = _extract_checkin_values(payload)
+        if not checkin_values:
+            errors.append(f"Flight {flight_id}: no check-in timestamps found")
+            continue
+
+        dep_time = row["dep_offblock"]
+        target_tz = dep_time.tzinfo or LOCAL_TZ
+        checkin_datetimes = [
+            dt
+            for value in checkin_values
+            if (dt := _checkin_to_datetime(value, target_tz)) is not None
+        ]
+
+        if not checkin_datetimes:
+            errors.append(f"Flight {flight_id}: unable to parse check-in timestamps")
+            continue
+
+        earliest = min(checkin_datetimes)
+        latest = max(checkin_datetimes)
+        minutes_before = (dep_time - earliest).total_seconds() / 60.0
+        if minutes_before < priority_threshold_min:
+            warnings.append(
+                {
+                    "tail": row["tail"],
+                    "dep_date": row["dep_date"],
+                    "dep_airport": row.get("dep_airport"),
+                    "priority_label": row.get("priority_label"),
+                    "dep_leg_id": row.get("leg_id"),
+                    "flight_id": flight_id,
+                    "departure_time": dep_time,
+                    "earliest_checkin": earliest,
+                    "latest_checkin": latest,
+                    "checkin_count": len(checkin_datetimes),
+                    "minutes_before_departure": round(minutes_before, 1),
+                    "required_threshold_min": priority_threshold_min,
+                    "checkin_times": ", ".join(
+                        dt.strftime("%H:%M") for dt in sorted(checkin_datetimes)
+                    ),
+                }
+            )
+
+    warnings_df = pd.DataFrame(warnings)
+    if not warnings_df.empty:
+        warnings_df = warnings_df.sort_values("departure_time").reset_index(drop=True)
+
+    return warnings_df, errors, evaluated_total
 
 # ----------------------------
 # UI — Sidebar Controls
@@ -579,6 +888,7 @@ window_label = f"{start_date.strftime('%Y-%m-%d')} → {end_date.strftime('%Y-%m
 # Load Data
 # ----------------------------
 legs_df = pd.DataFrame()
+token: Optional[str] = None
 
 if source != "FL3XX API":
     st.session_state.pop("fl3xx_last_metadata", None)
@@ -665,7 +975,7 @@ if not legs_df.empty:
     short_df = compute_short_turns(legs_df, threshold)
 
     st.subheader(
-        f"Short turns under {threshold} min for {window_label} ({LOCAL_TZ.key})"
+        f"Short turns (≥{threshold} min standard / ≥{PRIORITY_TURN_THRESHOLD_MIN} min priority) for {window_label} ({LOCAL_TZ.key})"
     )
 
     if short_df.empty:
@@ -689,11 +999,49 @@ if not legs_df.empty:
                 step=0.1,
             ),
         }
+        if "priority_flag" in short_df.columns:
+            col_config["priority_flag"] = st.column_config.CheckboxColumn(
+                "Priority",
+                help="Turn involves at least one priority flight",
+                disabled=True,
+            )
+        if "required_threshold_min" in short_df.columns:
+            col_config["required_threshold_min"] = st.column_config.NumberColumn(
+                "Required Min",
+                help="Minimum minutes required for this turn",
+                step=5,
+            )
+        if "arr_priority_label" in short_df.columns:
+            col_config["arr_priority_label"] = st.column_config.TextColumn(
+                "Arrival Priority Detail",
+                help="Priority metadata tied to the arrival leg",
+            )
+        if "dep_priority_label" in short_df.columns:
+            col_config["dep_priority_label"] = st.column_config.TextColumn(
+                "Departure Priority Detail",
+                help="Priority metadata tied to the departure leg",
+            )
+
+        desired_order = [
+            "tail",
+            "station",
+            "arr_leg_id",
+            "dep_leg_id",
+            "turn_min",
+            "required_threshold_min",
+            "priority_flag",
+            "arr_priority_label",
+            "dep_priority_label",
+            "arr_onblock",
+            "dep_offblock",
+        ]
+        column_order = [col for col in desired_order if col in short_df.columns]
         st.dataframe(
             short_df,
             use_container_width=True,
             hide_index=True,
             column_config=col_config,
+            column_order=column_order if column_order else None,
         )
 
         # Download
@@ -714,6 +1062,85 @@ if not legs_df.empty:
             .sort_values("count", ascending=False)
         )
         st.dataframe(by_tail, use_container_width=True, hide_index=True)
+
+    if source == "FL3XX API":
+        priority_warnings, priority_errors, evaluated_total = compute_priority_checkin_warnings(
+            legs_df, token
+        )
+    else:
+        priority_warnings = pd.DataFrame()
+        priority_errors = []
+        evaluated_total = 0
+
+    if priority_errors:
+        st.warning(
+            "\n".join(["Priority check-in issues:"] + [f"• {msg}" for msg in priority_errors])
+        )
+
+    if evaluated_total:
+        st.subheader("Priority duty-start validation")
+        if priority_warnings.empty:
+            st.success(
+                "All first priority departures meet the required 90-minute crew check-in window."
+            )
+        else:
+            warning_col_config = {
+                "departure_time": st.column_config.DatetimeColumn(
+                    format="YYYY-MM-DD HH:mm",
+                    help="Scheduled/actual departure time for the priority leg",
+                ),
+                "earliest_checkin": st.column_config.DatetimeColumn(
+                    format="YYYY-MM-DD HH:mm",
+                    help="Earliest crew check-in returned by FL3XX",
+                ),
+                "latest_checkin": st.column_config.DatetimeColumn(
+                    format="YYYY-MM-DD HH:mm",
+                    help="Latest crew check-in returned by FL3XX",
+                ),
+                "minutes_before_departure": st.column_config.NumberColumn(
+                    "Minutes Before Dep",
+                    help="Actual gap between earliest check-in and departure",
+                    step=0.1,
+                ),
+                "required_threshold_min": st.column_config.NumberColumn(
+                    "Required Min",
+                    help="Minimum minutes required before departure",
+                    step=5,
+                ),
+                "checkin_count": st.column_config.NumberColumn(
+                    "Check-ins",
+                    help="Number of crew check-in entries returned",
+                ),
+            }
+
+            priority_order = [
+                "tail",
+                "dep_date",
+                "dep_airport",
+                "dep_leg_id",
+                "flight_id",
+                "priority_label",
+                "departure_time",
+                "earliest_checkin",
+                "latest_checkin",
+                "minutes_before_departure",
+                "required_threshold_min",
+                "checkin_count",
+                "checkin_times",
+            ]
+            st.dataframe(
+                priority_warnings,
+                use_container_width=True,
+                hide_index=True,
+                column_config=warning_col_config,
+                column_order=[
+                    col for col in priority_order if col in priority_warnings.columns
+                ],
+            )
+    elif source == "FL3XX API" and not priority_errors:
+        st.info(
+            "No priority first departures were found in the selected window, so no duty-start validation was required."
+        )
 else:
     st.info("Select a data source and load legs to see short turns.")
 
