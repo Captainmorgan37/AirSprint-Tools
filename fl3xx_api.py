@@ -45,12 +45,19 @@ class Fl3xxApiConfig:
         return headers
 
 
-def compute_fetch_dates(now: Optional[datetime] = None) -> Tuple[date, date]:
-    """Return the inclusive date range that should be requested from the API."""
+def compute_fetch_dates(
+    now: Optional[datetime] = None,
+    *,
+    inclusive_days: int = 1,
+) -> Tuple[date, date]:
+    """Return the default (exclusive) date range that should be requested."""
+
+    if inclusive_days < 0:
+        raise ValueError("inclusive_days must be non-negative")
 
     current = now or datetime.now(timezone.utc)
     start = current.date()
-    end = start + timedelta(days=2)
+    end = start + timedelta(days=inclusive_days + 1)
     return start, end
 
 

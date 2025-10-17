@@ -84,7 +84,7 @@ def run_morning_reports(
 
     current_time = now or datetime.now(timezone.utc)
     config = build_fl3xx_api_config(dict(api_settings))
-    from_date, to_date = compute_fetch_dates(current_time)
+    from_date, to_date = compute_fetch_dates(current_time, inclusive_days=4)
 
     flights, fetch_metadata = fetch_flights(
         config,
