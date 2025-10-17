@@ -519,6 +519,86 @@ def normalize_fl3xx_payload(payload: Any) -> Tuple[List[Dict[str, Any]], Dict[st
                     "airport",
                 )
 
+            booking_id = _extract_first(
+                leg,
+                "bookingReference",
+                "bookingId",
+                "bookingID",
+                "booking_id",
+                "booking",
+            )
+            if booking_id is None and isinstance(flight_tail, dict):
+                booking_id = _extract_first(
+                    flight_tail,
+                    "bookingReference",
+                    "bookingId",
+                    "bookingID",
+                    "booking_id",
+                    "booking",
+                )
+
+            booking_code = _extract_first(
+                leg,
+                "bookingCode",
+                "booking_code",
+                "bookingNumber",
+                "booking_number",
+                "bookingRef",
+                "bookingReferenceNumber",
+            )
+            if booking_code is None and isinstance(flight_tail, dict):
+                booking_code = _extract_first(
+                    flight_tail,
+                    "bookingCode",
+                    "booking_code",
+                    "bookingNumber",
+                    "booking_number",
+                    "bookingRef",
+                    "bookingReferenceNumber",
+                )
+
+            account_name = _extract_first(
+                leg,
+                "accountName",
+                "account",
+                "account_name",
+                "owner",
+                "ownerName",
+                "customer",
+                "customerName",
+                "client",
+                "clientName",
+            )
+            if account_name is None and isinstance(flight_tail, dict):
+                account_name = _extract_first(
+                    flight_tail,
+                    "accountName",
+                    "account",
+                    "account_name",
+                    "owner",
+                    "ownerName",
+                    "customer",
+                    "customerName",
+                    "client",
+                    "clientName",
+                )
+
+            flight_type = _extract_first(
+                leg,
+                "flightType",
+                "flight_type",
+                "flighttype",
+                "type",
+            )
+            if flight_type is None and isinstance(flight_tail, dict):
+                flight_type = _extract_first(
+                    flight_tail,
+                    "flightType",
+                    "flight_type",
+                    "flighttype",
+                    "type",
+                )
+
             normalized_leg: Dict[str, Any] = {**leg}
             normalized_leg.update(
                 {
@@ -538,6 +618,20 @@ def normalize_fl3xx_payload(payload: Any) -> Tuple[List[Dict[str, Any]], Dict[st
                 normalized_leg.setdefault("sicName", sic_name)
             if workflow_custom_name:
                 normalized_leg.setdefault("workflowCustomName", str(workflow_custom_name))
+            if booking_id:
+                normalized_leg.setdefault("bookingId", str(booking_id))
+            if booking_code:
+                normalized_leg.setdefault("bookingCode", str(booking_code))
+            if booking_id or booking_code:
+                normalized_leg.setdefault(
+                    "bookingReference",
+                    str(booking_code or booking_id),
+                )
+            if account_name:
+                normalized_leg.setdefault("accountName", str(account_name))
+                normalized_leg.setdefault("account", str(account_name))
+            if flight_type:
+                normalized_leg.setdefault("flightType", str(flight_type))
 
             if isinstance(leg.get("crewMembers"), list):
                 normalized_leg["crewMembers"] = leg["crewMembers"]
