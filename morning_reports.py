@@ -43,7 +43,7 @@ class MorningReportResult:
             lines = ["Results Found:", self.header_label]
             lines.extend(row.get("line", "") for row in self.rows)
         else:
-            lines = ["No Results Found:", self.header_label, "No Results Found"]
+            lines = ["No Results Found"]
         return "\n".join(lines)
 
 
@@ -79,12 +79,21 @@ def run_morning_reports(
     api_settings: Mapping[str, Any],
     *,
     now: Optional[datetime] = None,
+    from_date: Optional[date] = None,
+    to_date: Optional[date] = None,
 ) -> MorningReportRun:
     """Fetch FL3XX legs and execute the configured morning reports."""
 
     current_time = now or datetime.now(timezone.utc)
     config = build_fl3xx_api_config(dict(api_settings))
-    from_date, to_date = compute_fetch_dates(current_time, inclusive_days=4)
+    default_from, default_to = compute_fetch_dates(current_time, inclusive_days=4)
+    if from_date is None:
+        from_date = default_from
+    if to_date is None:
+        to_date = default_to
+
+    if to_date < from_date:
+        raise MorningReportError("Report end date must not be before the start date")
 
     flights, fetch_metadata = fetch_flights(
         config,
@@ -163,13 +172,16 @@ def _build_empty_leg_report(rows: Iterable[Mapping[str, Any]]) -> MorningReportR
         account_match_value = (account_name_normalized or "").upper()
         account_ok = account_match_value == _EXPECTED_EMPTY_LEG_ACCOUNT
         formatted["account_expected"] = account_ok
-        if not account_ok:
-            warning = (
-                f"Leg {formatted.get('leg_id') or formatted.get('line')} "
-                f"has unexpected account value: {account_name_normalized or '—'}"
-            )
-            formatted["line"] = f"{formatted['line']} ⚠️ Account mismatch"
-            warnings.append(warning)
+
+        if account_ok:
+            continue
+
+        warning = (
+            f"Leg {formatted.get('leg_id') or formatted.get('line')} "
+            f"has unexpected account value: {account_name_normalized or '—'}"
+        )
+        formatted["line"] = f"{formatted['line']} ⚠️ Account mismatch"
+        warnings.append(warning)
         formatted_rows.append(formatted)
 
     return MorningReportResult(
@@ -227,6 +239,7 @@ def _format_report_row(
         "date": date_component,
         "departure_time": dep_dt.isoformat() if dep_dt else None,
         "booking_reference": booking_reference,
+        "bookingIdentifier": booking_reference,
         "account_name": account_name,
         "tail": tail,
         "workflow": _extract_workflow(row),
@@ -263,6 +276,7 @@ def _extract_workflow(row: Mapping[str, Any]) -> Optional[str]:
 
 def _extract_booking_reference(row: Mapping[str, Any]) -> Optional[str]:
     for key in (
+        "bookingIdentifier",
         "bookingReference",
         "bookingCode",
         "bookingNumber",
