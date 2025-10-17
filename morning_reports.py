@@ -239,6 +239,7 @@ def _format_report_row(
         "date": date_component,
         "departure_time": dep_dt.isoformat() if dep_dt else None,
         "booking_reference": booking_reference,
+        "bookingIdentifier": booking_reference,
         "account_name": account_name,
         "tail": tail,
         "workflow": _extract_workflow(row),
@@ -275,6 +276,7 @@ def _extract_workflow(row: Mapping[str, Any]) -> Optional[str]:
 
 def _extract_booking_reference(row: Mapping[str, Any]) -> Optional[str]:
     for key in (
+        "bookingIdentifier",
         "bookingReference",
         "bookingCode",
         "bookingNumber",
