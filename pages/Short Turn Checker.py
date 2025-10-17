@@ -12,7 +12,7 @@ from fl3xx_api import Fl3xxApiConfig, fetch_flights, fetch_postflight
 # App Config
 # ----------------------------
 st.set_page_config(page_title="Short Turns Highlighter", layout="wide")
-st.title("✈️ Short Turns — Lightweight Viewer")
+st.title("✈️ Short Turn/Priotrity Status Viewer")
 
 
 def _purge_autorefresh_session_state() -> None:
