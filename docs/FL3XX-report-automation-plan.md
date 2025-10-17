@@ -15,8 +15,23 @@ For each report, the sections below describe:
 
 ## 16.1.2 App Line Assignment Report
 - **Current Capability:** Aircraft assignment details are normalised, including detection of placeholder tails such as values starting with "ADD"/"REMOVE".
-- **Gaps / Required Inputs:** Provide the exact placeholder value (or flag) that appears when a leg is on an "App Line" placeholder so it can be recognised alongside the existing heuristics.
-- **Next Steps:** Update the placeholder-detection logic with the confirmed value and expose the results through the app.
+- **Gaps / Required Inputs:** Placeholder tails are confirmed as `registrationNumber` values beginning with `App`, `App CJ2+`, `App CJ2+/CJ3+`, `App CJ3+`, and `App E550`; ensure these remain covered by the detection heuristics.
+- **Next Steps:** Update the placeholder-detection logic to treat the confirmed `registrationNumber` prefixes as "App Line" assignments, and surface any matches in the app using the format:
+
+  ```
+  Results Found:
+  App Line Assignment
+  <Date>-<Booking ID>-<Account Name>
+  ...
+  ```
+
+  When no legs match, return:
+
+  ```
+  No Results Found:
+  App Line Assignment
+  No Results Found
+  ```
 
 ## 16.1.3 Empty Leg Report
 - **Current Capability:** Legs can be queried for any date range, and we already store tail numbers, airports, times, booking codes, and priority flags.
