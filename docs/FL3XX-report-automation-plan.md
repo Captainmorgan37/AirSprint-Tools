@@ -10,8 +10,23 @@ For each report, the sections below describe:
 
 ## 16.1.1 App Booking Workflow Report
 - **Current Capability:** `fetch_flights` can retrieve all legs in a configurable window, and the normaliser already captures workflow, tags, and note text for each flight.
-- **Gaps / Required Inputs:** Confirm the exact workflow label (or other identifier) that marks a leg as "App Booking" within the FL3XX payload.
-- **Next Steps:** Extend the workflow filter list with the confirmed label, then surface the flagged legs in the new automation app.
+- **Gaps / Required Inputs:** The FL3XX payload marks these legs with `"workflowCustomName": "App Booking"`; no additional identifiers are required once this label is surfaced.
+- **Next Steps:** Extend the workflow filter list with the `App Booking` label and output results using the format:
+
+  ```
+  Results Found:
+  App Booking Workflow
+  <Date>-<Booking ID>-<Account Name>
+  ...
+  ```
+
+  When no legs match, return:
+
+  ```
+  No Results Found:
+  App Booking Workflow
+  No Results Found
+  ```
 
 ## 16.1.2 App Line Assignment Report
 - **Current Capability:** Aircraft assignment details are normalised, including detection of placeholder tails such as values starting with "ADD"/"REMOVE".
@@ -35,8 +50,23 @@ For each report, the sections below describe:
 
 ## 16.1.3 Empty Leg Report
 - **Current Capability:** Legs can be queried for any date range, and we already store tail numbers, airports, times, booking codes, and priority flags.
-- **Gaps / Required Inputs:** Identify the payload field(s) that: (a) mark a leg as an OCS flight and (b) expose the associated account name so we can verify it is set to "AirSprint Inc.".
-- **Next Steps:** Capture the OCS/account fields during normalisation and flag any future OCS legs not tied to the AirSprint Inc. account.
+- **Gaps / Required Inputs:** The FL3XX flight payload sets `"flightType": "POS"` for OCS (Empty Leg) segments, and those legs should always carry an `account` value of `AirSprint Inc.`; treat blank or different account values as anomalies that must be surfaced in the report output.
+- **Next Steps:** Persist the `flightType` and `account` fields during normalisation, validate that every `POS` leg retains the `AirSprint Inc.` account, flag discrepancies, and output results using the format:
+
+  ```
+  Results Found:
+  Empty Leg Report
+  <Date>-<Booking ID>-<Account Name>-<Aircraft Tail>
+  ...
+  ```
+
+  When no legs match, return:
+
+  ```
+  No Results Found:
+  Empty Leg Report
+  No Results Found
+  ```
 
 ## 16.1.4 OCS Flights with Pax Report
 - **Current Capability:** Workflow and note text is already accessible for each leg, which covers the notes validation.
