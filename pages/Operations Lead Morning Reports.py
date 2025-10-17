@@ -1,6 +1,8 @@
 import streamlit as st
-from datetime import datetime, timezone
-from typing import Mapping, Optional
+from datetime import date, datetime, timedelta, timezone
+from typing import Mapping, Optional, Tuple
+
+from fl3xx_api import compute_fetch_dates
 from morning_reports import MorningReportResult, MorningReportRun, run_morning_reports
 
 
@@ -15,6 +17,22 @@ def _format_timestamp(ts: datetime) -> str:
 def _initialise_state():
     st.session_state.setdefault("ol_reports_run", None)
     st.session_state.setdefault("ol_reports_error", None)
+    st.session_state.setdefault("ol_reports_warning", None)
+    if "ol_reports_from_date" not in st.session_state or "ol_reports_to_date" not in st.session_state:
+        default_from, default_to_exclusive = compute_fetch_dates(datetime.now(timezone.utc), inclusive_days=4)
+        st.session_state.setdefault("ol_reports_from_date", default_from)
+        st.session_state.setdefault(
+            "ol_reports_to_date", default_to_exclusive - timedelta(days=1)
+        )
+
+
+def _get_selected_dates() -> Tuple[date, date]:
+    from_date = st.session_state.get("ol_reports_from_date")
+    to_date = st.session_state.get("ol_reports_to_date")
+    if not isinstance(from_date, date) or not isinstance(to_date, date):
+        today = datetime.now(timezone.utc).date()
+        return today, today
+    return from_date, to_date
 
 
 def _get_api_settings() -> Optional[Mapping[str, str]]:
@@ -29,16 +47,53 @@ def _get_api_settings() -> Optional[Mapping[str, str]]:
     return None
 
 
-def _handle_fetch(api_settings: Mapping[str, str]) -> None:
+def _handle_fetch(
+    api_settings: Mapping[str, str],
+    *,
+    from_date: date,
+    to_date_inclusive: date,
+) -> None:
+    to_date_exclusive = to_date_inclusive + timedelta(days=1)
+    st.session_state["ol_reports_warning"] = None
+
     try:
         with st.spinner("Fetching flights from FL3XX..."):
-            run = run_morning_reports(api_settings)
+            run = run_morning_reports(
+                api_settings,
+                from_date=from_date,
+                to_date=to_date_exclusive,
+            )
+    except TypeError as exc:
+        message = str(exc)
+        if "unexpected keyword argument" in message and (
+            "from_date" in message or "to_date" in message
+        ):
+            try:
+                with st.spinner("Fetching flights from FL3XX..."):
+                    run = run_morning_reports(api_settings)
+            except Exception as fallback_exc:  # pragma: no cover - defensive UI path
+                st.session_state["ol_reports_run"] = None
+                st.session_state["ol_reports_error"] = str(fallback_exc)
+                return
+
+            st.session_state["ol_reports_warning"] = (
+                "The installed morning report runner does not yet support custom date ranges. "
+                "Fetched the default window instead."
+            )
+            st.session_state["ol_reports_run"] = run
+            st.session_state["ol_reports_error"] = None
+            return
+
+        st.session_state["ol_reports_run"] = None
+        st.session_state["ol_reports_error"] = message
+        return
     except Exception as exc:  # pragma: no cover - defensive UI path
         st.session_state["ol_reports_run"] = None
         st.session_state["ol_reports_error"] = str(exc)
-    else:
-        st.session_state["ol_reports_run"] = run
-        st.session_state["ol_reports_error"] = None
+        return
+
+    st.session_state["ol_reports_run"] = run
+    st.session_state["ol_reports_error"] = None
 
 
 def _render_report_output(report: MorningReportResult):
@@ -57,6 +112,7 @@ def _render_report_output(report: MorningReportResult):
 def _render_results():
     error_message = st.session_state.get("ol_reports_error")
     run: Optional[MorningReportRun] = st.session_state.get("ol_reports_run")
+    warning_message = st.session_state.get("ol_reports_warning")
 
     if error_message:
         st.error(error_message)
@@ -66,6 +122,8 @@ def _render_results():
             st.info("Press **Fetch Morning Reports** to run the reports against live data.")
         return
 
+    selected_range = f"{run.from_date.isoformat()} → {(run.to_date - timedelta(days=1)).isoformat()}"
+
     st.success(
         "Morning reports fetched"
         + (
@@ -74,7 +132,11 @@ def _render_results():
             else ""
         )
         + f" · {run.leg_count} legs analysed"
+        + f" · Dates: {selected_range}"
     )
+
+    if warning_message:
+        st.warning(warning_message)
 
     metadata_payload = {
         "from_date": run.metadata.get("from_date"),
@@ -107,6 +169,21 @@ def main():
         """
     )
 
+    selected_from, selected_to = _get_selected_dates()
+    date_input = st.date_input(
+        "Report date range",
+        value=(selected_from, selected_to),
+        help="Choose the inclusive date range to analyse.",
+    )
+    if isinstance(date_input, tuple) and len(date_input) == 2:
+        selected_from, selected_to = date_input
+    elif isinstance(date_input, date):
+        selected_from = date_input
+        selected_to = date_input
+
+    st.session_state["ol_reports_from_date"] = selected_from
+    st.session_state["ol_reports_to_date"] = selected_to
+
     api_settings = _get_api_settings()
     if api_settings is None:
         st.warning(
@@ -119,13 +196,22 @@ def main():
         help="Fetch FL3XX legs and execute the App Booking, App Line Assignment, and Empty Leg reports.",
         use_container_width=False,
     ):
-        if api_settings is None:
+        if selected_to < selected_from:
+            st.session_state["ol_reports_run"] = None
+            st.session_state["ol_reports_error"] = (
+                "The report end date must be on or after the start date."
+            )
+        elif api_settings is None:
             st.session_state["ol_reports_run"] = None
             st.session_state["ol_reports_error"] = (
                 "FL3XX API secrets are not configured; provide credentials before fetching."
             )
         else:
-            _handle_fetch(api_settings)
+            _handle_fetch(
+                api_settings,
+                from_date=selected_from,
+                to_date_inclusive=selected_to,
+            )
 
     _render_results()
 
