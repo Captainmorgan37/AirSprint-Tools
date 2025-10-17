@@ -1,8 +1,10 @@
 import streamlit as st
 from pathlib import Path
 from datetime import datetime, timezone
+from typing import Mapping, Optional
 
 from morning_report_plan import list_reports
+from morning_reports import MorningReportResult, MorningReportRun, run_morning_reports
 
 
 PLAN_PATH = Path("docs/FL3XX-report-automation-plan.md")
@@ -23,50 +25,108 @@ def _format_timestamp(ts: datetime) -> str:
 
 
 def _initialise_state():
-    if "ol_reports" not in st.session_state:
-        st.session_state["ol_reports"] = None
+    st.session_state.setdefault("ol_reports_run", None)
+    st.session_state.setdefault("ol_reports_error", None)
 
 
-def _render_report_plan(report):
-    st.subheader(report.short_name())
+def _get_api_settings() -> Optional[Mapping[str, str]]:
+    try:
+        settings = st.secrets.get("fl3xx_api")  # type: ignore[attr-defined]
+    except Exception:
+        return None
+    if not settings:
+        return None
+    if isinstance(settings, Mapping):
+        return dict(settings)
+    return None
 
+
+def _handle_fetch(api_settings: Mapping[str, str]) -> None:
+    try:
+        with st.spinner("Fetching flights from FL3XX..."):
+            run = run_morning_reports(api_settings)
+    except Exception as exc:  # pragma: no cover - defensive UI path
+        st.session_state["ol_reports_run"] = None
+        st.session_state["ol_reports_error"] = str(exc)
+    else:
+        st.session_state["ol_reports_run"] = run
+        st.session_state["ol_reports_error"] = None
+
+
+def _render_report_plan(plan_entry):
+    if not plan_entry:
+        return
+
+    st.markdown("#### Plan context")
     with st.expander("Current Capability", expanded=False):
-        st.markdown(report.current_capability)
+        st.markdown(plan_entry.current_capability or "—")
 
     with st.expander("Gaps / Required Inputs", expanded=False):
-        st.markdown(report.gaps or "—")
+        st.markdown(plan_entry.gaps or "—")
 
     with st.expander("Next Steps", expanded=True):
-        st.markdown(report.next_steps)
-        if report.sample_outputs:
+        st.markdown(plan_entry.next_steps or "—")
+        if plan_entry.sample_outputs:
             st.caption("Sample outputs from the plan:")
-            for idx, block in enumerate(report.sample_outputs):
+            for block in plan_entry.sample_outputs:
                 st.code(block, language="text")
 
 
-def _render_results():
-    result = st.session_state.get("ol_reports")
-    if not result:
-        st.info("Press **Fetch Morning Reports** to load the latest plan context.")
+def _render_report_output(report: MorningReportResult):
+    st.code(report.formatted_output(), language="text")
+    if report.warnings:
+        for warning in report.warnings:
+            st.warning(warning)
+
+    if report.rows:
+        st.markdown("#### Matching legs")
+        st.dataframe(report.rows, use_container_width=True)
+    else:
+        st.info("No matching legs found for this report.")
+
+
+def _render_results(plan_lookup):
+    error_message = st.session_state.get("ol_reports_error")
+    run: Optional[MorningReportRun] = st.session_state.get("ol_reports_run")
+
+    if error_message:
+        st.error(error_message)
+
+    if not run:
+        if not error_message:
+            st.info("Press **Fetch Morning Reports** to run the reports against live data.")
         return
 
-    fetched_at = result.get("fetched_at")
     st.success(
-        "Morning report scaffolding initialised"
-        + (f" · fetched {_format_timestamp(fetched_at)}" if fetched_at else "")
+        "Morning reports fetched"
+        + (
+            f" · {_format_timestamp(run.fetched_at)}"
+            if isinstance(run.fetched_at, datetime)
+            else ""
+        )
+        + f" · {run.leg_count} legs analysed"
     )
 
-    tabs = st.tabs([report.short_name() for report in result["reports"]])
-    for tab, report in zip(tabs, result["reports"]):
-        with tab:
-            _render_report_plan(report)
-
-
-def _handle_fetch(plan_reports):
-    st.session_state["ol_reports"] = {
-        "fetched_at": datetime.now(timezone.utc),
-        "reports": plan_reports,
+    metadata_payload = {
+        "from_date": run.metadata.get("from_date"),
+        "to_date": run.metadata.get("to_date"),
+        "request_url": run.metadata.get("request_url"),
+        "request_params": run.metadata.get("request_params"),
+        "hash": run.metadata.get("hash"),
+        "skipped_subcharter": run.metadata.get("skipped_subcharter"),
+        "normalization_stats": run.normalization_stats,
     }
+
+    with st.expander("Fetch metadata", expanded=False):
+        st.json(metadata_payload)
+
+    report_tabs = st.tabs([report.title for report in run.reports])
+    for tab, report in zip(report_tabs, run.reports):
+        plan_entry = plan_lookup.get(report.code)
+        with tab:
+            st.markdown(f"### {report.title}")
+            _render_report_output(report)
+            _render_report_plan(plan_entry)
 
 
 def main():
@@ -74,10 +134,10 @@ def main():
 
     st.markdown(
         """
-        This page scaffolds the first three FL3XX morning reports described in the
-        internal automation plan. It reads the latest instructions from the shared
-        markdown file so that engineering work can begin without duplicating
-        requirements.
+        Press **Fetch Morning Reports** to run the App Booking, App Line Assignment,
+        and Empty Leg checks using the latest FL3XX flight data. Results are displayed
+        alongside the automation plan context for each report so gaps and next steps
+        remain visible while reviewing the output.
         """
     )
 
@@ -89,15 +149,29 @@ def main():
         return
 
     plan_reports = _load_plan_sections()
+    plan_lookup = {report.code: report for report in plan_reports}
 
-    st.button(
+    api_settings = _get_api_settings()
+    if api_settings is None:
+        st.warning(
+            "FL3XX API credentials are not configured. Add them to "
+            "`.streamlit/secrets.toml` under the `[fl3xx_api]` section to enable live fetches."
+        )
+
+    if st.button(
         "Fetch Morning Reports",
-        help="Load the latest instructions for the App Booking, App Line Assignment, and Empty Leg reports.",
-        on_click=_handle_fetch,
-        kwargs={"plan_reports": plan_reports},
-    )
+        help="Fetch FL3XX legs and execute the App Booking, App Line Assignment, and Empty Leg reports.",
+        use_container_width=False,
+    ):
+        if api_settings is None:
+            st.session_state["ol_reports_run"] = None
+            st.session_state["ol_reports_error"] = (
+                "FL3XX API secrets are not configured; provide credentials before fetching."
+            )
+        else:
+            _handle_fetch(api_settings)
 
-    _render_results()
+    _render_results(plan_lookup)
 
 
 if __name__ == "__main__":
