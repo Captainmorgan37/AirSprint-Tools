@@ -158,13 +158,15 @@ def _build_empty_leg_report(rows: Iterable[Mapping[str, Any]]) -> MorningReportR
 
     for row in _sort_rows(matches):
         formatted = _format_report_row(row, include_tail=True)
-        account_name = _normalize_str(formatted.get("account_name"))
-        account_ok = account_name == _EXPECTED_EMPTY_LEG_ACCOUNT
+        account_name_raw = formatted.get("account_name")
+        account_name_normalized = _normalize_str(account_name_raw)
+        account_match_value = (account_name_normalized or "").upper()
+        account_ok = account_match_value == _EXPECTED_EMPTY_LEG_ACCOUNT
         formatted["account_expected"] = account_ok
         if not account_ok:
             warning = (
                 f"Leg {formatted.get('leg_id') or formatted.get('line')} "
-                f"has unexpected account value: {account_name or '—'}"
+                f"has unexpected account value: {account_name_normalized or '—'}"
             )
             formatted["line"] = f"{formatted['line']} ⚠️ Account mismatch"
             warnings.append(warning)

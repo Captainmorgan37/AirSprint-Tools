@@ -1,23 +1,11 @@
 import streamlit as st
-from pathlib import Path
 from datetime import datetime, timezone
 from typing import Mapping, Optional
-
-from morning_report_plan import list_reports
 from morning_reports import MorningReportResult, MorningReportRun, run_morning_reports
-
-
-PLAN_PATH = Path("docs/FL3XX-report-automation-plan.md")
-REPORT_CODES = ["16.1.1", "16.1.2", "16.1.3"]
 
 
 st.set_page_config(page_title="Operations Lead Morning Reports", layout="wide")
 st.title("📋 Operations Lead Morning Reports")
-
-
-@st.cache_data(show_spinner=False)
-def _load_plan_sections():
-    return list_reports(PLAN_PATH, include=REPORT_CODES)
 
 
 def _format_timestamp(ts: datetime) -> str:
@@ -53,25 +41,6 @@ def _handle_fetch(api_settings: Mapping[str, str]) -> None:
         st.session_state["ol_reports_error"] = None
 
 
-def _render_report_plan(plan_entry):
-    if not plan_entry:
-        return
-
-    st.markdown("#### Plan context")
-    with st.expander("Current Capability", expanded=False):
-        st.markdown(plan_entry.current_capability or "—")
-
-    with st.expander("Gaps / Required Inputs", expanded=False):
-        st.markdown(plan_entry.gaps or "—")
-
-    with st.expander("Next Steps", expanded=True):
-        st.markdown(plan_entry.next_steps or "—")
-        if plan_entry.sample_outputs:
-            st.caption("Sample outputs from the plan:")
-            for block in plan_entry.sample_outputs:
-                st.code(block, language="text")
-
-
 def _render_report_output(report: MorningReportResult):
     st.code(report.formatted_output(), language="text")
     if report.warnings:
@@ -85,7 +54,7 @@ def _render_report_output(report: MorningReportResult):
         st.info("No matching legs found for this report.")
 
 
-def _render_results(plan_lookup):
+def _render_results():
     error_message = st.session_state.get("ol_reports_error")
     run: Optional[MorningReportRun] = st.session_state.get("ol_reports_run")
 
@@ -122,11 +91,9 @@ def _render_results(plan_lookup):
 
     report_tabs = st.tabs([report.title for report in run.reports])
     for tab, report in zip(report_tabs, run.reports):
-        plan_entry = plan_lookup.get(report.code)
         with tab:
             st.markdown(f"### {report.title}")
             _render_report_output(report)
-            _render_report_plan(plan_entry)
 
 
 def main():
@@ -135,21 +102,10 @@ def main():
     st.markdown(
         """
         Press **Fetch Morning Reports** to run the App Booking, App Line Assignment,
-        and Empty Leg checks using the latest FL3XX flight data. Results are displayed
-        alongside the automation plan context for each report so gaps and next steps
-        remain visible while reviewing the output.
+        and Empty Leg checks using the latest FL3XX flight data. Review any
+        matching legs and warnings directly in the report tabs below.
         """
     )
-
-    if not PLAN_PATH.exists():
-        st.error(
-            "The plan document could not be found. Confirm that "
-            f"`{PLAN_PATH}` is present in the repository."
-        )
-        return
-
-    plan_reports = _load_plan_sections()
-    plan_lookup = {report.code: report for report in plan_reports}
 
     api_settings = _get_api_settings()
     if api_settings is None:
@@ -171,7 +127,7 @@ def main():
         else:
             _handle_fetch(api_settings)
 
-    _render_results(plan_lookup)
+    _render_results()
 
 
 if __name__ == "__main__":
