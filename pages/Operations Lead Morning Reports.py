@@ -17,6 +17,7 @@ def _format_timestamp(ts: datetime) -> str:
 def _initialise_state():
     st.session_state.setdefault("ol_reports_run", None)
     st.session_state.setdefault("ol_reports_error", None)
+    st.session_state.setdefault("ol_reports_warning", None)
     if "ol_reports_from_date" not in st.session_state or "ol_reports_to_date" not in st.session_state:
         default_from, default_to_exclusive = compute_fetch_dates(datetime.now(timezone.utc), inclusive_days=4)
         st.session_state.setdefault("ol_reports_from_date", default_from)
@@ -52,19 +53,47 @@ def _handle_fetch(
     from_date: date,
     to_date_inclusive: date,
 ) -> None:
+    to_date_exclusive = to_date_inclusive + timedelta(days=1)
+    st.session_state["ol_reports_warning"] = None
+
     try:
         with st.spinner("Fetching flights from FL3XX..."):
             run = run_morning_reports(
                 api_settings,
                 from_date=from_date,
-                to_date=to_date_inclusive + timedelta(days=1),
+                to_date=to_date_exclusive,
             )
+    except TypeError as exc:
+        message = str(exc)
+        if "unexpected keyword argument" in message and (
+            "from_date" in message or "to_date" in message
+        ):
+            try:
+                with st.spinner("Fetching flights from FL3XX..."):
+                    run = run_morning_reports(api_settings)
+            except Exception as fallback_exc:  # pragma: no cover - defensive UI path
+                st.session_state["ol_reports_run"] = None
+                st.session_state["ol_reports_error"] = str(fallback_exc)
+                return
+
+            st.session_state["ol_reports_warning"] = (
+                "The installed morning report runner does not yet support custom date ranges. "
+                "Fetched the default window instead."
+            )
+            st.session_state["ol_reports_run"] = run
+            st.session_state["ol_reports_error"] = None
+            return
+
+        st.session_state["ol_reports_run"] = None
+        st.session_state["ol_reports_error"] = message
+        return
     except Exception as exc:  # pragma: no cover - defensive UI path
         st.session_state["ol_reports_run"] = None
         st.session_state["ol_reports_error"] = str(exc)
-    else:
-        st.session_state["ol_reports_run"] = run
-        st.session_state["ol_reports_error"] = None
+        return
+
+    st.session_state["ol_reports_run"] = run
+    st.session_state["ol_reports_error"] = None
 
 
 def _render_report_output(report: MorningReportResult):
@@ -83,6 +112,7 @@ def _render_report_output(report: MorningReportResult):
 def _render_results():
     error_message = st.session_state.get("ol_reports_error")
     run: Optional[MorningReportRun] = st.session_state.get("ol_reports_run")
+    warning_message = st.session_state.get("ol_reports_warning")
 
     if error_message:
         st.error(error_message)
@@ -104,6 +134,9 @@ def _render_results():
         + f" · {run.leg_count} legs analysed"
         + f" · Dates: {selected_range}"
     )
+
+    if warning_message:
+        st.warning(warning_message)
 
     metadata_payload = {
         "from_date": run.metadata.get("from_date"),
