@@ -28,6 +28,11 @@ _EXPECTED_REPORTS: Sequence[Tuple[str, str, str]] = (
         "Upgraded Flights Report",
         "Upgrade Workflow Flights",
     ),
+    (
+        "16.1.11",
+        "FBO Disconnect Report",
+        "FBO Disconnect Checks",
+    ),
 )
 
 
@@ -235,9 +240,9 @@ def main():
         """
         Press **Fetch Morning Reports** to run the App Booking, App Line Assignment,
         Empty Leg, OCS Pax Flights, Owner Continuous Flight Validation, CJ3 Owners on
-        CJ2, Priority Status, Upgrade Workflow Validation, and Upgraded Flights checks
-        using the latest FL3XX flight data. Review any matching legs and warnings
-        directly in the report tabs below.
+        CJ2, Priority Status, Upgrade Workflow Validation, Upgraded Flights, and FBO
+        Disconnect checks using the latest FL3XX flight data. Review any matching legs
+        and warnings directly in the report tabs below.
         """
     )
 
@@ -268,7 +273,7 @@ def main():
         help=(
             "Fetch FL3XX legs and execute the App Booking, App Line Assignment, Empty Leg, "
             "OCS Pax Flights, Owner Continuous Flight Validation, CJ3 Owners on CJ2, Priority Status, "
-            "Upgrade Workflow Validation, and Upgraded Flights reports."
+            "Upgrade Workflow Validation, Upgraded Flights, and FBO Disconnect reports."
         ),
         use_container_width=False,
     ):
