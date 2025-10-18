@@ -162,6 +162,10 @@ def _render_report_output(report: MorningReportResult):
         for warning in report.warnings:
             st.warning(warning)
 
+    if report.metadata:
+        with st.expander("Report metadata", expanded=False):
+            st.json(report.metadata)
+
     if report.rows:
         st.markdown("#### Matching legs")
         st.dataframe(report.rows, use_container_width=True)
