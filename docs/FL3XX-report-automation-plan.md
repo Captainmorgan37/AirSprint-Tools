@@ -1,108 +1,69 @@
 # FL3XX Morning Report Automation Plan
 
-This document captures the current feasibility assessment for automating the morning operational reports inside the AirSprint Tools project. It focuses on the reports that can leverage the existing FL3XX API wiring and notes any additional data points or clarifications required before development can begin. Report 16.1.8 (Duty Violation Report) has been intentionally omitted from this plan per the latest guidance.
+This plan tracks the Operations Lead (OL) morning report coverage that now ships in the automation app (`morning_reports.py`). It documents what has already been delivered and highlights the open work required to complete the remaining reports. Report 16.1.8 (Duty Violation Report) remains out of scope per prior guidance.
 
-For each report, the sections below describe:
+## Status Snapshot
 
-- **Current Capability** – What the existing ingestion/normalisation layer already provides.
-- **Gaps / Required Inputs** – Additional payload fields, lookup tables, or business rules we still need.
-- **Next Steps** – Suggested follow-up actions once the missing inputs are available.
+| Report | Status | Notes |
+| --- | --- | --- |
+| 16.1.1 App Booking Workflow | ✅ Implemented | Workflow label filter surfaces legs under the "APP BOOKING" workflow and formats the booking/account tuple for display. |
+| 16.1.2 App Line Assignment | ✅ Implemented | Placeholder detection normalises registration prefixes such as `APP`, `APP CJ3+`, etc., and emits matching legs. |
+| 16.1.3 Empty Leg | ✅ Implemented | POS legs are screened for the expected `AirSprint Inc.` account; only anomalies are output with warnings. |
+| 16.1.4 OCS Flights with Pax | ✅ Implemented | Pulls FL3XX notifications for OCS passenger legs, caches responses, and includes pax counts plus note excerpts. |
+| 16.1.5 Owner Continuous Flight Validation | ✅ Implemented | Consecutive legs are grouped by account to flag rapid tail changes (<3 hours). |
+| 16.1.6 CJ3 Owners on CJ2 | ✅ Implemented | CJ3 owner legs flown on CJ2 equipment fetch quote details, evaluate pax/block thresholds, and summarise breaches. |
+| 16.1.7 Priority Status | ✅ Implemented | Priority departures trigger duty-start validation via post-flight check-in data with fallbacks and warnings. |
+| 16.1.9 Upgrade Workflow Validation | ✅ Implemented | Legacy aircraft upgrade requests inspect planning notes and leg details to confirm workflow alignment. |
+| 16.1.10 Upgraded Flights | ⏳ Pending | Requires mapping between requested vs. assigned aircraft, upgrade rules, and note validation. |
+| 16.1.11 FBO Disconnects | ⏳ Pending | Awaiting definitive FBO identifiers in the payload to compare arrival vs. departure handling. |
 
-## 16.1.1 App Booking Workflow Report
-- **Current Capability:** `fetch_flights` can retrieve all legs in a configurable window, and the normaliser already captures workflow, tags, and note text for each flight.
-- **Gaps / Required Inputs:** The FL3XX payload marks these legs with `"workflowCustomName": "App Booking"`; no additional identifiers are required once this label is surfaced.
-- **Next Steps:** Extend the workflow filter list with the `App Booking` label and output results using the format:
+The sections below capture implementation specifics for the completed reports and outline what is still required for the remaining ones.
 
-  ```
-  Results Found:
-  App Booking Workflow
-  <Date>-<Booking ID>-<Account Name>
-  ...
-  ```
+## 16.1.1 App Booking Workflow Report (Implemented)
+- **Implementation:** `_build_app_booking_report` filters normalised legs by the `APP BOOKING` workflow name and formats each result as `<Date>-<Booking ID>-<Account Name>` before handing it to the UI layer.
+- **Follow-up:** None required beyond monitoring for new workflow labels.
 
-  When no legs match, return:
+## 16.1.2 App Line Assignment Report (Implemented)
+- **Implementation:** `_build_app_line_assignment_report` reuses the shared tail extraction helpers and treats any registration beginning with one of the configured `APP` prefixes as an App Line placeholder.
+- **Follow-up:** Keep the `_APP_LINE_PREFIXES` list aligned with any future naming changes.
 
-  ```
-  No Results Found:
-  App Booking Workflow
-  No Results Found
-  ```
+## 16.1.3 Empty Leg Report (Implemented)
+- **Implementation:** `_build_empty_leg_report` pulls every POS leg and highlights those whose account name deviates from `AirSprint Inc.`. Each anomaly updates the line item with an explicit ⚠️ indicator and records an audit warning.
+- **Follow-up:** Confirm whether legitimate empty legs should appear even when the account matches (currently only mismatches are emitted).
 
-## 16.1.2 App Line Assignment Report
-- **Current Capability:** Aircraft assignment details are normalised, including detection of placeholder tails such as values starting with "ADD"/"REMOVE".
-- **Gaps / Required Inputs:** Placeholder tails are confirmed as `registrationNumber` values beginning with `App`, `App CJ2+`, `App CJ2+/CJ3+`, `App CJ3+`, and `App E550`; ensure these remain covered by the detection heuristics.
-- **Next Steps:** Update the placeholder-detection logic to treat the confirmed `registrationNumber` prefixes as "App Line" assignments, and surface any matches in the app using the format:
+## 16.1.4 OCS Flights with Pax Report (Implemented)
+- **Implementation:** `_build_ocs_pax_report` identifies OCS passenger legs (`flightType == "PAX"` and account `AirSprint Inc.`), fetches the notification payload once per flight identifier, and surfaces pax counts with a trimmed note summary. Network failures are logged as warnings without stopping the run.
+- **Follow-up:** Watch for notification schema drift so the note extraction continues to find the briefed text.
 
-  ```
-  Results Found:
-  App Line Assignment
-  <Date>-<Booking ID>-<Account Name>
-  ...
-  ```
+## 16.1.5 Owner Continuous Flight Validation Report (Implemented)
+- **Implementation:** `_build_owner_continuous_flight_validation_report` groups non-OCS passenger legs by the normalised account name, sorts them chronologically, and flags tail changes with less than three hours between arrival and next departure. Metadata records which accounts were affected.
+- **Follow-up:** If a more authoritative owner identifier becomes available, wire it into the grouping logic to avoid collisions between similarly named accounts.
 
-  When no legs match, return:
+## 16.1.6 CJ3 Owners on CJ2 Report (Implemented)
+- **Implementation:** `_build_cj3_owners_on_cj2_report` inspects each CJ3 booking flown on CJ2 hardware. It retrieves the associated quote/leg detail, derives passenger counts and block times, and marks any legs exceeding the ≤5 pax or ≤180 minute limits. Missing data triggers warnings and still surfaces the leg for manual review.
+- **Follow-up:** Capture any additional violation rules (e.g., owner class filters) as they are defined.
 
-  ```
-  No Results Found:
-  App Line Assignment
-  No Results Found
-  ```
+## 16.1.7 Priority Status Report (Implemented)
+- **Implementation:** `_build_priority_status_report` caches the first departure per tail/day, finds priority legs, and either validates or flags the duty-start window. When credentials exist it fetches post-flight check-ins; otherwise it records a warning and marks the leg as needing manual validation.
+- **Follow-up:** If planned duty-start times become available, incorporate them to cross-check against actual check-ins.
 
-## 16.1.3 Empty Leg Report
-- **Current Capability:** Legs can be queried for any date range, and we already store tail numbers, airports, times, booking codes, and priority flags.
-- **Gaps / Required Inputs:** The FL3XX flight payload sets `"flightType": "POS"` for OCS (Empty Leg) segments, and those legs should always carry an `account` value of `AirSprint Inc.`; treat blank or different account values as anomalies that must be surfaced in the report output.
-- **Next Steps:** Persist the `flightType` and `account` fields during normalisation, validate that every `POS` leg retains the `AirSprint Inc.` account, flag discrepancies, and output results using the format:
+## 16.1.9 Upgrade Workflow Validation Report (Implemented)
+- **Implementation:** `_build_upgrade_workflow_validation_report` focuses on legacy categories (`E550`, `E545`), fetches leg details by booking reference, parses planning notes for CJ upgrade labels, and outputs the booking/tail summary along with metadata describing inspection totals.
+- **Follow-up:** Extend the matchers if additional upgrade note formats or aircraft families need coverage.
 
-  ```
-  Results Found:
-  Empty Leg Report
-  <Date>-<Booking ID>-<Account Name>-<Aircraft Tail>
-  ...
-  ```
+## 16.1.10 Upgraded Flights Report (Pending)
+- **Current Capability:** We can already retrieve candidate legs via workflow labels and general note text, but the automation cannot yet differentiate between requested and assigned aircraft or validate the upgrade rationale.
+- **Required Inputs:**
+  - Field(s) indicating the originally requested aircraft type vs. the assigned tail/equipment.
+  - Precise location of the upgrade rationale/billable-hours notes, including any formatting requirements.
+  - Business rules that describe a "proper" upgrade so we can flag exceptions.
+- **Next Steps:** Once these inputs are mapped, extend normalisation to capture them and implement validations similar to 16.1.9, generating notifications for the relevant time window.
 
-  When no legs match, return:
-
-  ```
-  No Results Found:
-  Empty Leg Report
-  No Results Found
-  ```
-
-## 16.1.4 OCS Flights with Pax Report
-- **Current Capability:** The morning report app now flags OCS flights (``flightType == "PAX"`` and ``accountName == "AirSprint Inc."``), fetches the notification payload for each leg, and surfaces passenger counts alongside the notes text.
-- **Gaps / Required Inputs:** None — the required identifiers and notification endpoint are available via the standard flight payloads.
-- **Next Steps:** Monitor live usage for edge cases (e.g., missing notifications or atypical note formatting) and expand validations when additional business rules are provided.
-
-## 16.1.5 Owner Continuous Flight Validation Report
-- **Current Capability:** The ingestion captures tail numbers, airports, and timestamps, which is enough to group consecutive legs by aircraft and day.
-- **Gaps / Required Inputs:** Provide the payload key that identifies the owner/account associated with each leg so itineraries can be grouped per owner.
-- **Next Steps:** With owner data available, implement logic to ensure contiguous legs for the same owner stay on the same tail and flag discrepancies.
-
-## 16.1.6 CJ3 Owners on CJ2 Report
-- **Current Capability:** Leg duration can be computed from departure and arrival timestamps.
-- **Gaps / Required Inputs:** We need fields (or a lookup) that reveal: the owner's entitled fleet type, the actual aircraft type assigned, and the passenger count on the leg.
-- **Next Steps:** Ingest the requested/entitled aircraft metadata and pax counts, then check each CJ3 owner leg on a CJ2 against the ≤5 pax / ≤3 hours criteria.
-
-## 16.1.7 Priority Status Report
-- **Current Capability:** Priority workflows/flags can be detected, and post-flight check-in timestamps are already parsed through `fetch_postflight` for historical validation.
-- **Gaps / Required Inputs:** To audit future duty assignments, we need access to the scheduled duty start times from Timeline or the crew scheduling API because current endpoints only expose actual check-in times.
-- **Next Steps:** Determine the source of planned duty-start data; once available, compare it against departure times to confirm the 90-minute buffer and surface exceptions.
-
-## 16.1.9 Upgrade Workflow Validation Report
-- **Current Capability:** Workflow labels are available, enabling us to find flights that use an upgrade-specific workflow.
-- **Gaps / Required Inputs:** Confirm the workflow name(s) used for upgrades and provide the fields that describe the assigned aircraft type, owner class, and any other criteria that should align with the workflow.
-- **Next Steps:** Extend normalisation to include the new aircraft metadata and implement cross-checks between workflow, tail assignment, and required notes.
-
-## 16.1.10 Upgraded Flights Report
-- **Current Capability:** We can retrieve legs based on workflow labels and already collect general note text.
-- **Gaps / Required Inputs:** Identify the fields that capture (a) the requested aircraft type versus the assigned tail, (b) the location of upgrade rationale/billable-hours notes, and (c) the rule set for validating a "proper" upgrade.
-- **Next Steps:** Once these data points are mapped, validate each candidate upgrade, ensure notes are populated, and produce the notification payloads for today/tomorrow as described.
-
-## 16.1.11 FBO Disconnects
-- **Current Capability:** Airports and schedules are stored for each leg, providing the framework for comparisons.
-- **Gaps / Required Inputs:** We currently do not ingest FBO identifiers. Please specify which payload field(s) contain the planned arrival and departure FBO so we can compare them for mismatches.
-- **Next Steps:** Capture the FBO data during normalisation and flag same-airport legs where the arrival and departure FBO differ.
+## 16.1.11 FBO Disconnects (Pending)
+- **Current Capability:** The normalised payload already exposes airports and timestamps, allowing us to match legs operating from the same field.
+- **Required Inputs:** We still need definitive FBO identifiers (arrival and departure) exposed in the ingestion layer.
+- **Next Steps:** Introduce the FBO fields into normalisation, then compare same-airport legs for mismatched FBO handling and emit any disconnects.
 
 ---
 
-As you supply the missing field mappings or rule definitions for each report, we can start turning these sections into actionable development tasks and wire them into the multi-report automation app.
+As the missing mappings and business rules are supplied, we can create follow-on tickets to implement the outstanding reports and continue iterating on the OL morning automation.
