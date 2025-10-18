@@ -475,24 +475,30 @@ def _build_cj3_owners_on_cj2_report(
             block_minutes = _extract_block_minutes(detail, row)
 
             violation = False
+            violation_reasons: List[str] = []
             if pax_count is None:
                 violation = True
                 warnings.append(
                     f"Missing passenger count for quote {quote_id}; flagging for review"
                 )
+                violation_reasons.append("Missing passenger count")
             elif pax_count > 5:
                 violation = True
+                violation_reasons.append("Passenger count above limit")
 
             if block_minutes is None:
                 violation = True
                 warnings.append(
                     f"Missing block time for quote {quote_id}; flagging for review"
                 )
+                violation_reasons.append("Missing block time")
             elif block_minutes > 180:
                 violation = True
+                violation_reasons.append("Block time above limit")
 
-            if not violation:
-                continue
+            threshold_status = (
+                "Threshold exceeded" if violation else "Within thresholds"
+            )
 
             dep_dt = _extract_departure_dt(row)
             if dep_dt is None:
@@ -501,7 +507,16 @@ def _build_cj3_owners_on_cj2_report(
             date_component = dep_dt.date().isoformat() if dep_dt else "Unknown Date"
 
             formatted_stub = {"leg_id": _extract_leg_id(row)}
-            flight_identifier = _extract_flight_identifier(row, formatted_stub) or formatted_stub["leg_id"]
+            booking_identifier = _extract_booking_reference(row)
+            if not booking_identifier and detail:
+                booking_identifier = _extract_booking_reference(detail)
+
+            flight_identifier = _extract_flight_identifier(row, formatted_stub)
+            display_identifier = (
+                booking_identifier
+                or flight_identifier
+                or formatted_stub["leg_id"]
+            )
 
             pax_display = str(pax_count) if pax_count is not None else "Unknown"
             block_display = _format_block_minutes(block_minutes)
@@ -510,10 +525,11 @@ def _build_cj3_owners_on_cj2_report(
                 [
                     date_component,
                     tail,
-                    flight_identifier or "Unknown Flight",
+                    display_identifier or "Unknown Flight",
                     account_name,
                     pax_display,
                     block_display,
+                    threshold_status,
                 ]
             )
 
@@ -523,12 +539,16 @@ def _build_cj3_owners_on_cj2_report(
                     "date": date_component,
                     "tail": tail,
                     "flight_identifier": flight_identifier,
+                    "booking_identifier": booking_identifier,
                     "account_name": account_name,
                     "pax_count": pax_count,
                     "block_time_minutes": block_minutes,
                     "block_time_display": block_display,
                     "planning_note": note_text,
                     "quote_id": quote_id,
+                    "threshold_status": threshold_status,
+                    "threshold_breached": violation,
+                    "threshold_reasons": violation_reasons,
                 }
             )
     finally:
