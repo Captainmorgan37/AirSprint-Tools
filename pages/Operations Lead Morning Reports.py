@@ -36,6 +36,9 @@ _EXPECTED_REPORTS: Sequence[Tuple[str, str, str]] = (
 )
 
 
+_PREFERRED_FORMAT_CODES = {"16.1.6", "16.1.7", "16.1.10"}
+
+
 def _build_expected_reports(
     reports: Iterable[MorningReportResult],
 ) -> Tuple[List[MorningReportResult], List[str]]:
@@ -157,7 +160,11 @@ def _handle_fetch(
 
 
 def _render_report_output(report: MorningReportResult):
+    if report.code in _PREFERRED_FORMAT_CODES:
+        st.caption("Copy-and-paste friendly summary block:")
     st.code(report.formatted_output(), language="text")
+    if report.code in _PREFERRED_FORMAT_CODES and report.has_matches:
+        st.caption("Scroll down for detailed rows if you need additional context.")
     if report.warnings:
         for warning in report.warnings:
             st.warning(warning)

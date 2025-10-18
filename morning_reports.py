@@ -52,11 +52,19 @@ class MorningReportResult:
         return self.match_count > 0
 
     def formatted_output(self) -> str:
-        if self.has_matches:
-            lines = ["Results Found:", self.header_label]
-            lines.extend(row.get("line", "") for row in self.rows)
-        else:
+        if not self.has_matches:
             lines = ["No Results Found"]
+            return "\n".join(lines)
+
+        if self.code == "16.1.10":
+            return _format_upgraded_flights_block(self)
+        if self.code == "16.1.6":
+            return _format_cj3_on_cj2_block(self)
+        if self.code == "16.1.7":
+            return _format_priority_status_block(self)
+
+        lines = ["Results Found:", self.header_label]
+        lines.extend(row.get("line", "") for row in self.rows)
         return "\n".join(lines)
 
 
@@ -76,6 +84,189 @@ class MorningReportRun:
         return {report.code: report for report in self.reports}
 
 
+def _format_upgraded_flights_block(report: MorningReportResult) -> str:
+    return _render_preferred_block(
+        report.rows,
+        header="UPGRADES: (based on the Upgraded Flights Report)",
+        line_builder=_build_upgrade_line,
+    )
+
+
+def _format_cj3_on_cj2_block(report: MorningReportResult) -> str:
+    return _render_preferred_block(
+        report.rows,
+        header="CJ3 CLIENTS ON CJ2: (based on the CJ3 Owners on CJ2 Report)",
+        line_builder=_build_cj3_line,
+    )
+
+
+def _format_priority_status_block(report: MorningReportResult) -> str:
+    return _render_preferred_block(
+        report.rows,
+        header="PRIORITY CLIENTS: (based on the Priority Status Report)",
+        line_builder=_build_priority_line,
+    )
+
+
+def _render_preferred_block(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    header: str,
+    line_builder: Callable[[Mapping[str, Any]], str],
+) -> str:
+    grouped_rows = _group_rows_by_display_date(rows)
+    lines: List[str] = [header]
+
+    if not grouped_rows:
+        lines.append("")
+        lines.append("No Results Found")
+        return "\n".join(lines)
+
+    lines.append("")
+    for label, group in grouped_rows:
+        lines.append(label)
+        lines.append("")
+        for row in group:
+            lines.append(line_builder(row))
+        lines.append("")
+
+    while lines and lines[-1] == "":
+        lines.pop()
+
+    return "\n".join(lines)
+
+
+def _group_rows_by_display_date(
+    rows: Iterable[Mapping[str, Any]]
+) -> List[Tuple[str, List[Mapping[str, Any]]]]:
+    grouped: Dict[str, Dict[str, Any]] = {}
+    ordered_labels: List[str] = []
+
+    for row in rows:
+        raw_date = row.get("date")
+        parsed_date = _coerce_row_date(raw_date)
+        label = _format_display_date_label(parsed_date, raw_date)
+
+        if label not in grouped:
+            grouped[label] = {
+                "rows": [],
+                "sort_key": parsed_date,
+                "position": len(ordered_labels),
+            }
+            ordered_labels.append(label)
+
+        entry = grouped[label]
+        entry["rows"].append(row)
+        if parsed_date is not None:
+            current = entry.get("sort_key")
+            if current is None or parsed_date < current:
+                entry["sort_key"] = parsed_date
+
+    def _sort_tuple(item: Tuple[str, Dict[str, Any]]):
+        label, payload = item
+        sort_key = payload.get("sort_key")
+        position = payload.get("position", 0)
+        return (sort_key or date.max, position, label)
+
+    ordered = sorted(grouped.items(), key=_sort_tuple)
+    return [(label, payload["rows"]) for label, payload in ordered]
+
+
+def _coerce_row_date(value: Any) -> Optional[date]:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            return datetime.strptime(text, "%Y-%m-%d").date()
+        except ValueError:
+            parsed = safe_parse_dt(text)
+            if isinstance(parsed, datetime):
+                return parsed.date()
+    return None
+
+
+def _format_display_date_label(parsed: Optional[date], raw: Any) -> str:
+    if parsed is not None:
+        return parsed.strftime("%d%b%y").upper()
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    if isinstance(raw, date):
+        return raw.strftime("%d%b%y").upper()
+    return "Unknown Date"
+
+
+def _build_upgrade_line(row: Mapping[str, Any]) -> str:
+    tail_value = row.get("tail") or "Unknown Tail"
+    tail = str(tail_value).strip() or "Unknown Tail"
+    booking = (
+        row.get("booking_reference")
+        or row.get("booking_identifier")
+        or row.get("quote_id")
+        or "Unknown Booking"
+    )
+    account_value = row.get("account_name") or "Unknown Account"
+    booking_display = str(booking).strip() or "Unknown Booking"
+    account = str(account_value).strip() or "Unknown Account"
+    return " - ".join([tail, booking_display, account])
+
+
+def _build_cj3_line(row: Mapping[str, Any]) -> str:
+    tail_value = row.get("tail") or "Unknown Tail"
+    tail = str(tail_value).strip() or "Unknown Tail"
+    booking = (
+        row.get("booking_identifier")
+        or row.get("flight_identifier")
+        or row.get("booking_reference")
+        or "Unknown Booking"
+    )
+    account_value = row.get("account_name") or "Unknown Account"
+    pax_count = row.get("pax_count")
+    pax_display = f"{pax_count} PAX" if pax_count is not None else "Unknown PAX"
+    block_display = row.get("block_time_display")
+    if not block_display:
+        block_minutes = row.get("block_time_minutes")
+        block_display = _format_block_minutes(block_minutes)
+    block_display = (
+        f"{block_display} FLIGHT TIME" if block_display and block_display != "Unknown" else "Unknown FLIGHT TIME"
+    )
+    return " - ".join(
+        [
+            tail,
+            str(booking).strip() or "Unknown Booking",
+            str(account_value).strip() or "Unknown Account",
+            pax_display,
+            block_display,
+        ]
+    )
+
+
+def _build_priority_line(row: Mapping[str, Any]) -> str:
+    tail_value = row.get("tail") or "Unknown Tail"
+    tail = str(tail_value).strip() or "Unknown Tail"
+    booking_value = (
+        row.get("booking_reference") or row.get("booking_identifier") or "Unknown Booking"
+    )
+    account_value = row.get("account_name") or "Unknown Account"
+    has_issue = bool(row.get("has_issue"))
+    status_label = "NOT ACCOMMODATED" if has_issue else "ACCOMMODATED"
+    status_detail = row.get("status")
+    if has_issue and status_detail:
+        status_display = f"{status_label} - {status_detail}"
+    else:
+        status_display = status_label
+    return " - ".join(
+        [
+            tail,
+            str(booking_value).strip() or "Unknown Booking",
+            str(account_value).strip() or "Unknown Account",
+            status_display,
+        ]
+    )
 _APP_BOOKING_WORKFLOW = "APP BOOKING"
 _APP_LINE_PREFIXES = (
     "APP ",
