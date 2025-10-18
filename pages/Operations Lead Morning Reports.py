@@ -25,7 +25,7 @@ _EXPECTED_REPORTS: Sequence[Tuple[str, str, str]] = (
     ),
     (
         "16.1.10",
-        "Upgraded Flights Report (Pending)",
+        "Upgraded Flights Report",
         "Upgrade Workflow Flights",
     ),
 )
@@ -156,6 +156,10 @@ def _render_report_output(report: MorningReportResult):
     if report.warnings:
         for warning in report.warnings:
             st.warning(warning)
+
+    if report.metadata:
+        with st.expander("Report metadata", expanded=False):
+            st.json(report.metadata)
 
     if report.rows:
         st.markdown("#### Matching legs")

@@ -6,7 +6,11 @@ import datetime as dt
 from typing import Any, Dict, Optional
 
 from fl3xx_api import Fl3xxApiConfig
-from morning_reports import MorningReportResult, _build_upgrade_flights_report
+from morning_reports import (
+    MorningReportResult,
+    _build_upgrade_flights_report,
+    run_morning_reports,
+)
 
 
 def iso(ts: dt.datetime) -> str:
@@ -71,11 +75,19 @@ def test_handles_nested_workflow_structures():
         fetch_leg_details_fn=_stub_fetch(payload_map),
     )
 
-    assert result.metadata == {
-        "match_count": 1,
-        "inspected_legs": 1,
-        "details_fetched": 1,
-    }
+    metadata = result.metadata
+    assert metadata["match_count"] == 1
+    assert metadata["inspected_legs"] == 1
+    assert metadata["details_fetched"] == 1
+    assert metadata["missing_quote_ids"] == 0
+    assert metadata["missing_booking_references"] == 0
+    assert metadata["detail_fetch_failures"] == 0
+    assert metadata["workflow_summary"] == [
+        {"workflow": "Owner Upgrade Pending", "count": 1}
+    ]
+    assert metadata["upgrade_workflow_summary"] == [
+        {"workflow": "Owner Upgrade Pending", "count": 1}
+    ]
     assert len(result.rows) == 1
     entry = result.rows[0]
     assert entry["workflow"] == "Owner Upgrade Pending"
@@ -107,11 +119,19 @@ def test_includes_booking_note_and_requested_type():
     )
 
     assert isinstance(result, MorningReportResult)
-    assert result.metadata == {
-        "match_count": 1,
-        "inspected_legs": 1,
-        "details_fetched": 1,
-    }
+    metadata = result.metadata
+    assert metadata["match_count"] == 1
+    assert metadata["inspected_legs"] == 1
+    assert metadata["details_fetched"] == 1
+    assert metadata["missing_quote_ids"] == 0
+    assert metadata["missing_booking_references"] == 0
+    assert metadata["detail_fetch_failures"] == 0
+    assert metadata["workflow_summary"] == [
+        {"workflow": "Owner Upgrade Request", "count": 1}
+    ]
+    assert metadata["upgrade_workflow_summary"] == [
+        {"workflow": "Owner Upgrade Request", "count": 1}
+    ]
     assert len(result.rows) == 1
     entry = result.rows[0]
     assert entry["booking_reference"] == "BOOK-1"
@@ -135,11 +155,19 @@ def test_missing_quote_id_includes_warning_and_row():
         fetch_leg_details_fn=_stub_fetch({}),
     )
 
-    assert result.metadata == {
-        "match_count": 1,
-        "inspected_legs": 1,
-        "details_fetched": 0,
-    }
+    metadata = result.metadata
+    assert metadata["match_count"] == 1
+    assert metadata["inspected_legs"] == 1
+    assert metadata["details_fetched"] == 0
+    assert metadata["missing_quote_ids"] == 1
+    assert metadata["missing_booking_references"] == 0
+    assert metadata["detail_fetch_failures"] == 0
+    assert metadata["workflow_summary"] == [
+        {"workflow": "Upgrade Workflow", "count": 1}
+    ]
+    assert metadata["upgrade_workflow_summary"] == [
+        {"workflow": "Upgrade Workflow", "count": 1}
+    ]
     assert len(result.rows) == 1
     entry = result.rows[0]
     assert entry["booking_reference"] == "BOOK-2"
@@ -163,9 +191,68 @@ def test_non_upgrade_workflows_are_ignored():
         fetch_leg_details_fn=_stub_fetch({"Q3": {"bookingNote": "N/A"}}),
     )
 
-    assert result.metadata == {
-        "match_count": 0,
-        "inspected_legs": 0,
-        "details_fetched": 0,
-    }
+    metadata = result.metadata
+    assert metadata["match_count"] == 0
+    assert metadata["inspected_legs"] == 0
+    assert metadata["details_fetched"] == 0
+    assert metadata["missing_quote_ids"] == 0
+    assert metadata["missing_booking_references"] == 0
+    assert metadata["detail_fetch_failures"] == 0
+    assert metadata["workflow_summary"] == [
+        {"workflow": "Standard Workflow", "count": 1}
+    ]
+    assert metadata["upgrade_workflow_summary"] == []
     assert result.rows == []
+
+
+def test_full_run_includes_upgraded_flights_report(monkeypatch):
+    dep = dt.datetime(2024, 9, 10, 12, 0)
+    workflow_row = _leg(
+        dep=dep,
+        workflow="Owner Upgrade Request",
+        quote_id="Q42",
+        booking="BOOK-42",
+    )
+
+    flights_payload = [workflow_row]
+    fetch_metadata = {"fetched_at": iso(dep)}
+
+    monkeypatch.setattr(
+        "morning_reports.build_fl3xx_api_config",
+        lambda settings: Fl3xxApiConfig(api_token="token"),
+    )
+    monkeypatch.setattr(
+        "morning_reports.fetch_flights",
+        lambda config, from_date, to_date, now: (flights_payload, fetch_metadata),
+    )
+    monkeypatch.setattr(
+        "morning_reports.normalize_fl3xx_payload",
+        lambda payload: (flights_payload, {"normalised": 1}),
+    )
+    monkeypatch.setattr(
+        "morning_reports.filter_out_subcharter_rows", lambda rows: (rows, 0)
+    )
+    monkeypatch.setattr("morning_reports.fetch_postflight", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(
+        "morning_reports.fetch_leg_details",
+        _stub_fetch(
+            {
+                "Q42": {
+                    "bookingNote": "Upgrade approved",
+                    "requestedAircraftType": "Praetor 500",
+                    "assignedAircraftType": "Legacy 450",
+                }
+            }
+        ),
+    )
+
+    run = run_morning_reports(
+        {"api_token": "token"},
+        now=dep,
+        from_date=dep.date(),
+        to_date=dep.date(),
+    )
+
+    report_codes = [report.code for report in run.reports]
+    assert "16.1.10" in report_codes
+    assert run.metadata.get("report_codes") == report_codes

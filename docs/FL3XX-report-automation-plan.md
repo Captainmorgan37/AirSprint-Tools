@@ -14,7 +14,7 @@ This plan tracks the Operations Lead (OL) morning report coverage that now ships
 | 16.1.6 CJ3 Owners on CJ2 | ✅ Implemented | CJ3 owner legs flown on CJ2 equipment fetch quote details, evaluate pax/block thresholds, and summarise breaches. |
 | 16.1.7 Priority Status | ✅ Implemented | Priority departures trigger duty-start validation via post-flight check-in data with fallbacks and warnings. |
 | 16.1.9 Upgrade Workflow Validation | ✅ Implemented | Legacy aircraft upgrade requests inspect planning notes and leg details to confirm workflow alignment. |
-| 16.1.10 Upgraded Flights | ⏳ Pending | Requires mapping between requested vs. assigned aircraft, upgrade rules, and note validation. |
+| 16.1.10 Upgraded Flights | ✅ Implemented | Upgrade workflow legs surface booking vs. assignment transitions, booking notes, and missing quote warnings. |
 | 16.1.11 FBO Disconnects | ⏳ Pending | Awaiting definitive FBO identifiers in the payload to compare arrival vs. departure handling. |
 
 The sections below capture implementation specifics for the completed reports and outline what is still required for the remaining ones.
@@ -51,13 +51,10 @@ The sections below capture implementation specifics for the completed reports an
 - **Implementation:** `_build_upgrade_workflow_validation_report` focuses on legacy categories (`E550`, `E545`), fetches leg details by booking reference, parses planning notes for CJ upgrade labels, and outputs the booking/tail summary along with metadata describing inspection totals.
 - **Follow-up:** Extend the matchers if additional upgrade note formats or aircraft families need coverage.
 
-## 16.1.10 Upgraded Flights Report (Pending)
-- **Current Capability:** We can already retrieve candidate legs via workflow labels and general note text, but the automation cannot yet differentiate between requested and assigned aircraft or validate the upgrade rationale.
-- **Required Inputs:**
-  - Field(s) indicating the originally requested aircraft type vs. the assigned tail/equipment.
-  - Precise location of the upgrade rationale/billable-hours notes, including any formatting requirements.
-  - Business rules that describe a "proper" upgrade so we can flag exceptions.
-- **Next Steps:** Once these inputs are mapped, extend normalisation to capture them and implement validations similar to 16.1.9, generating notifications for the relevant time window.
+## 16.1.10 Upgraded Flights Report (Implemented)
+- **Current Capability:** `_build_upgrade_flights_report` lists every upgrade workflow leg, displaying the booking reference, requested vs. assigned equipment transition, booking notes, and any missing quote identifier warnings. The report metadata now captures which workflow labels were inspected, how many legs were considered upgrade candidates, and whether quote identifiers or booking references were missing.
+- **Required Inputs:** Legs must surface an upgrade-oriented workflow label (e.g., `workflowCustomName` containing "upgrade"), the quote identifier (so we can fetch booking notes and requested types), and ideally the booking reference directly on the flight payload. When either identifier is absent the leg still appears, but the metadata will highlight the missing field counts for troubleshooting.
+- **Next Steps:** Monitor for new upgrade workflow variants and extend validation heuristics as additional business rules are introduced. Review the metadata summaries if the report ever renders empty to confirm whether upgrade-labelled workflows were present in the fetch window.
 
 ## 16.1.11 FBO Disconnects (Pending)
 - **Current Capability:** The normalised payload already exposes airports and timestamps, allowing us to match legs operating from the same field.
