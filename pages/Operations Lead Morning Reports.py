@@ -164,8 +164,8 @@ def main():
     st.markdown(
         """
         Press **Fetch Morning Reports** to run the App Booking, App Line Assignment,
-        and Empty Leg checks using the latest FL3XX flight data. Review any
-        matching legs and warnings directly in the report tabs below.
+        Empty Leg, and OCS Pax Flights checks using the latest FL3XX flight data.
+        Review any matching legs and warnings directly in the report tabs below.
         """
     )
 
@@ -193,7 +193,7 @@ def main():
 
     if st.button(
         "Fetch Morning Reports",
-        help="Fetch FL3XX legs and execute the App Booking, App Line Assignment, and Empty Leg reports.",
+        help="Fetch FL3XX legs and execute the App Booking, App Line Assignment, Empty Leg, and OCS Pax Flights reports.",
         use_container_width=False,
     ):
         if selected_to < selected_from:

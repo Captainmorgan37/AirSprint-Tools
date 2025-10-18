@@ -69,9 +69,9 @@ For each report, the sections below describe:
   ```
 
 ## 16.1.4 OCS Flights with Pax Report
-- **Current Capability:** Workflow and note text is already accessible for each leg, which covers the notes validation.
-- **Gaps / Required Inputs:** We still need a reliable indicator that a leg is considered an OCS flight, plus confirmation of where the passenger-purpose note should live. If the API exposes passenger counts, please identify that field as well.
-- **Next Steps:** Once the above fields are mapped, add a filter for OCS legs with passengers and validate that the notes mention personal (AirSprint Go) or work usage.
+- **Current Capability:** The morning report app now flags OCS flights (``flightType == "PAX"`` and ``accountName == "AirSprint Inc."``), fetches the notification payload for each leg, and surfaces passenger counts alongside the notes text.
+- **Gaps / Required Inputs:** None — the required identifiers and notification endpoint are available via the standard flight payloads.
+- **Next Steps:** Monitor live usage for edge cases (e.g., missing notifications or atypical note formatting) and expand validations when additional business rules are provided.
 
 ## 16.1.5 Owner Continuous Flight Validation Report
 - **Current Capability:** The ingestion captures tail numbers, airports, and timestamps, which is enough to group consecutive legs by aircraft and day.

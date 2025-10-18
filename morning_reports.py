@@ -2,11 +2,20 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable as IterableABC
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
+import re
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
-from fl3xx_api import compute_fetch_dates, fetch_flights
+import requests
+
+from fl3xx_api import (
+    Fl3xxApiConfig,
+    compute_fetch_dates,
+    fetch_flights,
+    fetch_flight_notification,
+)
 from flight_leg_utils import (
     build_fl3xx_api_config,
     filter_out_subcharter_rows,
@@ -73,6 +82,7 @@ _APP_LINE_PREFIXES = (
     "APP E550",
 )
 _EXPECTED_EMPTY_LEG_ACCOUNT = "AIRSPRINT INC."
+_OCS_ACCOUNT_NAME = "AIRSPRINT INC."
 
 
 def run_morning_reports(
@@ -119,6 +129,7 @@ def run_morning_reports(
         _build_app_booking_report(normalized_rows),
         _build_app_line_assignment_report(normalized_rows),
         _build_empty_leg_report(normalized_rows),
+        _build_ocs_pax_report(normalized_rows, config),
     ]
 
     return MorningReportRun(
@@ -193,6 +204,92 @@ def _build_empty_leg_report(rows: Iterable[Mapping[str, Any]]) -> MorningReportR
         metadata={
             "match_count": len(formatted_rows),
             "expected_account": _EXPECTED_EMPTY_LEG_ACCOUNT,
+        },
+    )
+
+
+def _build_ocs_pax_report(
+    rows: Iterable[Mapping[str, Any]],
+    config: Fl3xxApiConfig,
+) -> MorningReportResult:
+    matches = [row for row in rows if _is_ocs_pax_leg(row)]
+    formatted_rows: List[Dict[str, Any]] = []
+    warnings: List[str] = []
+    notification_cache: Dict[str, Optional[Any]] = {}
+    session: Optional[requests.Session] = None
+
+    try:
+        for row in _sort_rows(matches):
+            formatted = _format_report_row(row)
+            pax_count = _extract_pax_count(row)
+            flight_identifier = _extract_flight_identifier(row, formatted)
+            note_text: Optional[str] = None
+
+            if flight_identifier:
+                if session is None:
+                    session = requests.Session()
+                if flight_identifier not in notification_cache:
+                    try:
+                        payload = fetch_flight_notification(
+                            config, flight_identifier, session=session
+                        )
+                    except Exception as exc:  # pragma: no cover - defensive path
+                        warnings.append(
+                            "Failed to fetch OCS notification for "
+                            f"flight {flight_identifier}: {exc}"
+                        )
+                        notification_cache[flight_identifier] = None
+                    else:
+                        notification_cache[flight_identifier] = payload
+
+                payload = notification_cache.get(flight_identifier)
+                if payload is not None:
+                    note_text = _extract_notification_note(payload)
+            else:
+                warnings.append(
+                    "Skipping notification fetch for leg "
+                    f"{formatted.get('leg_id') or formatted.get('line')} due to missing flight identifier"
+                )
+
+            display_note = _format_notification_text(note_text)
+            pax_display = str(pax_count) if pax_count is not None else "Unknown Pax"
+
+            base_parts = [
+                formatted.get("date") or "Unknown Date",
+                formatted.get("booking_reference")
+                or formatted.get("bookingIdentifier")
+                or formatted.get("leg_id")
+                or "Unknown Flight",
+                formatted.get("account_name") or "Unknown Account",
+            ]
+            line = "-".join(base_parts + [pax_display, display_note])
+
+            formatted.update(
+                {
+                    "line": line,
+                    "pax_count": pax_count,
+                    "ocs_note": display_note,
+                    "ocs_note_raw": note_text,
+                    "flight_id": flight_identifier,
+                }
+            )
+            formatted_rows.append(formatted)
+    finally:
+        if session is not None:
+            try:
+                session.close()
+            except AttributeError:  # pragma: no cover - defensive cleanup
+                pass
+
+    return MorningReportResult(
+        code="16.1.4",
+        title="OCS Pax Flights Report",
+        header_label="OCS Pax Flights",
+        rows=formatted_rows,
+        warnings=warnings,
+        metadata={
+            "match_count": len(formatted_rows),
+            "notification_requests": len(notification_cache),
         },
     )
 
@@ -400,6 +497,99 @@ def _is_app_line_placeholder(row: Mapping[str, Any]) -> bool:
 def _is_empty_leg(row: Mapping[str, Any]) -> bool:
     flight_type = _extract_flight_type(row)
     return flight_type is not None and flight_type.upper() == "POS"
+
+
+def _is_ocs_pax_leg(row: Mapping[str, Any]) -> bool:
+    flight_type = _extract_flight_type(row)
+    if flight_type is None or flight_type.upper() != "PAX":
+        return False
+    account_name = _extract_account_name(row)
+    if not account_name:
+        return False
+    return account_name.upper() == _OCS_ACCOUNT_NAME
+
+
+def _extract_pax_count(row: Mapping[str, Any]) -> Optional[int]:
+    for key in (
+        "paxNumber",
+        "pax_count",
+        "pax",
+        "passengerCount",
+        "passengers",
+        "passenger_count",
+    ):
+        value = row.get(key)
+        if value is None:
+            continue
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, (int, float)):
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                continue
+        text = _normalize_str(value)
+        if not text:
+            continue
+        try:
+            return int(text)
+        except ValueError:
+            match = re.search(r"\d+", text)
+            if match:
+                try:
+                    return int(match.group())
+                except ValueError:
+                    continue
+    return None
+
+
+def _extract_flight_identifier(
+    row: Mapping[str, Any], formatted: Mapping[str, Any]
+) -> Optional[str]:
+    for key in ("flightId", "flight_id", "flightID", "flightid"):
+        value = _normalize_str(row.get(key))
+        if value:
+            return value
+    fallback = _normalize_str(formatted.get("leg_id"))
+    if fallback:
+        return fallback
+    return None
+
+
+def _extract_notification_note(payload: Any) -> Optional[str]:
+    if payload is None:
+        return None
+    if isinstance(payload, Mapping):
+        for key in ("note", "notificationNote", "notification", "message"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        for key in ("items", "notifications", "data", "results"):
+            nested = payload.get(key)
+            note = _extract_notification_note(nested)
+            if note:
+                return note
+        return None
+    if isinstance(payload, IterableABC) and not isinstance(payload, (str, bytes, bytearray)):
+        for item in payload:
+            note = _extract_notification_note(item)
+            if note:
+                return note
+    if isinstance(payload, str) and payload.strip():
+        return payload.strip()
+    return None
+
+
+def _format_notification_text(note: Optional[str]) -> str:
+    if not note:
+        return "No OCS notes found"
+    normalized = note.replace("\r", "\n").strip()
+    if not normalized:
+        return "No OCS notes found"
+    parts = [segment.strip() for segment in normalized.split("\n") if segment.strip()]
+    if not parts:
+        return "No OCS notes found"
+    return " | ".join(parts)
 
 
 __all__ = [
