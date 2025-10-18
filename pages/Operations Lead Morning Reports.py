@@ -169,9 +169,10 @@ def main():
     st.markdown(
         """
         Press **Fetch Morning Reports** to run the App Booking, App Line Assignment,
-        Empty Leg, OCS Pax Flights, Owner Continuous Flight Validation, and CJ3 Owners
-        on CJ2 checks using the latest FL3XX flight data. Review any matching legs and
-        warnings directly in the report tabs below.
+        Empty Leg, OCS Pax Flights, Owner Continuous Flight Validation, CJ3 Owners on
+        CJ2, Priority Status, and Upgrade Workflow Validation checks using the latest
+        FL3XX flight data. Review any matching legs and warnings directly in the report
+        tabs below.
         """
     )
 
@@ -201,7 +202,8 @@ def main():
         "Fetch Morning Reports",
         help=(
             "Fetch FL3XX legs and execute the App Booking, App Line Assignment, Empty Leg, "
-            "OCS Pax Flights, Owner Continuous Flight Validation, and CJ3 Owners on CJ2 reports."
+            "OCS Pax Flights, Owner Continuous Flight Validation, CJ3 Owners on CJ2, Priority Status, "
+            "and Upgrade Workflow Validation reports."
         ),
         use_container_width=False,
     ):
