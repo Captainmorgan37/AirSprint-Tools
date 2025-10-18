@@ -473,6 +473,114 @@ def normalize_fl3xx_payload(payload: Any) -> Tuple[List[Dict[str, Any]], Dict[st
                     "workflow",
                 )
 
+            aircraft_category = _extract_first(
+                leg,
+                "aircraftCategory",
+                "aircraft_category",
+                "aircraftType",
+                "aircraftClass",
+            )
+            if not aircraft_category and isinstance(leg.get("aircraft"), Mapping):
+                aircraft_category = _extract_first(
+                    leg["aircraft"],
+                    "category",
+                    "type",
+                    "aircraftType",
+                    "aircraftClass",
+                )
+            if (
+                not aircraft_category
+                and isinstance(flight_tail, dict)
+                and isinstance(flight_tail.get("aircraft"), Mapping)
+            ):
+                aircraft_category = _extract_first(
+                    flight_tail["aircraft"],
+                    "category",
+                    "type",
+                    "aircraftType",
+                    "aircraftClass",
+                )
+
+            assigned_aircraft_type = _extract_first(
+                leg,
+                "assignedAircraftType",
+                "assigned_aircraft_type",
+                "requestedAircraftType",
+                "aircraftTypeAssigned",
+                "aircraftTypeName",
+            )
+            if not assigned_aircraft_type and isinstance(leg.get("aircraft"), Mapping):
+                assigned_aircraft_type = _extract_first(
+                    leg["aircraft"],
+                    "assignedType",
+                    "requestedType",
+                    "typeName",
+                )
+            if (
+                not assigned_aircraft_type
+                and isinstance(flight_tail, dict)
+                and isinstance(flight_tail.get("aircraft"), Mapping)
+            ):
+                assigned_aircraft_type = _extract_first(
+                    flight_tail["aircraft"],
+                    "assignedType",
+                    "requestedType",
+                    "typeName",
+                )
+            if not assigned_aircraft_type and isinstance(flight_tail, dict):
+                assigned_aircraft_type = _extract_first(
+                    flight_tail,
+                    "assignedAircraftType",
+                    "assigned_aircraft_type",
+                    "requestedAircraftType",
+                    "aircraftTypeAssigned",
+                    "aircraftTypeName",
+                )
+
+            owner_class = _extract_first(
+                leg,
+                "ownerClass",
+                "owner_class",
+                "ownerClassification",
+                "owner_classification",
+                "ownerType",
+                "ownerTypeName",
+                "ownerClassName",
+                "aircraftOwnerClass",
+            )
+            if not owner_class and isinstance(leg.get("owner"), Mapping):
+                owner_class = _extract_first(
+                    leg["owner"],
+                    "class",
+                    "classification",
+                    "type",
+                    "name",
+                )
+            if (
+                not owner_class
+                and isinstance(flight_tail, dict)
+                and isinstance(flight_tail.get("owner"), Mapping)
+            ):
+                owner_class = _extract_first(
+                    flight_tail["owner"],
+                    "class",
+                    "classification",
+                    "type",
+                    "name",
+                )
+            if not owner_class and isinstance(flight_tail, dict):
+                owner_class = _extract_first(
+                    flight_tail,
+                    "ownerClass",
+                    "owner_class",
+                    "ownerClassification",
+                    "owner_classification",
+                    "ownerType",
+                    "ownerTypeName",
+                    "ownerClassName",
+                    "aircraftOwnerClass",
+                )
+
             dep_airport = _extract_first(
                 leg,
                 "departureAirport",
@@ -650,6 +758,12 @@ def normalize_fl3xx_payload(payload: Any) -> Tuple[List[Dict[str, Any]], Dict[st
                 normalized_leg.setdefault("sicName", sic_name)
             if workflow_custom_name:
                 normalized_leg.setdefault("workflowCustomName", str(workflow_custom_name))
+            if aircraft_category:
+                normalized_leg.setdefault("aircraftCategory", str(aircraft_category))
+            if assigned_aircraft_type:
+                normalized_leg.setdefault("assignedAircraftType", str(assigned_aircraft_type))
+            if owner_class:
+                normalized_leg.setdefault("ownerClass", str(owner_class))
             if booking_id:
                 normalized_leg.setdefault("bookingId", str(booking_id))
             if booking_code:
