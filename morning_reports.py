@@ -507,7 +507,16 @@ def _build_cj3_owners_on_cj2_report(
             date_component = dep_dt.date().isoformat() if dep_dt else "Unknown Date"
 
             formatted_stub = {"leg_id": _extract_leg_id(row)}
-            flight_identifier = _extract_flight_identifier(row, formatted_stub) or formatted_stub["leg_id"]
+            booking_identifier = _extract_booking_reference(row)
+            if not booking_identifier and detail:
+                booking_identifier = _extract_booking_reference(detail)
+
+            flight_identifier = _extract_flight_identifier(row, formatted_stub)
+            display_identifier = (
+                booking_identifier
+                or flight_identifier
+                or formatted_stub["leg_id"]
+            )
 
             pax_display = str(pax_count) if pax_count is not None else "Unknown"
             block_display = _format_block_minutes(block_minutes)
@@ -516,7 +525,7 @@ def _build_cj3_owners_on_cj2_report(
                 [
                     date_component,
                     tail,
-                    flight_identifier or "Unknown Flight",
+                    display_identifier or "Unknown Flight",
                     account_name,
                     pax_display,
                     block_display,
@@ -530,6 +539,7 @@ def _build_cj3_owners_on_cj2_report(
                     "date": date_component,
                     "tail": tail,
                     "flight_identifier": flight_identifier,
+                    "booking_identifier": booking_identifier,
                     "account_name": account_name,
                     "pax_count": pax_count,
                     "block_time_minutes": block_minutes,

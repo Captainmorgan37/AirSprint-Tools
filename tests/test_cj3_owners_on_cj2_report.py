@@ -23,6 +23,7 @@ def _leg(
     leg_id: str,
     quote_id: str,
     flight_id: str,
+    booking_identifier: str,
     aircraft_category: str = "C25A",
 ):
     return {
@@ -32,6 +33,7 @@ def _leg(
         "leg_id": leg_id,
         "quoteId": quote_id,
         "flightId": flight_id,
+        "bookingIdentifier": booking_identifier,
         "flightType": "PAX",
         "aircraftCategory": aircraft_category,
     }
@@ -53,6 +55,7 @@ def test_flags_legs_exceeding_thresholds():
         leg_id="L1",
         quote_id="Q1",
         flight_id="F100",
+        booking_identifier="B100",
     )
 
     payload_map = {
@@ -82,7 +85,7 @@ def test_flags_legs_exceeding_thresholds():
     assert entry["block_time_minutes"] == 205
     assert (
         entry["line"]
-        == "2024-05-10-C-GCJ2-F100-Owner One-4-03:25-Threshold exceeded"
+        == "2024-05-10-C-GCJ2-B100-Owner One-4-03:25-Threshold exceeded"
     )
     assert entry["threshold_status"] == "Threshold exceeded"
     assert entry["threshold_breached"] is True
@@ -98,6 +101,7 @@ def test_skips_within_threshold_requests():
         leg_id="L2",
         quote_id="Q2",
         flight_id="F200",
+        booking_identifier="B200",
     )
 
     payload_map = {
@@ -123,7 +127,7 @@ def test_skips_within_threshold_requests():
     entry = result.rows[0]
     assert (
         entry["line"]
-        == "2024-06-01-C-GCJ2-F200-Owner Two-4-02:30-Within thresholds"
+        == "2024-06-01-C-GCJ2-B200-Owner Two-4-02:30-Within thresholds"
     )
     assert entry["threshold_status"] == "Within thresholds"
     assert entry["threshold_breached"] is False
@@ -139,6 +143,7 @@ def test_ignores_cj2_requests():
         leg_id="L3",
         quote_id="Q3",
         flight_id="F300",
+        booking_identifier="B300",
     )
 
     payload_map = {
