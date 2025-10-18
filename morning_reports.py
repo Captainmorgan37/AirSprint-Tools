@@ -15,6 +15,7 @@ from fl3xx_api import (
     compute_fetch_dates,
     fetch_flights,
     fetch_flight_notification,
+    fetch_flight_services,
     fetch_leg_details,
     fetch_postflight,
 )
@@ -141,6 +142,7 @@ def run_morning_reports(
         _build_priority_status_report(normalized_rows, config),
         _build_upgrade_workflow_validation_report(normalized_rows, config),
         _build_upgrade_flights_report(normalized_rows, config),
+        _build_fbo_disconnect_report(normalized_rows, config),
     ]
 
     metadata["report_codes"] = [report.code for report in reports]
@@ -1137,6 +1139,137 @@ def _build_upgrade_flights_report(
     )
 
 
+def _build_fbo_disconnect_report(
+    rows: Iterable[Mapping[str, Any]],
+    config: Fl3xxApiConfig,
+    *,
+    fetch_services_fn: Callable[[Fl3xxApiConfig, Any], Any] = fetch_flight_services,
+) -> MorningReportResult:
+    sorted_rows = _sort_rows(rows)
+    last_arrival_by_tail: Dict[str, Dict[str, Any]] = {}
+    services_cache: Dict[str, Optional[Any]] = {}
+    matches: List[Dict[str, Any]] = []
+    warnings: List[str] = []
+    inspected = 0
+    comparisons = 0
+
+    session: Optional[requests.Session] = None
+
+    try:
+        for row in sorted_rows:
+            tail = _extract_tail(row)
+            if not tail:
+                continue
+
+            inspected += 1
+            tail_key = tail.upper()
+            formatted = _format_report_row(row, include_tail=True)
+
+            dep_airport = _extract_airport(row, True)
+            arr_airport = _extract_airport(row, False)
+            dep_airport_key = dep_airport.upper() if dep_airport else None
+            arr_airport_key = arr_airport.upper() if arr_airport else None
+
+            leg_id = _extract_leg_id(row)
+            flight_identifier: Optional[str] = None
+            for key in ("flightId", "flight_id", "flightID", "flightid"):
+                value = _normalize_str(row.get(key))
+                if value:
+                    flight_identifier = value
+                    break
+
+            departure_handler_raw: Optional[str] = None
+            arrival_handler_raw: Optional[str] = None
+
+            if flight_identifier:
+                if session is None:
+                    session = requests.Session()
+
+                if flight_identifier not in services_cache:
+                    try:
+                        services_cache[flight_identifier] = fetch_services_fn(
+                            config, flight_identifier, session=session
+                        )
+                    except Exception as exc:  # pragma: no cover - defensive path
+                        warnings.append(
+                            f"Failed to fetch services for flight {flight_identifier}: {exc}"
+                        )
+                        services_cache[flight_identifier] = None
+
+                payload = services_cache.get(flight_identifier)
+                departure_handler_raw = _extract_handler_company(payload, True)
+                arrival_handler_raw = _extract_handler_company(payload, False)
+            else:
+                warnings.append(
+                    "Skipping services fetch due to missing flight identifier"
+                    f" for leg {leg_id or 'unknown'}"
+                )
+
+            arrival_entry = last_arrival_by_tail.get(tail_key)
+
+            if (
+                arrival_entry
+                and dep_airport_key
+                and dep_airport_key == arrival_entry.get("airport")
+            ):
+                comparisons += 1
+                previous_handler_norm = arrival_entry.get("handler_normalized")
+                departure_handler_norm = _normalize_handler_name(departure_handler_raw)
+
+                if previous_handler_norm != departure_handler_norm:
+                    previous_handler_display = arrival_entry.get("handler") or "Unknown"
+                    departure_handler_display = departure_handler_raw or "Unknown"
+                    airport_display = dep_airport_key
+
+                    issue_line = (
+                        f"{formatted['line']} - {airport_display} handler mismatch "
+                        f"(arrival: {previous_handler_display}; "
+                        f"departure: {departure_handler_display})"
+                    )
+
+                    matches.append(
+                        {
+                            **formatted,
+                            "line": issue_line,
+                            "issue_airport": airport_display,
+                            "previous_leg_id": arrival_entry.get("leg_id"),
+                            "previous_line": arrival_entry.get("formatted_line"),
+                            "arrival_handler": arrival_entry.get("handler"),
+                            "departure_handler": departure_handler_raw,
+                        }
+                    )
+
+            if arr_airport_key:
+                last_arrival_by_tail[tail_key] = {
+                    "airport": arr_airport_key,
+                    "handler": arrival_handler_raw,
+                    "handler_normalized": _normalize_handler_name(arrival_handler_raw),
+                    "leg_id": leg_id or flight_identifier,
+                    "formatted_line": formatted["line"],
+                }
+    finally:
+        if session is not None:
+            try:
+                session.close()
+            except AttributeError:  # pragma: no cover - defensive cleanup
+                pass
+
+    metadata = {
+        "match_count": len(matches),
+        "inspected_legs": inspected,
+        "comparisons_evaluated": comparisons,
+    }
+
+    return MorningReportResult(
+        code="16.1.11",
+        title="FBO Disconnect Report",
+        header_label="FBO Disconnect Checks",
+        rows=matches,
+        warnings=list(dict.fromkeys(warnings)),
+        metadata=metadata,
+    )
+
+
 def _sort_rows(rows: Iterable[Mapping[str, Any]]) -> List[Mapping[str, Any]]:
     return sorted(rows, key=_row_sort_key)
 
@@ -1384,6 +1517,14 @@ def _normalize_str(value: Any) -> Optional[str]:
     else:
         text = str(value).strip()
     return text or None
+
+
+def _normalize_handler_name(value: Any) -> Optional[str]:
+    text = _normalize_str(value)
+    if text is None:
+        return None
+    collapsed = re.sub(r"\s+", " ", text)
+    return collapsed.upper()
 
 
 def _coerce_bool(value: Any) -> bool:
@@ -1712,6 +1853,35 @@ def _extract_notification_note(payload: Any) -> Optional[str]:
     if isinstance(payload, str) and payload.strip():
         return payload.strip()
     return None
+
+
+def _extract_handler_company(payload: Any, departure: bool) -> Optional[str]:
+    target_key = "departureHandler" if departure else "arrivalHandler"
+
+    def _search(obj: Any) -> Optional[str]:
+        if isinstance(obj, Mapping):
+            if target_key in obj:
+                handler_value = obj[target_key]
+                if isinstance(handler_value, Mapping):
+                    for field in ("company", "handler", "name", "fbo", "provider"):
+                        text = _normalize_str(handler_value.get(field))
+                        if text:
+                            return text
+                text = _normalize_str(handler_value)
+                if text:
+                    return text
+            for value in obj.values():
+                result = _search(value)
+                if result:
+                    return result
+        elif isinstance(obj, IterableABC) and not isinstance(obj, (str, bytes, bytearray)):
+            for item in obj:
+                result = _search(item)
+                if result:
+                    return result
+        return None
+
+    return _search(payload)
 
 
 def _extract_aircraft_category(row: Mapping[str, Any]) -> Optional[str]:
