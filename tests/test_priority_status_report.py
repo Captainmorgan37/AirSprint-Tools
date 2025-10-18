@@ -181,6 +181,48 @@ def test_priority_report_uses_nested_arrival_timestamp():
     assert dt.datetime.fromisoformat(row["previous_arrival_time"]) == first_arrival
 
 
+def test_priority_report_prefers_estimated_block_on_timestamp():
+    first_departure = dt.datetime(2024, 4, 1, 9, 0, tzinfo=UTC)
+    estimated_arrival = first_departure + dt.timedelta(hours=2)
+    actual_arrival = estimated_arrival - dt.timedelta(minutes=25)
+    priority_departure = estimated_arrival + dt.timedelta(minutes=110)
+
+    rows = [
+        {
+            "dep_time": _iso(first_departure),
+            "blockOnEstUTC": _iso(estimated_arrival),
+            "arrivalActualUtc": _iso(actual_arrival),
+            "tail": "C-GEST",
+            "bookingIdentifier": "BK-2000",
+        },
+        {
+            "dep_time": _iso(priority_departure),
+            "tail": "C-GEST",
+            "priority_label": "Priority Owner",
+            "bookingIdentifier": "BK-2001",
+        },
+    ]
+
+    config = Fl3xxApiConfig(api_token="token")
+
+    report = mr._build_priority_status_report(
+        rows,
+        config,
+        fetch_postflight_fn=lambda *_args, **_kwargs: {},
+    )
+
+    assert report.metadata["total_priority_flights"] == 1
+    assert report.metadata["validation_required"] == 1
+    assert report.metadata["validated_without_issue"] == 1
+    assert report.metadata["issues_found"] == 0
+
+    row = report.rows[0]
+    assert row["status"].startswith("Turn time meets threshold")
+    expected_gap = (priority_departure - estimated_arrival).total_seconds() / 60.0
+    assert row["turn_gap_minutes"] == expected_gap
+    assert dt.datetime.fromisoformat(row["previous_arrival_time"]) == estimated_arrival
+
+
 def test_priority_report_flags_short_turn_for_subsequent_leg():
     first_departure = dt.datetime(2024, 4, 1, 12, 0, tzinfo=UTC)
     first_arrival = first_departure + dt.timedelta(hours=1, minutes=15)
@@ -222,6 +264,51 @@ def test_priority_report_flags_short_turn_for_subsequent_leg():
     assert row["turn_gap_minutes"] == 30.0
     assert row["has_issue"] is True
     assert row["needs_validation"] is True
+
+
+def test_priority_report_keeps_last_arrival_when_next_leg_missing_arrival():
+    first_departure = dt.datetime(2024, 4, 1, 6, 0, tzinfo=UTC)
+    first_arrival = first_departure + dt.timedelta(hours=2)
+    intermediate_departure = first_arrival + dt.timedelta(hours=1)
+    priority_departure = intermediate_departure + dt.timedelta(hours=2)
+
+    rows = [
+        {
+            "dep_time": _iso(first_departure),
+            "arr_time": _iso(first_arrival),
+            "tail": "C-GRET", 
+            "bookingIdentifier": "BK-0100",
+        },
+        {
+            "dep_time": _iso(intermediate_departure),
+            "tail": "C-GRET",
+            "bookingIdentifier": "BK-0101",
+        },
+        {
+            "dep_time": _iso(priority_departure),
+            "tail": "C-GRET",
+            "priority_label": "Priority Owner",
+            "bookingIdentifier": "BK-0102",
+        },
+    ]
+
+    config = Fl3xxApiConfig(api_token="token")
+
+    report = mr._build_priority_status_report(
+        rows,
+        config,
+        fetch_postflight_fn=lambda *_args, **_kwargs: {},
+    )
+
+    assert report.metadata["total_priority_flights"] == 1
+    assert report.metadata["validation_required"] == 1
+    assert report.metadata["issues_found"] == 0
+
+    row = report.rows[0]
+    assert row["status"].startswith("Turn time meets threshold")
+    expected_gap = (priority_departure - first_arrival).total_seconds() / 60.0
+    assert row["turn_gap_minutes"] == expected_gap
+    assert dt.datetime.fromisoformat(row["previous_arrival_time"]) == first_arrival
 
 
 def test_priority_report_skips_turn_validation_for_shared_booking_priority_legs():

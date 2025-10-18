@@ -640,7 +640,7 @@ def _build_priority_status_report(
             )
 
         arrival_dt = _extract_arrival_dt(row)
-        if tail_key:
+        if tail_key and arrival_dt is not None:
             last_arrival_by_tail[tail_key] = {"arrival_dt": arrival_dt, "row": row}
 
     if not priority_candidates:
@@ -921,21 +921,71 @@ def _format_report_row(
 
 
 def _extract_departure_dt(row: Mapping[str, Any]) -> Optional[datetime]:
-    dep_time_raw = _normalize_str(row.get("dep_time"))
-    if not dep_time_raw:
-        return None
-    dep_dt = safe_parse_dt(dep_time_raw)
-    if dep_dt.tzinfo is None:
-        dep_dt = dep_dt.replace(tzinfo=timezone.utc)
-    else:
-        dep_dt = dep_dt.astimezone(timezone.utc)
-    return dep_dt
+    """Best-effort extraction of a departure timestamp from a leg payload."""
+
+    candidate_paths = [
+        ("dep_time",),
+        ("blockOffEstUTC",),
+        ("blockOffEstUtc",),
+        ("blockOffEstLocal",),
+        ("blockOffEstimatedUTC",),
+        ("blockOffEstimatedUtc",),
+        ("blockOffEstimateUTC",),
+        ("blockOffEstimateUtc",),
+        ("blockOffUtc",),
+        ("blockOffTimeUtc",),
+        ("blockOffTime",),
+        ("offBlockEstUTC",),
+        ("offBlockEstUtc",),
+        ("offBlockEstLocal",),
+        ("offBlockTimeUtc",),
+        ("departure", "estimatedUtc"),
+        ("departure", "estimatedTime"),
+        ("departure", "scheduledUtc"),
+        ("departure", "scheduledTime"),
+        ("departure", "actualUtc"),
+        ("departure", "actualTime"),
+        ("times", "departure", "estimatedUtc"),
+        ("times", "departure", "estimatedTime"),
+        ("times", "departure", "scheduledUtc"),
+        ("times", "departure", "scheduledTime"),
+        ("times", "departure", "actualUtc"),
+        ("times", "departure", "actualTime"),
+        ("times", "offBlock", "estimatedUtc"),
+        ("times", "offBlock", "estimatedTime"),
+        ("times", "offBlock", "scheduledUtc"),
+        ("times", "offBlock", "scheduledTime"),
+        ("times", "offBlock", "actualUtc"),
+        ("times", "offBlock", "actualTime"),
+        ("times", "offBlock.estimated",),
+        ("times", "offBlock.estimatedUtc",),
+        ("times", "offBlock.estimatedTime",),
+        ("times", "offBlock.scheduled",),
+        ("times", "offBlock.scheduledUtc",),
+        ("times", "offBlock.scheduledTime",),
+    ]
+
+    for path in candidate_paths:
+        value = _extract_nested_value(row, path)
+        if value is None:
+            continue
+        dep_dt = _coerce_datetime_value(value)
+        if dep_dt is not None:
+            return dep_dt
+    return None
 
 
 def _extract_arrival_dt(row: Mapping[str, Any]) -> Optional[datetime]:
     """Best-effort extraction of an arrival timestamp from a leg payload."""
 
     candidate_paths = [
+        ("blockOnEstUTC",),
+        ("blockOnEstUtc",),
+        ("blockOnEstLocal",),
+        ("blockOnEstimatedUTC",),
+        ("blockOnEstimatedUtc",),
+        ("blockOnEstimateUTC",),
+        ("blockOnEstimateUtc",),
         ("arr_time",),
         ("arrivalTimeUtc",),
         ("arrival_time_utc",),
