@@ -23,6 +23,11 @@ _EXPECTED_REPORTS: Sequence[Tuple[str, str, str]] = (
         "Upgrade Workflow Validation Report",
         "Legacy Upgrade Workflow Validation",
     ),
+    (
+        "16.1.10",
+        "Upgraded Flights Report (Pending)",
+        "Upgrade Workflow Flights",
+    ),
 )
 
 
@@ -230,9 +235,9 @@ def main():
         """
         Press **Fetch Morning Reports** to run the App Booking, App Line Assignment,
         Empty Leg, OCS Pax Flights, Owner Continuous Flight Validation, CJ3 Owners on
-        CJ2, Priority Status, and Upgrade Workflow Validation checks using the latest
-        FL3XX flight data. Review any matching legs and warnings directly in the report
-        tabs below.
+        CJ2, Priority Status, Upgrade Workflow Validation, and Upgraded Flights checks
+        using the latest FL3XX flight data. Review any matching legs and warnings
+        directly in the report tabs below.
         """
     )
 
@@ -263,7 +268,7 @@ def main():
         help=(
             "Fetch FL3XX legs and execute the App Booking, App Line Assignment, Empty Leg, "
             "OCS Pax Flights, Owner Continuous Flight Validation, CJ3 Owners on CJ2, Priority Status, "
-            "and Upgrade Workflow Validation reports."
+            "Upgrade Workflow Validation, and Upgraded Flights reports."
         ),
         use_container_width=False,
     ):

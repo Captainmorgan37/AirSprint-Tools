@@ -140,6 +140,7 @@ def run_morning_reports(
         _build_cj3_owners_on_cj2_report(normalized_rows, config),
         _build_priority_status_report(normalized_rows, config),
         _build_upgrade_workflow_validation_report(normalized_rows, config),
+        _build_upgrade_flights_report(normalized_rows, config),
     ]
 
     return MorningReportRun(
@@ -993,6 +994,139 @@ def _build_upgrade_workflow_validation_report(
     )
 
 
+def _build_upgrade_flights_report(
+    rows: Iterable[Mapping[str, Any]],
+    config: Fl3xxApiConfig,
+    *,
+    fetch_leg_details_fn: Callable[[Fl3xxApiConfig, Any], Any] = fetch_leg_details,
+) -> MorningReportResult:
+    matches: List[Dict[str, Any]] = []
+    warnings: List[str] = []
+    detail_cache: Dict[str, Optional[Any]] = {}
+    session: Optional[requests.Session] = None
+
+    inspected = 0
+    details_fetched = 0
+
+    try:
+        for row in _sort_rows(rows):
+            workflow = _extract_workflow(row)
+            if not workflow or "upgrade" not in workflow.lower():
+                continue
+
+            inspected += 1
+
+            formatted = _format_report_row(row, include_tail=True)
+            dep_dt = _extract_departure_dt(row)
+            date_component = (
+                dep_dt.date().isoformat()
+                if dep_dt
+                else formatted.get("date")
+            )
+
+            tail = formatted.get("tail")
+            booking_reference = (
+                formatted.get("booking_reference")
+                or _extract_booking_reference(row)
+            )
+            quote_id = _extract_quote_identifier(row)
+            assigned_type = _extract_assigned_aircraft_type(row)
+            requested_type = _extract_requested_aircraft_type(row)
+            booking_note: Optional[str] = None
+
+            detail: Optional[Mapping[str, Any]] = None
+
+            if quote_id:
+                if session is None:
+                    session = requests.Session()
+
+                if quote_id not in detail_cache:
+                    try:
+                        payload = fetch_leg_details_fn(
+                            config, quote_id, session=session
+                        )
+                    except Exception as exc:  # pragma: no cover - defensive path
+                        warnings.append(
+                            f"Failed to fetch leg details for quote {quote_id}: {exc}"
+                        )
+                        detail_cache[quote_id] = None
+                    else:
+                        detail_cache[quote_id] = payload
+                        if payload is not None:
+                            details_fetched += 1
+
+                detail = _select_leg_detail(detail_cache.get(quote_id))
+
+                if detail:
+                    if booking_reference is None:
+                        booking_reference = _extract_booking_reference(detail)
+                    if assigned_type is None:
+                        assigned_type = _extract_assigned_aircraft_type(detail)
+                    if requested_type is None:
+                        requested_type = _extract_requested_aircraft_type(detail)
+
+                booking_note = _extract_booking_note(detail)
+            else:
+                warnings.append(
+                    f"Missing quote identifier for upgrade workflow leg "
+                    f"{_extract_leg_id(row) or 'unknown'}"
+                )
+
+            identifier = booking_reference or quote_id or formatted.get("leg_id")
+
+            transition_label: Optional[str] = None
+            if requested_type or assigned_type:
+                transition_label = (
+                    f"{requested_type or 'Unknown Request'} -> "
+                    f"{assigned_type or 'Unknown Assignment'}"
+                )
+
+            line_parts = [
+                date_component or "Unknown Date",
+                tail or "Unknown Tail",
+                identifier or "Unknown Booking",
+                workflow,
+            ]
+            if transition_label:
+                line_parts.append(transition_label)
+
+            matches.append(
+                {
+                    "line": "-".join(line_parts),
+                    "date": date_component,
+                    "tail": tail,
+                    "booking_reference": booking_reference,
+                    "quote_id": quote_id,
+                    "workflow": workflow,
+                    "assigned_aircraft_type": assigned_type,
+                    "requested_aircraft_type": requested_type,
+                    "booking_note": booking_note,
+                    "leg_id": formatted.get("leg_id"),
+                }
+            )
+    finally:
+        if session is not None:
+            try:
+                session.close()
+            except AttributeError:  # pragma: no cover - defensive cleanup
+                pass
+
+    metadata = {
+        "match_count": len(matches),
+        "inspected_legs": inspected,
+        "details_fetched": details_fetched,
+    }
+
+    return MorningReportResult(
+        code="16.1.10",
+        title="Upgraded Flights Report (Pending)",
+        header_label="Upgrade Workflow Flights",
+        rows=matches,
+        warnings=list(dict.fromkeys(warnings)),
+        metadata=metadata,
+    )
+
+
 def _sort_rows(rows: Iterable[Mapping[str, Any]]) -> List[Mapping[str, Any]]:
     return sorted(rows, key=_row_sort_key)
 
@@ -1255,15 +1389,38 @@ def _coerce_bool(value: Any) -> bool:
 
 
 def _extract_workflow(row: Mapping[str, Any]) -> Optional[str]:
+    """Return a human-readable workflow label from a leg payload."""
+
+    def _coerce(value: Any) -> Optional[str]:
+        if isinstance(value, Mapping):
+            for nested_key in (
+                "customName",
+                "customLabel",
+                "label",
+                "name",
+                "title",
+            ):
+                nested_value = _normalize_str(value.get(nested_key))
+                if nested_value:
+                    return nested_value
+            return None
+        return _normalize_str(value)
+
     for key in (
         "workflowCustomName",
         "workflow_custom_name",
+        "workflowCustomLabel",
+        "workflow_custom_label",
+        "workflowLabel",
+        "workflow_label",
         "workflowName",
+        "workflow_name",
         "workflow",
     ):
-        value = _normalize_str(row.get(key))
-        if value:
-            return value
+        value = row.get(key)
+        label = _coerce(value)
+        if label:
+            return label
     return None
 
 
@@ -1585,6 +1742,41 @@ def _extract_assigned_aircraft_type(row: Mapping[str, Any]) -> Optional[str]:
     return None
 
 
+def _extract_requested_aircraft_type(row: Mapping[str, Any]) -> Optional[str]:
+    for key in (
+        "requestedAircraftType",
+        "requested_aircraft_type",
+        "requestedType",
+        "requestedAircraft",
+        "requestedEquipment",
+    ):
+        value = _normalize_str(row.get(key))
+        if value:
+            return value
+    aircraft = row.get("aircraft")
+    if isinstance(aircraft, Mapping):
+        for nested_key in (
+            "requestedType",
+            "requestedAircraftType",
+            "requestedEquipment",
+            "requested",
+        ):
+            value = _normalize_str(aircraft.get(nested_key))
+            if value:
+                return value
+    request = row.get("request")
+    if isinstance(request, Mapping):
+        for nested_key in (
+            "aircraftType",
+            "aircraft",
+            "requestedType",
+        ):
+            value = _normalize_str(request.get(nested_key))
+            if value:
+                return value
+    return None
+
+
 def _extract_owner_class(row: Mapping[str, Any]) -> Optional[str]:
     for key in (
         "ownerClass",
@@ -1630,6 +1822,22 @@ def _extract_planning_note(detail: Optional[Mapping[str, Any]]) -> Optional[str]
     if not detail:
         return None
     for key in ("planningNotes", "planningNote", "planning_notes", "notes"):
+        value = detail.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _extract_booking_note(detail: Optional[Mapping[str, Any]]) -> Optional[str]:
+    if not detail:
+        return None
+    for key in (
+        "bookingNote",
+        "bookingNotes",
+        "booking_note",
+        "bookingnote",
+        "booking",
+    ):
         value = detail.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
