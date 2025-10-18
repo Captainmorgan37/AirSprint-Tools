@@ -720,7 +720,12 @@ def _build_priority_status_report(
             status = "Missing tail number; cannot validate check-in window"
             issue = True
         elif skip_turn_validation:
-            status = "Continuation of same booking; turn validation not required"
+            # Continuation legs that share the same booking with a prior priority
+            # segment should be omitted from the duty-start validation report.
+            # These legs do not require turn validation and can cause noise if
+            # they appear in the output, so we simply exclude them while still
+            # counting them toward the overall priority totals.
+            continue
         elif not is_first_departure:
             if previous_arrival_dt is None:
                 status = "Missing previous arrival time; cannot validate turn interval"

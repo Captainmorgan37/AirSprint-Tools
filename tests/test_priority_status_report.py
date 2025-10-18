@@ -362,13 +362,9 @@ def test_priority_report_skips_turn_validation_for_shared_booking_priority_legs(
     assert report.metadata["validated_without_issue"] == 1
     assert report.metadata["issues_found"] == 0
 
-    assert len(report.rows) == 2
-    first_row, second_row = report.rows
+    assert len(report.rows) == 1
+    (first_row,) = report.rows
 
     assert first_row["status"].startswith("Meets threshold")
     assert first_row["needs_validation"] is True
     assert first_row["has_issue"] is False
-
-    assert second_row["status"] == "Continuation of same booking; turn validation not required"
-    assert second_row["needs_validation"] is False
-    assert second_row["has_issue"] is False
