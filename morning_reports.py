@@ -475,24 +475,30 @@ def _build_cj3_owners_on_cj2_report(
             block_minutes = _extract_block_minutes(detail, row)
 
             violation = False
+            violation_reasons: List[str] = []
             if pax_count is None:
                 violation = True
                 warnings.append(
                     f"Missing passenger count for quote {quote_id}; flagging for review"
                 )
+                violation_reasons.append("Missing passenger count")
             elif pax_count > 5:
                 violation = True
+                violation_reasons.append("Passenger count above limit")
 
             if block_minutes is None:
                 violation = True
                 warnings.append(
                     f"Missing block time for quote {quote_id}; flagging for review"
                 )
+                violation_reasons.append("Missing block time")
             elif block_minutes > 180:
                 violation = True
+                violation_reasons.append("Block time above limit")
 
-            if not violation:
-                continue
+            threshold_status = (
+                "Threshold exceeded" if violation else "Within thresholds"
+            )
 
             dep_dt = _extract_departure_dt(row)
             if dep_dt is None:
@@ -514,6 +520,7 @@ def _build_cj3_owners_on_cj2_report(
                     account_name,
                     pax_display,
                     block_display,
+                    threshold_status,
                 ]
             )
 
@@ -529,6 +536,9 @@ def _build_cj3_owners_on_cj2_report(
                     "block_time_display": block_display,
                     "planning_note": note_text,
                     "quote_id": quote_id,
+                    "threshold_status": threshold_status,
+                    "threshold_breached": violation,
+                    "threshold_reasons": violation_reasons,
                 }
             )
     finally:
