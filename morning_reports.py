@@ -86,6 +86,8 @@ _APP_LINE_PREFIXES = (
 _EXPECTED_EMPTY_LEG_ACCOUNT = "AIRSPRINT INC."
 _OCS_ACCOUNT_NAME = "AIRSPRINT INC."
 
+_LEGACY_AIRCRAFT_CATEGORIES = {"E550", "E545"}
+
 _PRIORITY_CHECKIN_THRESHOLD_MINUTES = 90
 
 
@@ -137,6 +139,7 @@ def run_morning_reports(
         _build_owner_continuous_flight_validation_report(normalized_rows),
         _build_cj3_owners_on_cj2_report(normalized_rows, config),
         _build_priority_status_report(normalized_rows, config),
+        _build_upgrade_workflow_validation_report(normalized_rows, config),
     ]
 
     return MorningReportRun(
@@ -871,6 +874,125 @@ def _build_priority_status_report(
     )
 
 
+def _build_upgrade_workflow_validation_report(
+    rows: Iterable[Mapping[str, Any]],
+    config: Fl3xxApiConfig,
+    *,
+    fetch_leg_details_fn: Callable[[Fl3xxApiConfig, Any], Any] = fetch_leg_details,
+) -> MorningReportResult:
+    matches: List[Dict[str, Any]] = []
+    warnings: List[str] = []
+    detail_cache: Dict[str, Optional[Any]] = {}
+    session: Optional[requests.Session] = None
+
+    inspected = 0
+    flagged = 0
+
+    try:
+        for row in _sort_rows(rows):
+            aircraft_category = _extract_aircraft_category(row)
+            if not aircraft_category or aircraft_category.upper() not in _LEGACY_AIRCRAFT_CATEGORIES:
+                continue
+
+            booking_reference = _extract_booking_reference(row)
+            if not booking_reference:
+                warnings.append(
+                    "Skipping upgrade workflow validation due to missing booking reference "
+                    f"for leg {_extract_leg_id(row) or 'unknown'}"
+                )
+                continue
+
+            inspected += 1
+
+            if session is None:
+                session = requests.Session()
+
+            if booking_reference not in detail_cache:
+                try:
+                    payload = fetch_leg_details_fn(
+                        config, booking_reference, session=session
+                    )
+                except Exception as exc:  # pragma: no cover - defensive path
+                    warnings.append(
+                        f"Failed to fetch leg details for booking {booking_reference}: {exc}"
+                    )
+                    detail_cache[booking_reference] = None
+                else:
+                    detail_cache[booking_reference] = payload
+
+            detail = _select_leg_detail(detail_cache.get(booking_reference))
+            planning_note = _extract_planning_note(detail)
+            request_label = _planning_note_cj_request_label(planning_note)
+
+            if not request_label:
+                continue
+
+            flagged += 1
+
+            formatted = _format_report_row(row, include_tail=True)
+            dep_dt = _extract_departure_dt(row) or _extract_detail_departure_dt(detail)
+            date_component = dep_dt.date().isoformat() if dep_dt else formatted.get("date")
+
+            tail = formatted.get("tail")
+            booking_id = formatted.get("booking_reference") or booking_reference
+            account_name = formatted.get("account_name")
+            workflow = formatted.get("workflow") or _extract_workflow(row)
+            assigned_type = _extract_assigned_aircraft_type(row) or _extract_assigned_aircraft_type(detail or {})
+            owner_class = _extract_owner_class(row) or _extract_owner_class(detail or {})
+
+            workflow_matches_upgrade = (
+                workflow is not None and "UPGRADE" in workflow.upper()
+            )
+
+            line_parts = [
+                date_component or "Unknown Date",
+                tail or "Unknown Tail",
+                booking_id or "Unknown Booking",
+                account_name or "Unknown Account",
+                request_label,
+            ]
+
+            matches.append(
+                {
+                    "line": "-".join(line_parts),
+                    "date": date_component,
+                    "tail": tail,
+                    "booking_reference": booking_id,
+                    "account_name": account_name,
+                    "workflow": workflow,
+                    "workflow_matches_upgrade": workflow_matches_upgrade,
+                    "aircraft_category": aircraft_category,
+                    "assigned_aircraft_type": assigned_type,
+                    "owner_class": owner_class,
+                    "planning_note": planning_note,
+                    "request_label": request_label,
+                    "leg_id": _extract_leg_id(row),
+                    "flight_identifier": _extract_flight_identifier(row, formatted),
+                }
+            )
+    finally:
+        if session is not None:
+            try:
+                session.close()
+            except AttributeError:  # pragma: no cover - defensive cleanup
+                pass
+
+    metadata = {
+        "match_count": len(matches),
+        "inspected_legs": inspected,
+        "flagged_requests": flagged,
+    }
+
+    return MorningReportResult(
+        code="16.1.9",
+        title="Upgrade Workflow Validation Report",
+        header_label="Legacy Upgrade Workflow Validation",
+        rows=matches,
+        warnings=list(dict.fromkeys(warnings)),
+        metadata=metadata,
+    )
+
+
 def _sort_rows(rows: Iterable[Mapping[str, Any]]) -> List[Mapping[str, Any]]:
     return sorted(rows, key=_row_sort_key)
 
@@ -1443,6 +1565,49 @@ def _extract_aircraft_category(row: Mapping[str, Any]) -> Optional[str]:
     return None
 
 
+def _extract_assigned_aircraft_type(row: Mapping[str, Any]) -> Optional[str]:
+    for key in (
+        "assignedAircraftType",
+        "assigned_aircraft_type",
+        "requestedAircraftType",
+        "aircraftTypeAssigned",
+        "aircraftTypeName",
+    ):
+        value = _normalize_str(row.get(key))
+        if value:
+            return value
+    aircraft = row.get("aircraft")
+    if isinstance(aircraft, Mapping):
+        for nested_key in ("assignedType", "requestedType", "typeName", "name"):
+            value = _normalize_str(aircraft.get(nested_key))
+            if value:
+                return value
+    return None
+
+
+def _extract_owner_class(row: Mapping[str, Any]) -> Optional[str]:
+    for key in (
+        "ownerClass",
+        "owner_class",
+        "ownerClassification",
+        "owner_classification",
+        "ownerType",
+        "ownerTypeName",
+        "ownerClassName",
+        "aircraftOwnerClass",
+    ):
+        value = _normalize_str(row.get(key))
+        if value:
+            return value
+    owner = row.get("owner")
+    if isinstance(owner, Mapping):
+        for nested_key in ("class", "classification", "type", "name"):
+            value = _normalize_str(owner.get(nested_key))
+            if value:
+                return value
+    return None
+
+
 def _extract_quote_identifier(row: Mapping[str, Any]) -> Optional[str]:
     for key in ("quoteId", "quote_id", "quoteID", "quote", "quoteNumber"):
         value = _normalize_str(row.get(key))
@@ -1485,6 +1650,11 @@ _NON_CJ2_REQUEST_KEYWORDS = (
     "LEGACY 450",
 )
 
+_CJ_REQUEST_PATTERNS = (
+    re.compile(r"\bREQUESTING\b[^A-Z0-9]*(CJ(?:[-\s]?\d)?\+?)", re.IGNORECASE),
+    re.compile(r"\bREQUESTING\b[^A-Z0-9]*(CITATION(?:\s+[A-Z0-9]+)?)", re.IGNORECASE),
+)
+
 
 def _planning_note_requests_non_cj2(note: Optional[str]) -> bool:
     if not note:
@@ -1500,6 +1670,28 @@ def _planning_note_requests_non_cj2(note: Optional[str]) -> bool:
         if f"REQUESTING {keyword}" in text:
             return True
     return False
+
+
+def _planning_note_cj_request_label(note: Optional[str]) -> Optional[str]:
+    if not note:
+        return None
+
+    for pattern in _CJ_REQUEST_PATTERNS:
+        match = pattern.search(note)
+        if not match:
+            continue
+        group = match.group(1)
+        if not isinstance(group, str):
+            continue
+        cleaned = re.sub(r"[^A-Z0-9]+", "", group.upper())
+        if cleaned.startswith("CJ"):
+            if len(cleaned) > 2:
+                return cleaned
+            return "CJ"
+        if cleaned.startswith("CITATION"):
+            suffix = cleaned[len("CITATION") :]
+            return "Citation" + (f" {suffix}" if suffix else "")
+    return None
 
 
 def _extract_detail_pax(
