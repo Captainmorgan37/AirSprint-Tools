@@ -1,9 +1,59 @@
 import streamlit as st
 from datetime import date, datetime, timedelta, timezone
-from typing import Mapping, Optional, Tuple
+from typing import Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from fl3xx_api import compute_fetch_dates
 from morning_reports import MorningReportResult, MorningReportRun, run_morning_reports
+
+
+_EXPECTED_REPORTS: Sequence[Tuple[str, str, str]] = (
+    ("16.1.1", "App Booking Workflow Report", "App Booking Workflow"),
+    ("16.1.2", "App Line Assignment Report", "App Line Assignment"),
+    ("16.1.3", "Empty Leg Report", "Empty Legs"),
+    ("16.1.4", "OCS Pax Flights Report", "OCS Pax Flights"),
+    (
+        "16.1.5",
+        "Owner Continuous Flight Validation Report",
+        "Owner Continuous Flight Validation",
+    ),
+    ("16.1.6", "CJ3 Owners on CJ2 Report", "CJ3 Owners on CJ2"),
+    ("16.1.7", "Priority Status Report", "Priority Duty-Start Validation"),
+    (
+        "16.1.9",
+        "Upgrade Workflow Validation Report",
+        "Legacy Upgrade Workflow Validation",
+    ),
+)
+
+
+def _build_expected_reports(
+    reports: Iterable[MorningReportResult],
+) -> Tuple[List[MorningReportResult], List[str]]:
+    report_map = {report.code: report for report in reports}
+    ordered_reports: List[MorningReportResult] = []
+    missing_codes: List[str] = []
+
+    for code, title, header_label in _EXPECTED_REPORTS:
+        existing = report_map.pop(code, None)
+        if existing is not None:
+            ordered_reports.append(existing)
+            continue
+
+        missing_codes.append(code)
+        ordered_reports.append(
+            MorningReportResult(
+                code=code,
+                title=title,
+                header_label=header_label,
+                rows=[],
+                metadata={"match_count": 0, "placeholder": True},
+            )
+        )
+
+    if report_map:
+        ordered_reports.extend(sorted(report_map.values(), key=lambda r: r.code))
+
+    return ordered_reports, missing_codes
 
 
 st.set_page_config(page_title="Operations Lead Morning Reports", layout="wide")
@@ -135,13 +185,23 @@ def _render_results():
         + f" · Dates: {selected_range}"
     )
 
+    display_reports, missing_reports = _build_expected_reports(run.reports)
+
     st.caption(
         "Reports included: "
-        + ", ".join(f"{report.code} – {report.title}" for report in run.reports)
+        + ", ".join(f"{report.code} – {report.title}" for report in display_reports)
     )
 
     if warning_message:
         st.warning(warning_message)
+
+    if missing_reports:
+        formatted_missing = ", ".join(sorted(missing_reports))
+        st.warning(
+            "Some expected reports were not returned by the installed morning report "
+            "runner. Displaying placeholder tabs instead. Missing report codes: "
+            f"{formatted_missing}."
+        )
 
     metadata_payload = {
         "from_date": run.metadata.get("from_date"),
@@ -156,8 +216,8 @@ def _render_results():
     with st.expander("Fetch metadata", expanded=False):
         st.json(metadata_payload)
 
-    report_tabs = st.tabs([report.title for report in run.reports])
-    for tab, report in zip(report_tabs, run.reports):
+    report_tabs = st.tabs([report.title for report in display_reports])
+    for tab, report in zip(report_tabs, display_reports):
         with tab:
             st.markdown(f"### {report.title}")
             _render_report_output(report)
@@ -169,9 +229,10 @@ def main():
     st.markdown(
         """
         Press **Fetch Morning Reports** to run the App Booking, App Line Assignment,
-        Empty Leg, OCS Pax Flights, Owner Continuous Flight Validation, and CJ3 Owners
-        on CJ2 checks using the latest FL3XX flight data. Review any matching legs and
-        warnings directly in the report tabs below.
+        Empty Leg, OCS Pax Flights, Owner Continuous Flight Validation, CJ3 Owners on
+        CJ2, Priority Status, and Upgrade Workflow Validation checks using the latest
+        FL3XX flight data. Review any matching legs and warnings directly in the report
+        tabs below.
         """
     )
 
@@ -201,7 +262,8 @@ def main():
         "Fetch Morning Reports",
         help=(
             "Fetch FL3XX legs and execute the App Booking, App Line Assignment, Empty Leg, "
-            "OCS Pax Flights, Owner Continuous Flight Validation, and CJ3 Owners on CJ2 reports."
+            "OCS Pax Flights, Owner Continuous Flight Validation, CJ3 Owners on CJ2, Priority Status, "
+            "and Upgrade Workflow Validation reports."
         ),
         use_container_width=False,
     ):
