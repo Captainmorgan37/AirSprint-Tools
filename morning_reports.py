@@ -1389,15 +1389,38 @@ def _coerce_bool(value: Any) -> bool:
 
 
 def _extract_workflow(row: Mapping[str, Any]) -> Optional[str]:
+    """Return a human-readable workflow label from a leg payload."""
+
+    def _coerce(value: Any) -> Optional[str]:
+        if isinstance(value, Mapping):
+            for nested_key in (
+                "customName",
+                "customLabel",
+                "label",
+                "name",
+                "title",
+            ):
+                nested_value = _normalize_str(value.get(nested_key))
+                if nested_value:
+                    return nested_value
+            return None
+        return _normalize_str(value)
+
     for key in (
         "workflowCustomName",
         "workflow_custom_name",
+        "workflowCustomLabel",
+        "workflow_custom_label",
+        "workflowLabel",
+        "workflow_label",
         "workflowName",
+        "workflow_name",
         "workflow",
     ):
-        value = _normalize_str(row.get(key))
-        if value:
-            return value
+        value = row.get(key)
+        label = _coerce(value)
+        if label:
+            return label
     return None
 
 

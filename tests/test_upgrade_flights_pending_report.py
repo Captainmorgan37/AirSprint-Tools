@@ -42,6 +42,46 @@ def _stub_fetch(payload_map):
     return _fetch
 
 
+def test_handles_nested_workflow_structures():
+    dep = dt.datetime(2024, 8, 15, 8, 30)
+    row = _leg(
+        dep=dep,
+        workflow="",  # replaced below with nested workflow payload
+        quote_id="Q42",
+        booking="BOOK-42",
+    )
+    row.pop("workflowCustomName")
+    row["workflow"] = {
+        "label": "Owner Upgrade Pending",
+        "status": "open",
+    }
+
+    payload_map = {
+        "Q42": {
+            "bookingNote": "Needs review of billable hours",
+            "requestedAircraftType": "Praetor 500",
+            "assignedAircraftType": "Legacy 450",
+            "departureDateUTC": iso(dep),
+        }
+    }
+
+    result = _build_upgrade_flights_report(
+        [row],
+        Fl3xxApiConfig(),
+        fetch_leg_details_fn=_stub_fetch(payload_map),
+    )
+
+    assert result.metadata == {
+        "match_count": 1,
+        "inspected_legs": 1,
+        "details_fetched": 1,
+    }
+    assert len(result.rows) == 1
+    entry = result.rows[0]
+    assert entry["workflow"] == "Owner Upgrade Pending"
+    assert entry["booking_note"] == "Needs review of billable hours"
+
+
 def test_includes_booking_note_and_requested_type():
     dep = dt.datetime(2024, 8, 10, 12, 0)
     row = _leg(
