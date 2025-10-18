@@ -23,6 +23,7 @@ def _leg(
     workflow: str,
     quote_id: Optional[str],
     booking: Optional[str],
+    account: Optional[str] = "Acme Corp",
 ):
     payload: Dict[str, Any] = {
         "dep_time": iso(dep),
@@ -36,6 +37,8 @@ def _leg(
         payload["quoteId"] = quote_id
     if booking is not None:
         payload["bookingReference"] = booking
+    if account is not None:
+        payload["accountName"] = account
     return payload
 
 
@@ -86,6 +89,8 @@ def test_handles_nested_workflow_structures():
     assert entry["workflow"] == "Owner Upgrade Pending"
     assert entry["booking_note"] == "Needs review of billable hours"
     assert entry["planning_note"] == "Confirm owner notes align with upgrade workflow"
+    assert entry["account_name"] == "Acme Corp"
+    assert "-Acme Corp-" in entry["line"]
 
 
 def test_includes_booking_note_and_requested_type():
@@ -126,6 +131,8 @@ def test_includes_booking_note_and_requested_type():
     assert entry["assigned_aircraft_type"] == "Legacy 450"
     assert entry["booking_note"] == "Upgrade approved for billable hours"
     assert entry["planning_note"] == "OL confirmed upgrade is viable"
+    assert entry["account_name"] == "Acme Corp"
+    assert entry["line"].startswith("2024-08-10-C-GLXY-BOOK-1-Acme Corp-")
 
 
 def test_missing_quote_id_includes_warning_and_row():
@@ -154,7 +161,38 @@ def test_missing_quote_id_includes_warning_and_row():
     assert entry["quote_id"] is None
     assert entry["booking_note"] is None
     assert entry["planning_note"] is None
+    assert entry["account_name"] == "Acme Corp"
     assert any("missing quote" in warning.lower() for warning in result.warnings)
+
+
+def test_falls_back_to_detail_account_when_missing_on_leg():
+    dep = dt.datetime(2024, 11, 1, 15, 0)
+    row = _leg(
+        dep=dep,
+        workflow="Owner Upgrade Request",
+        quote_id="Q-ACCOUNT",
+        booking="BOOK-ACCOUNT",
+        account=None,
+    )
+
+    payload_map = {
+        "Q-ACCOUNT": {
+            "accountName": "Detail Account",
+            "assignedAircraftType": "Legacy 450",
+            "requestedAircraftType": "Praetor 500",
+        }
+    }
+
+    result = _build_upgrade_flights_report(
+        [row],
+        Fl3xxApiConfig(),
+        fetch_leg_details_fn=_stub_fetch(payload_map),
+    )
+
+    assert len(result.rows) == 1
+    entry = result.rows[0]
+    assert entry["account_name"] == "Detail Account"
+    assert "-Detail Account-" in entry["line"]
 
 
 def test_non_upgrade_workflows_are_ignored():

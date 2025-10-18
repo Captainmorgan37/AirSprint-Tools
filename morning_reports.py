@@ -1036,6 +1036,7 @@ def _build_upgrade_flights_report(
             requested_type = _extract_requested_aircraft_type(row)
             booking_note: Optional[str] = None
             planning_note: Optional[str] = None
+            account_name: Optional[str] = formatted.get("account_name")
 
             detail: Optional[Mapping[str, Any]] = None
 
@@ -1067,6 +1068,8 @@ def _build_upgrade_flights_report(
                         assigned_type = _extract_assigned_aircraft_type(detail)
                     if requested_type is None:
                         requested_type = _extract_requested_aircraft_type(detail)
+                    if account_name is None:
+                        account_name = _extract_account_name(detail)
                     planning_note = _extract_planning_note(detail)
 
                 booking_note = _extract_booking_note(detail)
@@ -1089,6 +1092,7 @@ def _build_upgrade_flights_report(
                 date_component or "Unknown Date",
                 tail or "Unknown Tail",
                 identifier or "Unknown Booking",
+                account_name or "Unknown Account",
                 workflow,
             ]
             if transition_label:
@@ -1106,6 +1110,7 @@ def _build_upgrade_flights_report(
                     "requested_aircraft_type": requested_type,
                     "booking_note": booking_note,
                     "planning_note": planning_note or _extract_planning_note(row),
+                    "account_name": account_name,
                     "leg_id": formatted.get("leg_id"),
                 }
             )
