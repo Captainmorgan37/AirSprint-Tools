@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable as IterableABC
 from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import re
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
@@ -130,6 +130,7 @@ def run_morning_reports(
         _build_app_line_assignment_report(normalized_rows),
         _build_empty_leg_report(normalized_rows),
         _build_ocs_pax_report(normalized_rows, config),
+        _build_owner_continuous_flight_validation_report(normalized_rows),
     ]
 
     return MorningReportRun(
@@ -294,6 +295,104 @@ def _build_ocs_pax_report(
     )
 
 
+def _build_owner_continuous_flight_validation_report(
+    rows: Iterable[Mapping[str, Any]]
+) -> MorningReportResult:
+    relevant_rows: Dict[str, List[Dict[str, Any]]] = {}
+
+    for row in rows:
+        flight_type = _extract_flight_type(row)
+        if flight_type is None or flight_type.upper() != "PAX":
+            continue
+
+        if _is_ocs_pax_leg(row):
+            continue
+
+        if _is_app_line_placeholder(row):
+            continue
+
+        account_name = _extract_account_name(row)
+        if not account_name:
+            continue
+
+        tail = _extract_tail(row)
+        if not tail:
+            continue
+
+        dep_dt = _extract_departure_dt(row)
+        arr_dt = _extract_arrival_dt(row)
+        if dep_dt is None or arr_dt is None:
+            continue
+
+        record = {
+            "account_name": account_name,
+            "tail": tail,
+            "tail_upper": tail.upper(),
+            "departure_time": dep_dt,
+            "arrival_time": arr_dt,
+            "leg_id": _extract_leg_id(row),
+            "departure_airport": _extract_airport(row, True),
+            "arrival_airport": _extract_airport(row, False),
+        }
+
+        relevant_rows.setdefault(account_name, []).append(record)
+
+    discrepancies: List[Dict[str, Any]] = []
+
+    for account, legs in sorted(relevant_rows.items(), key=lambda item: item[0].upper()):
+        ordered = sorted(legs, key=lambda entry: entry["departure_time"])
+
+        for current, nxt in zip(ordered, ordered[1:]):
+            if current["tail_upper"] == nxt["tail_upper"]:
+                continue
+
+            arr_dt = current["arrival_time"]
+            next_dep_dt = nxt["departure_time"]
+
+            if arr_dt is None or next_dep_dt is None:
+                continue
+
+            gap = next_dep_dt - arr_dt
+            if gap.total_seconds() < 0:
+                continue
+
+            if gap < timedelta(hours=3):
+                gap_minutes = int(gap.total_seconds() // 60)
+                line = (
+                    f"{account} | {current['tail']} → {nxt['tail']} | "
+                    f"Arr {arr_dt.isoformat()} → Dep {next_dep_dt.isoformat()} | "
+                    f"Gap {gap_minutes} min"
+                )
+                discrepancies.append(
+                    {
+                        "line": line,
+                        "account_name": account,
+                        "previous_tail": current["tail"],
+                        "next_tail": nxt["tail"],
+                        "previous_leg_id": current.get("leg_id"),
+                        "next_leg_id": nxt.get("leg_id"),
+                        "previous_arrival_time": arr_dt.isoformat(),
+                        "next_departure_time": next_dep_dt.isoformat(),
+                        "gap_minutes": gap_minutes,
+                        "previous_arrival_airport": current.get("arrival_airport"),
+                        "next_departure_airport": nxt.get("departure_airport"),
+                    }
+                )
+
+    discrepancies.sort(key=lambda row: (row["account_name"].upper(), row["next_departure_time"]))
+
+    return MorningReportResult(
+        code="16.1.5",
+        title="Owner Continuous Flight Validation",
+        header_label="Owner Continuous Flight Validation",
+        rows=discrepancies,
+        metadata={
+            "match_count": len(discrepancies),
+            "flagged_accounts": sorted({row["account_name"] for row in discrepancies}),
+        },
+    )
+
+
 def _sort_rows(rows: Iterable[Mapping[str, Any]]) -> List[Mapping[str, Any]]:
     return sorted(rows, key=_row_sort_key)
 
@@ -346,6 +445,56 @@ def _format_report_row(
         "arrival_airport": _extract_airport(row, False),
     }
     return formatted
+
+
+def _extract_departure_dt(row: Mapping[str, Any]) -> Optional[datetime]:
+    dep_time_raw = _normalize_str(row.get("dep_time"))
+    if not dep_time_raw:
+        return None
+    dep_dt = safe_parse_dt(dep_time_raw)
+    if dep_dt.tzinfo is None:
+        dep_dt = dep_dt.replace(tzinfo=timezone.utc)
+    else:
+        dep_dt = dep_dt.astimezone(timezone.utc)
+    return dep_dt
+
+
+def _extract_arrival_dt(row: Mapping[str, Any]) -> Optional[datetime]:
+    for key in (
+        "arr_time",
+        "arrivalTimeUtc",
+        "arrival_time_utc",
+        "arrivalTime",
+        "arrival_time",
+        "blockOnTimeUtc",
+        "onBlockTimeUtc",
+        "arrivalOnBlockUtc",
+        "blockOnUtc",
+        "arrivalUtc",
+        "arrOnBlock",
+        "arrivalOnBlock",
+        "blockOnTime",
+        "onBlockTime",
+    ):
+        value = row.get(key)
+        if not value:
+            continue
+        if isinstance(value, datetime):
+            arr_dt = value
+        else:
+            text = _normalize_str(value)
+            if not text:
+                continue
+            try:
+                arr_dt = safe_parse_dt(text)
+            except Exception:
+                continue
+        if arr_dt.tzinfo is None:
+            arr_dt = arr_dt.replace(tzinfo=timezone.utc)
+        else:
+            arr_dt = arr_dt.astimezone(timezone.utc)
+        return arr_dt
+    return None
 
 
 def _normalize_str(value: Any) -> Optional[str]:
