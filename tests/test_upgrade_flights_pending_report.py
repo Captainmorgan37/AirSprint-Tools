@@ -6,7 +6,11 @@ import datetime as dt
 from typing import Any, Dict, Optional
 
 from fl3xx_api import Fl3xxApiConfig
-from morning_reports import MorningReportResult, _build_upgrade_flights_report
+from morning_reports import (
+    MorningReportResult,
+    _build_upgrade_flights_report,
+    run_morning_reports,
+)
 
 
 def iso(ts: dt.datetime) -> str:
@@ -169,3 +173,56 @@ def test_non_upgrade_workflows_are_ignored():
         "details_fetched": 0,
     }
     assert result.rows == []
+
+
+def test_full_run_includes_upgraded_flights_report(monkeypatch):
+    dep = dt.datetime(2024, 9, 10, 12, 0)
+    workflow_row = _leg(
+        dep=dep,
+        workflow="Owner Upgrade Request",
+        quote_id="Q42",
+        booking="BOOK-42",
+    )
+
+    flights_payload = [workflow_row]
+    fetch_metadata = {"fetched_at": iso(dep)}
+
+    monkeypatch.setattr(
+        "morning_reports.build_fl3xx_api_config",
+        lambda settings: Fl3xxApiConfig(api_token="token"),
+    )
+    monkeypatch.setattr(
+        "morning_reports.fetch_flights",
+        lambda config, from_date, to_date, now: (flights_payload, fetch_metadata),
+    )
+    monkeypatch.setattr(
+        "morning_reports.normalize_fl3xx_payload",
+        lambda payload: (flights_payload, {"normalised": 1}),
+    )
+    monkeypatch.setattr(
+        "morning_reports.filter_out_subcharter_rows", lambda rows: (rows, 0)
+    )
+    monkeypatch.setattr("morning_reports.fetch_postflight", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(
+        "morning_reports.fetch_leg_details",
+        _stub_fetch(
+            {
+                "Q42": {
+                    "bookingNote": "Upgrade approved",
+                    "requestedAircraftType": "Praetor 500",
+                    "assignedAircraftType": "Legacy 450",
+                }
+            }
+        ),
+    )
+
+    run = run_morning_reports(
+        {"api_token": "token"},
+        now=dep,
+        from_date=dep.date(),
+        to_date=dep.date(),
+    )
+
+    report_codes = [report.code for report in run.reports]
+    assert "16.1.10" in report_codes
+    assert run.metadata.get("report_codes") == report_codes

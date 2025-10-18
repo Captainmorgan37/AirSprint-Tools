@@ -143,6 +143,8 @@ def run_morning_reports(
         _build_upgrade_flights_report(normalized_rows, config),
     ]
 
+    metadata["report_codes"] = [report.code for report in reports]
+
     return MorningReportRun(
         fetched_at=fetched_at,
         from_date=from_date,
@@ -1119,7 +1121,7 @@ def _build_upgrade_flights_report(
 
     return MorningReportResult(
         code="16.1.10",
-        title="Upgraded Flights Report (Pending)",
+        title="Upgraded Flights Report",
         header_label="Upgrade Workflow Flights",
         rows=matches,
         warnings=list(dict.fromkeys(warnings)),
