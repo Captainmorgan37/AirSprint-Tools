@@ -5,6 +5,7 @@ from fl3xx_api import Fl3xxApiConfig
 from morning_reports import (
     MorningReportResult,
     _build_fbo_disconnect_report,
+    _extract_handler_company,
 )
 
 
@@ -158,4 +159,26 @@ def test_missing_services_information_is_reported():
     assert result.warnings
     warning_text = "".join(result.warnings).lower()
     assert "missing flight identifier" in warning_text
+
+
+def test_handler_company_is_extracted_from_nested_airport_service():
+    payload = {
+        "arrivalHandler": {
+            "airportService": {
+                "company": "Banyan Air Service",
+                "phone": "+1-954-491-3170",
+            }
+        },
+        "departureHandler": {
+            "airportService": {
+                "company": "Signature Montreal",
+            }
+        },
+    }
+
+    arrival = _extract_handler_company(payload, departure=False)
+    departure = _extract_handler_company(payload, departure=True)
+
+    assert arrival == "Banyan Air Service"
+    assert departure == "Signature Montreal"
 
