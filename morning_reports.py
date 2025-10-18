@@ -1035,6 +1035,7 @@ def _build_upgrade_flights_report(
             assigned_type = _extract_assigned_aircraft_type(row)
             requested_type = _extract_requested_aircraft_type(row)
             booking_note: Optional[str] = None
+            planning_note: Optional[str] = None
 
             detail: Optional[Mapping[str, Any]] = None
 
@@ -1066,6 +1067,7 @@ def _build_upgrade_flights_report(
                         assigned_type = _extract_assigned_aircraft_type(detail)
                     if requested_type is None:
                         requested_type = _extract_requested_aircraft_type(detail)
+                    planning_note = _extract_planning_note(detail)
 
                 booking_note = _extract_booking_note(detail)
             else:
@@ -1103,6 +1105,7 @@ def _build_upgrade_flights_report(
                     "assigned_aircraft_type": assigned_type,
                     "requested_aircraft_type": requested_type,
                     "booking_note": booking_note,
+                    "planning_note": planning_note or _extract_planning_note(row),
                     "leg_id": formatted.get("leg_id"),
                 }
             )

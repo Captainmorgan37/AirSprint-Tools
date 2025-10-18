@@ -66,6 +66,7 @@ def test_handles_nested_workflow_structures():
             "requestedAircraftType": "Praetor 500",
             "assignedAircraftType": "Legacy 450",
             "departureDateUTC": iso(dep),
+            "planningNotes": "Confirm owner notes align with upgrade workflow",
         }
     }
 
@@ -84,6 +85,7 @@ def test_handles_nested_workflow_structures():
     entry = result.rows[0]
     assert entry["workflow"] == "Owner Upgrade Pending"
     assert entry["booking_note"] == "Needs review of billable hours"
+    assert entry["planning_note"] == "Confirm owner notes align with upgrade workflow"
 
 
 def test_includes_booking_note_and_requested_type():
@@ -101,6 +103,7 @@ def test_includes_booking_note_and_requested_type():
             "requestedAircraftType": "CJ3",
             "assignedAircraftType": "Legacy 450",
             "departureDateUTC": iso(dep),
+            "planningNotes": "OL confirmed upgrade is viable",
         }
     }
 
@@ -122,6 +125,7 @@ def test_includes_booking_note_and_requested_type():
     assert entry["requested_aircraft_type"] == "CJ3"
     assert entry["assigned_aircraft_type"] == "Legacy 450"
     assert entry["booking_note"] == "Upgrade approved for billable hours"
+    assert entry["planning_note"] == "OL confirmed upgrade is viable"
 
 
 def test_missing_quote_id_includes_warning_and_row():
@@ -149,6 +153,7 @@ def test_missing_quote_id_includes_warning_and_row():
     assert entry["booking_reference"] == "BOOK-2"
     assert entry["quote_id"] is None
     assert entry["booking_note"] is None
+    assert entry["planning_note"] is None
     assert any("missing quote" in warning.lower() for warning in result.warnings)
 
 
