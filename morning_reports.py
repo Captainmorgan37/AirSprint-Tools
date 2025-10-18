@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import inspect
+import re
 from collections.abc import Iterable as IterableABC
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
-import re
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple
 
 import requests
@@ -588,7 +589,7 @@ def _build_priority_status_report(
     rows: Iterable[Mapping[str, Any]],
     config: Fl3xxApiConfig,
     *,
-    fetch_postflight_fn: Callable[[Fl3xxApiConfig, Any], Any] = fetch_postflight,
+    fetch_postflight_fn: Callable[..., Any] = fetch_postflight,
     threshold_minutes: int = _PRIORITY_CHECKIN_THRESHOLD_MINUTES,
 ) -> MorningReportResult:
     sorted_rows = _sort_rows(rows)
@@ -678,184 +679,218 @@ def _build_priority_status_report(
     validation_required = 0
     validated_without_issue = 0
 
-    for candidate in priority_candidates:
-        formatted = candidate["formatted"]
-        tail = candidate["tail"]
-        dep_dt: Optional[datetime] = candidate["dep_dt"]
-        dep_date = candidate["dep_date"]
-        is_first_departure = candidate["is_first_departure"]
-        previous_arrival_dt: Optional[datetime] = candidate.get("previous_arrival_dt")
-        previous_arrival_row = candidate.get("previous_arrival_row")
-        label = candidate["priority_label"] or formatted.get("workflow")
-        if not label or "priority" not in label.lower():
-            label = "Priority"
+    shared_session: Optional[requests.Session] = None
+    postflight_cache: Dict[Any, Any] = {}
+    postflight_request_counts = {"unique": 0, "cached": 0}
 
-        status = ""
-        issue = False
-        minutes_before: Optional[float] = None
-        turn_minutes: Optional[float] = None
-        earliest_checkin: Optional[datetime] = None
-        latest_checkin: Optional[datetime] = None
-        checkin_count: Optional[int] = None
-        checkin_times_display: Optional[str] = None
-
-        current_booking = formatted.get("booking_reference")
-        previous_booking = (
-            _extract_booking_reference(previous_arrival_row)
-            if previous_arrival_row
-            else None
-        )
-        previous_was_priority = False
-        if previous_arrival_row is not None:
-            previous_was_priority, _ = _row_priority_info(previous_arrival_row)
-
-        skip_turn_validation = (
-            not is_first_departure
-            and previous_was_priority
-            and bool(current_booking)
-            and current_booking == previous_booking
+    try:
+        signature = inspect.signature(fetch_postflight_fn)
+    except (TypeError, ValueError):
+        accepts_session_kw = True
+    else:
+        accepts_session_kw = any(
+            param.kind is inspect.Parameter.VAR_KEYWORD or name == "session"
+            for name, param in signature.parameters.items()
         )
 
-        flight_identifier = _extract_flight_identifier(candidate["row"], formatted)
-        needs_validation = bool(tail and dep_dt) and not skip_turn_validation
-        if needs_validation:
-            validation_required += 1
+    try:
+        for candidate in priority_candidates:
+            formatted = candidate["formatted"]
+            tail = candidate["tail"]
+            dep_dt: Optional[datetime] = candidate["dep_dt"]
+            dep_date = candidate["dep_date"]
+            is_first_departure = candidate["is_first_departure"]
+            previous_arrival_dt: Optional[datetime] = candidate.get("previous_arrival_dt")
+            previous_arrival_row = candidate.get("previous_arrival_row")
+            label = candidate["priority_label"] or formatted.get("workflow")
+            if not label or "priority" not in label.lower():
+                label = "Priority"
 
-        if dep_dt is None:
-            status = "Missing departure time; cannot validate check-in window"
-            issue = True
-        elif not tail:
-            status = "Missing tail number; cannot validate check-in window"
-            issue = True
-        elif skip_turn_validation:
-            # Continuation legs that share the same booking with a prior priority
-            # segment should be omitted from the duty-start validation report.
-            # These legs do not require turn validation and can cause noise if
-            # they appear in the output, so we simply exclude them while still
-            # counting them toward the overall priority totals.
-            continue
-        elif not is_first_departure:
-            if previous_arrival_dt is None:
-                status = "Missing previous arrival time; cannot validate turn interval"
+            status = ""
+            issue = False
+            minutes_before: Optional[float] = None
+            turn_minutes: Optional[float] = None
+            earliest_checkin: Optional[datetime] = None
+            latest_checkin: Optional[datetime] = None
+            checkin_count: Optional[int] = None
+            checkin_times_display: Optional[str] = None
+
+            current_booking = formatted.get("booking_reference")
+            previous_booking = (
+                _extract_booking_reference(previous_arrival_row)
+                if previous_arrival_row
+                else None
+            )
+            previous_was_priority = False
+            if previous_arrival_row is not None:
+                previous_was_priority, _ = _row_priority_info(previous_arrival_row)
+
+            skip_turn_validation = (
+                not is_first_departure
+                and previous_was_priority
+                and bool(current_booking)
+                and current_booking == previous_booking
+            )
+
+            flight_identifier = _extract_flight_identifier(candidate["row"], formatted)
+            needs_validation = bool(tail and dep_dt) and not skip_turn_validation
+            if needs_validation:
+                validation_required += 1
+
+            if dep_dt is None:
+                status = "Missing departure time; cannot validate check-in window"
                 issue = True
-            else:
-                turn_minutes = (dep_dt - previous_arrival_dt).total_seconds() / 60.0
-                if turn_minutes < 0:
-                    status = (
-                        "Inconsistent timing data; previous arrival occurs after departure"
-                    )
-                    issue = True
-                elif turn_minutes >= threshold_minutes:
-                    status = (
-                        f"Turn time meets threshold ({turn_minutes:.1f} min gap before departure)"
-                    )
-                    if needs_validation:
-                        validated_without_issue += 1
-                else:
-                    status = (
-                        f"Turn time only {turn_minutes:.1f} min before departure "
-                        f"(requires {threshold_minutes} min)"
-                    )
-                    issue = True
-        elif not credentials_available:
-            status = "Missing FL3XX credentials; cannot retrieve check-in timestamps"
-            issue = True
-        elif not flight_identifier:
-            status = "Missing flight identifier; cannot retrieve check-in timestamps"
-            issue = True
-        else:
-            try:
-                payload = fetch_postflight_fn(config, flight_identifier)
-            except Exception as exc:  # pragma: no cover - defensive path
-                status = f"Unable to retrieve check-in data ({exc})"
-                warning_messages.append(
-                    f"{tail or 'Unknown tail'} on {dep_date or 'unknown date'}: {exc}"
-                )
+            elif not tail:
+                status = "Missing tail number; cannot validate check-in window"
                 issue = True
-            else:
-                values = _extract_checkin_values(payload)
-                target_tz = dep_dt.tzinfo or timezone.utc
-                checkins = [
-                    dt
-                    for value in values
-                    if (dt := _checkin_to_datetime(value, target_tz)) is not None
-                ]
-                if not checkins:
-                    status = "No crew check-in timestamps available"
+            elif skip_turn_validation:
+                # Continuation legs that share the same booking with a prior priority
+                # segment should be omitted from the duty-start validation report.
+                # These legs do not require turn validation and can cause noise if
+                # they appear in the output, so we simply exclude them while still
+                # counting them toward the overall priority totals.
+                continue
+            elif not is_first_departure:
+                if previous_arrival_dt is None:
+                    status = "Missing previous arrival time; cannot validate turn interval"
                     issue = True
                 else:
-                    checkins.sort()
-                    earliest_checkin = checkins[0]
-                    latest_checkin = checkins[-1]
-                    minutes_before = (
-                        dep_dt - earliest_checkin
-                    ).total_seconds() / 60.0
-                    checkin_count = len(checkins)
-                    checkin_times_display = ", ".join(
-                        dt.strftime("%H:%M") for dt in checkins
-                    )
-                    if minutes_before >= threshold_minutes:
+                    turn_minutes = (dep_dt - previous_arrival_dt).total_seconds() / 60.0
+                    if turn_minutes < 0:
                         status = (
-                            f"Meets threshold ({minutes_before:.1f} min before departure)"
+                            "Inconsistent timing data; previous arrival occurs after departure"
+                        )
+                        issue = True
+                    elif turn_minutes >= threshold_minutes:
+                        status = (
+                            f"Turn time meets threshold ({turn_minutes:.1f} min gap before departure)"
                         )
                         if needs_validation:
                             validated_without_issue += 1
                     else:
                         status = (
-                            f"Check-in only {minutes_before:.1f} min before departure "
+                            f"Turn time only {turn_minutes:.1f} min before departure "
                             f"(requires {threshold_minutes} min)"
                         )
                         issue = True
+            elif not credentials_available:
+                status = "Missing FL3XX credentials; cannot retrieve check-in timestamps"
+                issue = True
+            elif not flight_identifier:
+                status = "Missing flight identifier; cannot retrieve check-in timestamps"
+                issue = True
+            else:
+                try:
+                    if flight_identifier in postflight_cache:
+                        payload = postflight_cache[flight_identifier]
+                        postflight_request_counts["cached"] += 1
+                    else:
+                        call_kwargs = {}
+                        if accepts_session_kw:
+                            if shared_session is None:
+                                shared_session = requests.Session()
+                            call_kwargs["session"] = shared_session
+                        payload = fetch_postflight_fn(
+                            config, flight_identifier, **call_kwargs
+                        )
+                        postflight_cache[flight_identifier] = payload
+                        postflight_request_counts["unique"] += 1
+                except Exception as exc:  # pragma: no cover - defensive path
+                    status = f"Unable to retrieve check-in data ({exc})"
+                    warning_messages.append(
+                        f"{tail or 'Unknown tail'} on {dep_date or 'unknown date'}: {exc}"
+                    )
+                    issue = True
+                else:
+                    values = _extract_checkin_values(payload)
+                    target_tz = dep_dt.tzinfo or timezone.utc
+                    checkins = [
+                        dt
+                        for value in values
+                        if (dt := _checkin_to_datetime(value, target_tz)) is not None
+                    ]
+                    if not checkins:
+                        status = "No crew check-in timestamps available"
+                        issue = True
+                    else:
+                        checkins.sort()
+                        earliest_checkin = checkins[0]
+                        latest_checkin = checkins[-1]
+                        minutes_before = (
+                            dep_dt - earliest_checkin
+                        ).total_seconds() / 60.0
+                        checkin_count = len(checkins)
+                        checkin_times_display = ", ".join(
+                            dt.strftime("%H:%M") for dt in checkins
+                        )
+                        if minutes_before >= threshold_minutes:
+                            status = (
+                                f"Meets threshold ({minutes_before:.1f} min before departure)"
+                            )
+                            if needs_validation:
+                                validated_without_issue += 1
+                        else:
+                            status = (
+                                f"Check-in only {minutes_before:.1f} min before departure "
+                                f"(requires {threshold_minutes} min)"
+                            )
+                            issue = True
 
-        if issue:
-            issues_found += 1
+            if issue:
+                issues_found += 1
 
-        line = f"{formatted['line']} | {label} | {status}"
-        previous_leg_id = (
-            _extract_leg_id(previous_arrival_row) if previous_arrival_row else None
-        )
-        previous_leg_departure_dt = (
-            _extract_departure_dt(previous_arrival_row)
-            if previous_arrival_row
-            else None
-        )
+            line = f"{formatted['line']} | {label} | {status}"
+            previous_leg_id = (
+                _extract_leg_id(previous_arrival_row) if previous_arrival_row else None
+            )
+            previous_leg_departure_dt = (
+                _extract_departure_dt(previous_arrival_row)
+                if previous_arrival_row
+                else None
+            )
 
-        row_data = {
-            "line": line,
-            "date": formatted.get("date"),
-            "tail": tail,
-            "priority_label": label,
-            "status": status,
-            "is_first_departure": is_first_departure,
-            "needs_validation": needs_validation,
-            "has_issue": issue,
-            "minutes_before_departure": round(minutes_before, 1)
-            if minutes_before is not None
-            else None,
-            "turn_gap_minutes": round(turn_minutes, 1)
-            if turn_minutes is not None
-            else None,
-            "checkin_count": checkin_count,
-            "checkin_times": checkin_times_display,
-            "earliest_checkin": earliest_checkin.isoformat()
-            if earliest_checkin
-            else None,
-            "latest_checkin": latest_checkin.isoformat() if latest_checkin else None,
-            "previous_arrival_time": previous_arrival_dt.isoformat()
-            if previous_arrival_dt
-            else None,
-            "departure_time": dep_dt.isoformat() if dep_dt else None,
-            "booking_reference": formatted.get("booking_reference"),
-            "account_name": formatted.get("account_name"),
-            "flight_identifier": flight_identifier,
-            "leg_id": formatted.get("leg_id"),
-            "previous_leg_id": previous_leg_id,
-            "previous_leg_departure_time": previous_leg_departure_dt.isoformat()
-            if previous_leg_departure_dt
-            else None,
-            "_sort_key": dep_dt or datetime.max.replace(tzinfo=timezone.utc),
-        }
-        matches.append(row_data)
+            row_data = {
+                "line": line,
+                "date": formatted.get("date"),
+                "tail": tail,
+                "priority_label": label,
+                "status": status,
+                "is_first_departure": is_first_departure,
+                "needs_validation": needs_validation,
+                "has_issue": issue,
+                "minutes_before_departure": round(minutes_before, 1)
+                if minutes_before is not None
+                else None,
+                "turn_gap_minutes": round(turn_minutes, 1)
+                if turn_minutes is not None
+                else None,
+                "checkin_count": checkin_count,
+                "checkin_times": checkin_times_display,
+                "earliest_checkin": earliest_checkin.isoformat()
+                if earliest_checkin
+                else None,
+                "latest_checkin": latest_checkin.isoformat() if latest_checkin else None,
+                "previous_arrival_time": previous_arrival_dt.isoformat()
+                if previous_arrival_dt
+                else None,
+                "departure_time": dep_dt.isoformat() if dep_dt else None,
+                "booking_reference": formatted.get("booking_reference"),
+                "account_name": formatted.get("account_name"),
+                "flight_identifier": flight_identifier,
+                "leg_id": formatted.get("leg_id"),
+                "previous_leg_id": previous_leg_id,
+                "previous_leg_departure_time": previous_leg_departure_dt.isoformat()
+                if previous_leg_departure_dt
+                else None,
+                "_sort_key": dep_dt or datetime.max.replace(tzinfo=timezone.utc),
+            }
+            matches.append(row_data)
+    finally:
+        if shared_session is not None:
+            try:
+                shared_session.close()
+            except AttributeError:  # pragma: no cover - defensive cleanup
+                pass
 
     matches.sort(key=lambda row: row["_sort_key"])
     for row in matches:
@@ -868,6 +903,9 @@ def _build_priority_status_report(
         "issues_found": issues_found,
         "threshold_minutes": threshold_minutes,
     }
+
+    if any(postflight_request_counts.values()):
+        metadata["postflight_requests"] = postflight_request_counts
 
     return MorningReportResult(
         code="16.1.7",
