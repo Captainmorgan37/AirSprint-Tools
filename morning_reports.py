@@ -6,7 +6,7 @@ from collections.abc import Iterable as IterableABC
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 import re
-from typing import Any, Dict, Iterable, List, Mapping, Optional
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional
 
 import requests
 
@@ -15,6 +15,7 @@ from fl3xx_api import (
     compute_fetch_dates,
     fetch_flights,
     fetch_flight_notification,
+    fetch_leg_details,
 )
 from flight_leg_utils import (
     build_fl3xx_api_config,
@@ -131,6 +132,7 @@ def run_morning_reports(
         _build_empty_leg_report(normalized_rows),
         _build_ocs_pax_report(normalized_rows, config),
         _build_owner_continuous_flight_validation_report(normalized_rows),
+        _build_cj3_owners_on_cj2_report(normalized_rows, config),
     ]
 
     return MorningReportRun(
@@ -389,6 +391,163 @@ def _build_owner_continuous_flight_validation_report(
         metadata={
             "match_count": len(discrepancies),
             "flagged_accounts": sorted({row["account_name"] for row in discrepancies}),
+        },
+    )
+
+
+def _build_cj3_owners_on_cj2_report(
+    rows: Iterable[Mapping[str, Any]],
+    config: Fl3xxApiConfig,
+    *,
+    fetch_leg_details_fn: Callable[[Fl3xxApiConfig, Any], Any] = fetch_leg_details,
+) -> MorningReportResult:
+    matches: List[Dict[str, Any]] = []
+    warnings: List[str] = []
+    detail_cache: Dict[str, Optional[Any]] = {}
+    session: Optional[requests.Session] = None
+
+    total_flagged = 0
+    inspected = 0
+
+    try:
+        for row in _sort_rows(rows):
+            flight_type = _extract_flight_type(row)
+            if flight_type is None or flight_type.upper() != "PAX":
+                continue
+
+            if _is_ocs_pax_leg(row):
+                continue
+
+            tail = _extract_tail(row)
+            if not tail:
+                continue
+            upper_tail = tail.upper()
+            if upper_tail.startswith("ADD") or upper_tail.startswith("REMOVE"):
+                continue
+            if _is_app_line_placeholder(row):
+                continue
+
+            aircraft_category = _extract_aircraft_category(row)
+            if not aircraft_category or aircraft_category.upper() != "C25A":
+                continue
+
+            quote_id = _extract_quote_identifier(row)
+            if not quote_id:
+                warnings.append(
+                    "Skipping CJ3-on-CJ2 check for leg "
+                    f"{_extract_leg_id(row) or 'unknown'} due to missing quote identifier"
+                )
+                continue
+
+            account_name = _extract_account_name(row)
+            if not account_name:
+                continue
+
+            inspected += 1
+
+            if session is None:
+                session = requests.Session()
+
+            if quote_id not in detail_cache:
+                try:
+                    payload = fetch_leg_details_fn(config, quote_id, session=session)
+                except Exception as exc:  # pragma: no cover - defensive path
+                    warnings.append(
+                        f"Failed to fetch leg details for quote {quote_id}: {exc}"
+                    )
+                    detail_cache[quote_id] = None
+                else:
+                    detail_cache[quote_id] = payload
+
+            payload = detail_cache.get(quote_id)
+            detail = _select_leg_detail(payload)
+            note_text = _extract_planning_note(detail)
+
+            if not note_text:
+                continue
+
+            if not _planning_note_requests_non_cj2(note_text):
+                continue
+
+            total_flagged += 1
+
+            pax_count = _extract_detail_pax(detail, row)
+            block_minutes = _extract_block_minutes(detail, row)
+
+            violation = False
+            if pax_count is None:
+                violation = True
+                warnings.append(
+                    f"Missing passenger count for quote {quote_id}; flagging for review"
+                )
+            elif pax_count > 5:
+                violation = True
+
+            if block_minutes is None:
+                violation = True
+                warnings.append(
+                    f"Missing block time for quote {quote_id}; flagging for review"
+                )
+            elif block_minutes > 180:
+                violation = True
+
+            if not violation:
+                continue
+
+            dep_dt = _extract_departure_dt(row)
+            if dep_dt is None:
+                dep_dt = _extract_detail_departure_dt(detail)
+
+            date_component = dep_dt.date().isoformat() if dep_dt else "Unknown Date"
+
+            formatted_stub = {"leg_id": _extract_leg_id(row)}
+            flight_identifier = _extract_flight_identifier(row, formatted_stub) or formatted_stub["leg_id"]
+
+            pax_display = str(pax_count) if pax_count is not None else "Unknown"
+            block_display = _format_block_minutes(block_minutes)
+
+            line = "-".join(
+                [
+                    date_component,
+                    tail,
+                    flight_identifier or "Unknown Flight",
+                    account_name,
+                    pax_display,
+                    block_display,
+                ]
+            )
+
+            matches.append(
+                {
+                    "line": line,
+                    "date": date_component,
+                    "tail": tail,
+                    "flight_identifier": flight_identifier,
+                    "account_name": account_name,
+                    "pax_count": pax_count,
+                    "block_time_minutes": block_minutes,
+                    "block_time_display": block_display,
+                    "planning_note": note_text,
+                    "quote_id": quote_id,
+                }
+            )
+    finally:
+        if session is not None:
+            try:
+                session.close()
+            except AttributeError:  # pragma: no cover - defensive cleanup
+                pass
+
+    return MorningReportResult(
+        code="16.1.6",
+        title="CJ3 Owners on CJ2 Report",
+        header_label="CJ3 Owners on CJ2",
+        rows=matches,
+        warnings=warnings,
+        metadata={
+            "match_count": len(matches),
+            "flagged_candidates": total_flagged,
+            "inspected_legs": inspected,
         },
     )
 
@@ -727,6 +886,190 @@ def _extract_notification_note(payload: Any) -> Optional[str]:
     if isinstance(payload, str) and payload.strip():
         return payload.strip()
     return None
+
+
+def _extract_aircraft_category(row: Mapping[str, Any]) -> Optional[str]:
+    for key in (
+        "aircraftCategory",
+        "aircraft_category",
+        "aircraftType",
+        "aircraftClass",
+    ):
+        value = _normalize_str(row.get(key))
+        if value:
+            return value
+    aircraft = row.get("aircraft")
+    if isinstance(aircraft, Mapping):
+        nested = _normalize_str(aircraft.get("category") or aircraft.get("type"))
+        if nested:
+            return nested
+    return None
+
+
+def _extract_quote_identifier(row: Mapping[str, Any]) -> Optional[str]:
+    for key in ("quoteId", "quote_id", "quoteID", "quote", "quoteNumber"):
+        value = _normalize_str(row.get(key))
+        if value:
+            return value
+    return None
+
+
+def _select_leg_detail(payload: Any) -> Optional[Mapping[str, Any]]:
+    if isinstance(payload, Mapping):
+        return payload
+    if isinstance(payload, IterableABC) and not isinstance(payload, (str, bytes, bytearray)):
+        for item in payload:
+            if isinstance(item, Mapping):
+                return item
+    return None
+
+
+def _extract_planning_note(detail: Optional[Mapping[str, Any]]) -> Optional[str]:
+    if not detail:
+        return None
+    for key in ("planningNotes", "planningNote", "planning_notes", "notes"):
+        value = detail.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+_NON_CJ2_REQUEST_KEYWORDS = (
+    "CJ3",
+    "CJ3+",
+    "CJ3 PLUS",
+    "CJ3+/CJ2+",
+    "CJ3+/CJ3",
+    "EMB",
+    "E550",
+    "EMB-550",
+    "EMB550",
+    "L450",
+    "LEGACY 450",
+)
+
+
+def _planning_note_requests_non_cj2(note: Optional[str]) -> bool:
+    if not note:
+        return False
+    text = note.upper()
+    if "REQUESTING" not in text:
+        return False
+    if "REQUESTING CJ2" in text and not any(
+        keyword in text for keyword in _NON_CJ2_REQUEST_KEYWORDS
+    ):
+        return False
+    for keyword in _NON_CJ2_REQUEST_KEYWORDS:
+        if f"REQUESTING {keyword}" in text:
+            return True
+    return False
+
+
+def _extract_detail_pax(
+    detail: Optional[Mapping[str, Any]],
+    fallback_row: Mapping[str, Any],
+) -> Optional[int]:
+    for container in (detail, fallback_row):
+        if not isinstance(container, Mapping):
+            continue
+        for key in ("pax", "paxNumber", "passengers", "pax_count", "passengerCount"):
+            value = container.get(key)
+            if value is None or isinstance(value, bool):
+                continue
+            if isinstance(value, (int, float)):
+                try:
+                    return int(value)
+                except (TypeError, ValueError):
+                    continue
+            text = _normalize_str(value)
+            if not text:
+                continue
+            try:
+                return int(text)
+            except ValueError:
+                match = re.search(r"\d+", text)
+                if match:
+                    try:
+                        return int(match.group())
+                    except ValueError:
+                        continue
+    return None
+
+
+def _extract_block_minutes(
+    detail: Optional[Mapping[str, Any]],
+    fallback_row: Mapping[str, Any],
+) -> Optional[int]:
+    for container in (detail, fallback_row):
+        if not isinstance(container, Mapping):
+            continue
+        for key in (
+            "blockTime",
+            "block_time",
+            "blockMinutes",
+            "block_minutes",
+            "blockTimeMinutes",
+        ):
+            value = container.get(key)
+            if value is None:
+                continue
+            if isinstance(value, (int, float)):
+                try:
+                    minutes = int(value)
+                except (TypeError, ValueError):
+                    continue
+                if minutes >= 0:
+                    return minutes
+            text = _normalize_str(value)
+            if not text:
+                continue
+            minutes: Optional[int] = None
+            try:
+                minutes = int(float(text))
+            except ValueError:
+                match = re.search(r"\d+", text)
+                if match:
+                    try:
+                        minutes = int(match.group())
+                    except ValueError:
+                        minutes = None
+            if minutes is not None and minutes >= 0:
+                return minutes
+    return None
+
+
+def _extract_detail_departure_dt(detail: Optional[Mapping[str, Any]]) -> Optional[datetime]:
+    if not detail:
+        return None
+    for key in (
+        "departureDate",
+        "departureDateUTC",
+        "departure_date",
+        "departure_time",
+    ):
+        value = detail.get(key)
+        if not value:
+            continue
+        text = _normalize_str(value)
+        if not text:
+            continue
+        try:
+            dt_value = safe_parse_dt(text)
+        except Exception:
+            continue
+        if dt_value.tzinfo is None:
+            dt_value = dt_value.replace(tzinfo=timezone.utc)
+        else:
+            dt_value = dt_value.astimezone(timezone.utc)
+        return dt_value
+    return None
+
+
+def _format_block_minutes(minutes: Optional[int]) -> str:
+    if minutes is None or minutes < 0:
+        return "Unknown"
+    hours, remainder = divmod(minutes, 60)
+    return f"{hours:02d}:{remainder:02d}"
 
 
 def _format_notification_text(note: Optional[str]) -> str:
