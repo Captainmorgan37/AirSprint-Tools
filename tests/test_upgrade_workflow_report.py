@@ -1,9 +1,11 @@
 import datetime as dt
 from typing import Optional
 
+import morning_reports as mr
 from fl3xx_api import Fl3xxApiConfig
 from morning_reports import (
     MorningReportResult,
+    run_morning_reports,
     _build_upgrade_workflow_validation_report,
 )
 
@@ -110,3 +112,93 @@ def test_warns_when_booking_reference_missing():
     assert result.metadata["inspected_legs"] == 0
     assert result.metadata["flagged_requests"] == 0
     assert any("missing booking" in warning.lower() for warning in result.warnings)
+
+
+def test_upgrade_report_runs_with_morning_reports(monkeypatch):
+    departure = dt.datetime(2024, 7, 30, 15, 30, tzinfo=dt.timezone.utc)
+
+    flight_row = {
+        "dep_time": iso(departure),
+        "tail": "C-GLXY",
+        "leg_id": "LEG-1",
+        "flightType": "PAX",
+        "aircraftCategory": "E550",
+        "workflowCustomName": "Legacy Upgrade",
+        "assignedAircraftType": "Legacy 450",
+        "ownerClass": "Legacy Owner",
+        "accountName": "Owner Example",
+        "bookingReference": "BOOK-1",
+    }
+
+    flights_payload = [flight_row]
+    fetch_metadata = {"fetched_at": iso(departure)}
+
+    def fake_build_config(settings):
+        assert settings.get("api_token") == "token"
+        return Fl3xxApiConfig(api_token="token")
+
+    def fake_fetch_flights(config, from_date, to_date, now):
+        assert config.api_token == "token"
+        return flights_payload, fetch_metadata
+
+    def fake_normalize(payload):
+        assert payload == {"items": flights_payload}
+        return flights_payload, {"normalized": len(flights_payload)}
+
+    def fake_filter(rows):
+        assert rows == flights_payload
+        return rows, 0
+
+    def fake_fetch_notification(config, flight_identifier, session=None):
+        return {}
+
+    def fake_fetch_postflight(config, flight_identifier):
+        return {}
+
+    def fake_fetch_leg_details(config, booking_reference, session=None):
+        assert booking_reference == "BOOK-1"
+        return {
+            "planningNotes": "Owner requesting CJ3 upgrade",
+            "departureDateUTC": iso(departure),
+        }
+
+    monkeypatch.setattr("morning_reports.build_fl3xx_api_config", fake_build_config)
+    monkeypatch.setattr("morning_reports.fetch_flights", fake_fetch_flights)
+    monkeypatch.setattr("morning_reports.normalize_fl3xx_payload", fake_normalize)
+    monkeypatch.setattr("morning_reports.filter_out_subcharter_rows", fake_filter)
+    monkeypatch.setattr("morning_reports.fetch_flight_notification", fake_fetch_notification)
+    monkeypatch.setattr("morning_reports.fetch_postflight", fake_fetch_postflight)
+
+    original_builder = mr._build_upgrade_workflow_validation_report
+
+    def patched_builder(rows, config, *, fetch_leg_details_fn=fake_fetch_leg_details):
+        return original_builder(
+            rows,
+            config,
+            fetch_leg_details_fn=fake_fetch_leg_details,
+        )
+
+    monkeypatch.setattr(
+        "morning_reports._build_upgrade_workflow_validation_report",
+        patched_builder,
+    )
+
+    run = run_morning_reports(
+        {"api_token": "token"},
+        now=departure,
+        from_date=departure.date(),
+        to_date=departure.date(),
+    )
+
+    upgrade_report = next(
+        report for report in run.reports if report.code == "16.1.9"
+    )
+
+    assert upgrade_report.metadata == {
+        "match_count": 1,
+        "inspected_legs": 1,
+        "flagged_requests": 1,
+    }
+    assert len(upgrade_report.rows) == 1
+    assert upgrade_report.rows[0]["booking_reference"] == "BOOK-1"
+    assert upgrade_report.rows[0]["request_label"] == "CJ3"
