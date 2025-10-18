@@ -13,6 +13,7 @@ import requests
 
 from fl3xx_api import (
     Fl3xxApiConfig,
+    MOUNTAIN_TIME_ZONE,
     compute_fetch_dates,
     fetch_flights,
     fetch_flight_notification,
@@ -172,9 +173,18 @@ def _group_rows_by_display_date(
     return [(label, payload["rows"]) for label, payload in ordered]
 
 
+def _mountain_date_from_datetime(dt: datetime) -> date:
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    mountain_dt = dt.astimezone(MOUNTAIN_TIME_ZONE)
+    return mountain_dt.date()
+
+
 def _coerce_row_date(value: Any) -> Optional[date]:
     if isinstance(value, datetime):
-        return value.date()
+        return _mountain_date_from_datetime(value)
     if isinstance(value, date):
         return value
     if isinstance(value, str):
@@ -186,7 +196,7 @@ def _coerce_row_date(value: Any) -> Optional[date]:
         except ValueError:
             parsed = safe_parse_dt(text)
             if isinstance(parsed, datetime):
-                return parsed.date()
+                return _mountain_date_from_datetime(parsed)
     return None
 
 
@@ -198,6 +208,25 @@ def _format_display_date_label(parsed: Optional[date], raw: Any) -> str:
     if isinstance(raw, date):
         return raw.strftime("%d%b%y").upper()
     return "Unknown Date"
+
+
+def _format_mountain_date_component(
+    dep_dt: Optional[datetime],
+    fallback: Any = None,
+) -> Optional[str]:
+    if dep_dt is not None:
+        return _mountain_date_from_datetime(dep_dt).isoformat()
+    if fallback is None:
+        return None
+    parsed_fallback = _coerce_row_date(fallback)
+    if parsed_fallback is not None:
+        return parsed_fallback.isoformat()
+    if isinstance(fallback, str):
+        text = fallback.strip()
+        return text or None
+    if isinstance(fallback, date):
+        return fallback.isoformat()
+    return None
 
 
 def _build_upgrade_line(row: Mapping[str, Any]) -> str:
@@ -708,7 +737,7 @@ def _build_cj3_owners_on_cj2_report(
             if dep_dt is None:
                 dep_dt = _extract_detail_departure_dt(detail)
 
-            date_component = dep_dt.date().isoformat() if dep_dt else "Unknown Date"
+            date_component = _format_mountain_date_component(dep_dt) or "Unknown Date"
 
             formatted_stub = {"leg_id": _extract_leg_id(row)}
             booking_identifier = _extract_booking_reference(row)
@@ -1165,7 +1194,9 @@ def _build_upgrade_workflow_validation_report(
 
             formatted = _format_report_row(row, include_tail=True)
             dep_dt = _extract_departure_dt(row) or _extract_detail_departure_dt(detail)
-            date_component = dep_dt.date().isoformat() if dep_dt else formatted.get("date")
+            date_component = _format_mountain_date_component(
+                dep_dt, formatted.get("date")
+            )
 
             tail = formatted.get("tail")
             booking_id = formatted.get("booking_reference") or booking_reference
@@ -1523,7 +1554,7 @@ def _format_report_row(
     if dep_dt and dep_dt.tzinfo is None:
         dep_dt = dep_dt.replace(tzinfo=timezone.utc)
 
-    date_component = dep_dt.date().isoformat() if dep_dt else "Unknown Date"
+    date_component = _format_mountain_date_component(dep_dt) or "Unknown Date"
     booking_reference = _extract_booking_reference(row)
     account_name = _extract_account_name(row)
     tail = _extract_tail(row) if include_tail else None

@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from morning_reports import MorningReportResult
 
 
@@ -44,6 +46,32 @@ def test_upgraded_flights_preferred_block_formatting():
         "18OCT25\n\n"
         "CFSNY - ABIHZ1 - Mecii Management Inc\n"
         "CFASQ - ETMIH - Kolikana Holdings Ltd"
+    )
+
+    assert result.formatted_output() == expected
+
+
+def test_preferred_block_converts_datetimes_to_mountain_dates():
+    rows = [
+        {
+            "date": datetime(2025, 10, 20, 1, 0, tzinfo=timezone.utc),
+            "tail": "CFASF",
+            "booking_reference": "EPIJK",
+            "account_name": "Tim Hockey",
+        }
+    ]
+
+    result = MorningReportResult(
+        code="16.1.10",
+        title="Upgraded Flights Report",
+        header_label="Upgrade Workflow Flights",
+        rows=rows,
+    )
+
+    expected = (
+        "UPGRADES: (based on the Upgraded Flights Report)\n\n"
+        "19OCT25\n\n"
+        "CFASF - EPIJK - Tim Hockey"
     )
 
     assert result.formatted_output() == expected
