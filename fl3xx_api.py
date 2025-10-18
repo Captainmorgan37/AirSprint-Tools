@@ -157,6 +157,13 @@ def _build_postflight_endpoint(base_url: str, flight_id: Any) -> str:
     return f"{base}/{flight_id}/postflight"
 
 
+def _build_notification_endpoint(base_url: str, flight_id: Any) -> str:
+    base = base_url.rstrip("/")
+    if base.lower().endswith("/flights"):
+        base = base[: -len("/flights")]
+    return f"{base}/{flight_id}/notification"
+
+
 def _normalise_crew_payload(payload: Any) -> List[Dict[str, Any]]:
     """Return a list of crew member dictionaries from various payload layouts."""
 
@@ -282,6 +289,33 @@ def fetch_flight_migration(
                 pass
 
 
+def fetch_flight_notification(
+    config: Fl3xxApiConfig,
+    flight_id: Any,
+    *,
+    session: Optional[requests.Session] = None,
+) -> Any:
+    """Return the notification payload for a specific flight."""
+
+    http = session or requests.Session()
+    close_session = session is None
+    try:
+        response = http.get(
+            _build_notification_endpoint(config.base_url, flight_id),
+            headers=config.build_headers(),
+            timeout=config.timeout,
+            verify=config.verify_ssl,
+        )
+        response.raise_for_status()
+        return response.json()
+    finally:
+        if close_session:
+            try:
+                http.close()
+            except AttributeError:
+                pass
+
+
 def _select_crew_member(crew: Iterable[Dict[str, Any]], role: str) -> Optional[Dict[str, Any]]:
     for member in crew:
         if not isinstance(member, MutableMapping):
@@ -375,5 +409,6 @@ __all__ = [
     "fetch_flight_crew",
     "fetch_postflight",
     "fetch_flight_migration",
+    "fetch_flight_notification",
     "enrich_flights_with_crew",
 ]
