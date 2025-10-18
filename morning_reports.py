@@ -597,34 +597,51 @@ def _build_priority_status_report(
             earliest_departure[key] = dep_dt
 
     priority_candidates: List[Dict[str, Any]] = []
+    last_arrival_by_tail: Dict[str, Dict[str, Any]] = {}
     for row in sorted_rows:
-        is_priority, priority_label = _row_priority_info(row)
-        if not is_priority:
-            continue
         formatted = _format_report_row(row, include_tail=True)
         tail = formatted.get("tail")
         dep_dt = _extract_departure_dt(row)
         dep_date = dep_dt.date() if dep_dt else None
+        tail_key = tail.upper() if tail else None
+        previous_arrival_entry = last_arrival_by_tail.get(tail_key) if tail_key else None
+        previous_arrival_dt: Optional[datetime] = None
+        previous_arrival_row: Optional[Mapping[str, Any]] = None
+        if previous_arrival_entry:
+            previous_arrival_dt = previous_arrival_entry.get("arrival_dt")
+            previous_arrival_row = previous_arrival_entry.get("row")
+
         is_first_departure = False
-        if tail and dep_date and dep_dt is not None:
-            key = (tail.upper(), dep_date)
+        if tail_key and dep_date and dep_dt is not None:
+            key = (tail_key, dep_date)
             earliest = earliest_departure.get(key)
             if earliest is not None:
                 delta = abs((dep_dt - earliest).total_seconds())
                 if delta < 1.0:
                     is_first_departure = True
 
-        priority_candidates.append(
-            {
-                "row": row,
-                "formatted": formatted,
-                "tail": tail,
-                "dep_dt": dep_dt,
-                "dep_date": dep_date,
-                "priority_label": priority_label,
-                "is_first_departure": is_first_departure,
-            }
-        )
+        is_priority, priority_label = _row_priority_info(row)
+        if is_priority:
+            if is_first_departure:
+                previous_arrival_dt = None
+                previous_arrival_row = None
+            priority_candidates.append(
+                {
+                    "row": row,
+                    "formatted": formatted,
+                    "tail": tail,
+                    "dep_dt": dep_dt,
+                    "dep_date": dep_date,
+                    "priority_label": priority_label,
+                    "is_first_departure": is_first_departure,
+                    "previous_arrival_dt": previous_arrival_dt,
+                    "previous_arrival_row": previous_arrival_row,
+                }
+            )
+
+        arrival_dt = _extract_arrival_dt(row)
+        if tail_key:
+            last_arrival_by_tail[tail_key] = {"arrival_dt": arrival_dt, "row": row}
 
     if not priority_candidates:
         return MorningReportResult(
@@ -659,6 +676,8 @@ def _build_priority_status_report(
         dep_dt: Optional[datetime] = candidate["dep_dt"]
         dep_date = candidate["dep_date"]
         is_first_departure = candidate["is_first_departure"]
+        previous_arrival_dt: Optional[datetime] = candidate.get("previous_arrival_dt")
+        previous_arrival_row = candidate.get("previous_arrival_row")
         label = candidate["priority_label"] or formatted.get("workflow")
         if not label or "priority" not in label.lower():
             label = "Priority"
@@ -666,13 +685,31 @@ def _build_priority_status_report(
         status = ""
         issue = False
         minutes_before: Optional[float] = None
+        turn_minutes: Optional[float] = None
         earliest_checkin: Optional[datetime] = None
         latest_checkin: Optional[datetime] = None
         checkin_count: Optional[int] = None
         checkin_times_display: Optional[str] = None
 
+        current_booking = formatted.get("booking_reference")
+        previous_booking = (
+            _extract_booking_reference(previous_arrival_row)
+            if previous_arrival_row
+            else None
+        )
+        previous_was_priority = False
+        if previous_arrival_row is not None:
+            previous_was_priority, _ = _row_priority_info(previous_arrival_row)
+
+        skip_turn_validation = (
+            not is_first_departure
+            and previous_was_priority
+            and bool(current_booking)
+            and current_booking == previous_booking
+        )
+
         flight_identifier = _extract_flight_identifier(candidate["row"], formatted)
-        needs_validation = bool(is_first_departure and tail and dep_dt)
+        needs_validation = bool(tail and dep_dt) and not skip_turn_validation
         if needs_validation:
             validation_required += 1
 
@@ -682,8 +719,31 @@ def _build_priority_status_report(
         elif not tail:
             status = "Missing tail number; cannot validate check-in window"
             issue = True
+        elif skip_turn_validation:
+            status = "Continuation of same booking; turn validation not required"
         elif not is_first_departure:
-            status = "Subsequent priority departure (no duty-start validation required)"
+            if previous_arrival_dt is None:
+                status = "Missing previous arrival time; cannot validate turn interval"
+                issue = True
+            else:
+                turn_minutes = (dep_dt - previous_arrival_dt).total_seconds() / 60.0
+                if turn_minutes < 0:
+                    status = (
+                        "Inconsistent timing data; previous arrival occurs after departure"
+                    )
+                    issue = True
+                elif turn_minutes >= threshold_minutes:
+                    status = (
+                        f"Turn time meets threshold ({turn_minutes:.1f} min gap before departure)"
+                    )
+                    if needs_validation:
+                        validated_without_issue += 1
+                else:
+                    status = (
+                        f"Turn time only {turn_minutes:.1f} min before departure "
+                        f"(requires {threshold_minutes} min)"
+                    )
+                    issue = True
         elif not credentials_available:
             status = "Missing FL3XX credentials; cannot retrieve check-in timestamps"
             issue = True
@@ -738,6 +798,15 @@ def _build_priority_status_report(
             issues_found += 1
 
         line = f"{formatted['line']} | {label} | {status}"
+        previous_leg_id = (
+            _extract_leg_id(previous_arrival_row) if previous_arrival_row else None
+        )
+        previous_leg_departure_dt = (
+            _extract_departure_dt(previous_arrival_row)
+            if previous_arrival_row
+            else None
+        )
+
         row_data = {
             "line": line,
             "date": formatted.get("date"),
@@ -750,17 +819,27 @@ def _build_priority_status_report(
             "minutes_before_departure": round(minutes_before, 1)
             if minutes_before is not None
             else None,
+            "turn_gap_minutes": round(turn_minutes, 1)
+            if turn_minutes is not None
+            else None,
             "checkin_count": checkin_count,
             "checkin_times": checkin_times_display,
             "earliest_checkin": earliest_checkin.isoformat()
             if earliest_checkin
             else None,
             "latest_checkin": latest_checkin.isoformat() if latest_checkin else None,
+            "previous_arrival_time": previous_arrival_dt.isoformat()
+            if previous_arrival_dt
+            else None,
             "departure_time": dep_dt.isoformat() if dep_dt else None,
             "booking_reference": formatted.get("booking_reference"),
             "account_name": formatted.get("account_name"),
             "flight_identifier": flight_identifier,
             "leg_id": formatted.get("leg_id"),
+            "previous_leg_id": previous_leg_id,
+            "previous_leg_departure_time": previous_leg_departure_dt.isoformat()
+            if previous_leg_departure_dt
+            else None,
             "_sort_key": dep_dt or datetime.max.replace(tzinfo=timezone.utc),
         }
         matches.append(row_data)
