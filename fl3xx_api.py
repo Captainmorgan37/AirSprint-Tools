@@ -164,6 +164,15 @@ def _build_notification_endpoint(base_url: str, flight_id: Any) -> str:
     return f"{base}/{flight_id}/notification"
 
 
+def _build_leg_endpoint(base_url: str, quote_id: Any) -> str:
+    base = base_url.rstrip("/")
+    if base.lower().endswith("/flights"):
+        base = base[: -len("/flights")]
+    if base.lower().endswith("/flight"):
+        base = base[: -len("/flight")]
+    return f"{base}/leg/{quote_id}"
+
+
 def _normalise_crew_payload(payload: Any) -> List[Dict[str, Any]]:
     """Return a list of crew member dictionaries from various payload layouts."""
 
@@ -302,6 +311,33 @@ def fetch_flight_notification(
     try:
         response = http.get(
             _build_notification_endpoint(config.base_url, flight_id),
+            headers=config.build_headers(),
+            timeout=config.timeout,
+            verify=config.verify_ssl,
+        )
+        response.raise_for_status()
+        return response.json()
+    finally:
+        if close_session:
+            try:
+                http.close()
+            except AttributeError:
+                pass
+
+
+def fetch_leg_details(
+    config: Fl3xxApiConfig,
+    quote_id: Any,
+    *,
+    session: Optional[requests.Session] = None,
+) -> Any:
+    """Return the leg payload (including planning notes) for a specific quote."""
+
+    http = session or requests.Session()
+    close_session = session is None
+    try:
+        response = http.get(
+            _build_leg_endpoint(config.base_url, quote_id),
             headers=config.build_headers(),
             timeout=config.timeout,
             verify=config.verify_ssl,
