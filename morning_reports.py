@@ -88,7 +88,7 @@ class MorningReportRun:
 def _format_upgraded_flights_block(report: MorningReportResult) -> str:
     return _render_preferred_block(
         report.rows,
-        header="UPGRADES: (based on the Upgraded Flights Report)",
+        header="UPGRADES:",
         line_builder=_build_upgrade_line,
     )
 
@@ -96,7 +96,7 @@ def _format_upgraded_flights_block(report: MorningReportResult) -> str:
 def _format_cj3_on_cj2_block(report: MorningReportResult) -> str:
     return _render_preferred_block(
         report.rows,
-        header="CJ3 CLIENTS ON CJ2: (based on the CJ3 Owners on CJ2 Report)",
+        header="CJ3 CLIENTS ON CJ2:",
         line_builder=_build_cj3_line,
     )
 
@@ -104,7 +104,7 @@ def _format_cj3_on_cj2_block(report: MorningReportResult) -> str:
 def _format_priority_status_block(report: MorningReportResult) -> str:
     return _render_preferred_block(
         report.rows,
-        header="PRIORITY CLIENTS: (based on the Priority Status Report)",
+        header="PRIORITY CLIENTS:",
         line_builder=_build_priority_line,
     )
 
