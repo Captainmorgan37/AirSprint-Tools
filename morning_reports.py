@@ -933,41 +933,126 @@ def _extract_departure_dt(row: Mapping[str, Any]) -> Optional[datetime]:
 
 
 def _extract_arrival_dt(row: Mapping[str, Any]) -> Optional[datetime]:
-    for key in (
-        "arr_time",
-        "arrivalTimeUtc",
-        "arrival_time_utc",
-        "arrivalTime",
-        "arrival_time",
-        "blockOnTimeUtc",
-        "onBlockTimeUtc",
-        "arrivalOnBlockUtc",
-        "blockOnUtc",
-        "arrivalUtc",
-        "arrOnBlock",
-        "arrivalOnBlock",
-        "blockOnTime",
-        "onBlockTime",
-    ):
-        value = row.get(key)
-        if not value:
+    """Best-effort extraction of an arrival timestamp from a leg payload."""
+
+    candidate_paths = [
+        ("arr_time",),
+        ("arrivalTimeUtc",),
+        ("arrival_time_utc",),
+        ("arrivalTime",),
+        ("arrival_time",),
+        ("arrivalActualUtc",),
+        ("arrivalScheduledUtc",),
+        ("arrivalActualTime",),
+        ("arrivalScheduledTime",),
+        ("arrivalActual",),
+        ("arrivalScheduled",),
+        ("scheduledIn",),
+        ("actualIn",),
+        ("inActual",),
+        ("inScheduled",),
+        ("onBlock",),
+        ("onBlockActual",),
+        ("onBlockScheduled",),
+        ("blockOnTimeUtc",),
+        ("onBlockTimeUtc",),
+        ("arrivalOnBlockUtc",),
+        ("blockOnUtc",),
+        ("arrivalUtc",),
+        ("arrOnBlock",),
+        ("arrivalOnBlock",),
+        ("blockOnTime",),
+        ("onBlockTime",),
+        ("arrival", "actualUtc"),
+        ("arrival", "scheduledUtc"),
+        ("arrival", "actualTime"),
+        ("arrival", "scheduledTime"),
+        ("arrival", "actual"),
+        ("arrival", "scheduled"),
+        ("arrival.actual",),
+        ("arrival.actualUtc",),
+        ("arrival.actualTime",),
+        ("arrival.scheduled",),
+        ("arrival.scheduledUtc",),
+        ("arrival.scheduledTime",),
+        ("times", "arrival", "actualUtc"),
+        ("times", "arrival", "scheduledUtc"),
+        ("times", "arrival", "actualTime"),
+        ("times", "arrival", "scheduledTime"),
+        ("times", "arrival", "actual"),
+        ("times", "arrival", "scheduled"),
+        ("times", "arrival.actual",),
+        ("times", "arrival.actualUtc",),
+        ("times", "arrival.actualTime",),
+        ("times", "arrival.scheduled",),
+        ("times", "arrival.scheduledUtc",),
+        ("times", "arrival.scheduledTime",),
+        ("times", "onBlock", "actualUtc"),
+        ("times", "onBlock", "scheduledUtc"),
+        ("times", "onBlock", "actualTime"),
+        ("times", "onBlock", "scheduledTime"),
+        ("times", "onBlock", "actual"),
+        ("times", "onBlock", "scheduled"),
+        ("times", "onBlock.actual",),
+        ("times", "onBlock.actualUtc",),
+        ("times", "onBlock.actualTime",),
+        ("times", "onBlock.scheduled",),
+        ("times", "onBlock.scheduledUtc",),
+        ("times", "onBlock.scheduledTime",),
+    ]
+
+    for path in candidate_paths:
+        value = _extract_nested_value(row, path)
+        if value is None:
             continue
-        if isinstance(value, datetime):
-            arr_dt = value
-        else:
-            text = _normalize_str(value)
-            if not text:
-                continue
-            try:
-                arr_dt = safe_parse_dt(text)
-            except Exception:
-                continue
-        if arr_dt.tzinfo is None:
-            arr_dt = arr_dt.replace(tzinfo=timezone.utc)
-        else:
-            arr_dt = arr_dt.astimezone(timezone.utc)
-        return arr_dt
+        arr_dt = _coerce_datetime_value(value)
+        if arr_dt is not None:
+            return arr_dt
     return None
+
+
+def _extract_nested_value(container: Mapping[str, Any], path: Tuple[str, ...]) -> Any:
+    """Retrieve a nested value from ``container`` following ``path`` segments."""
+
+    value: Any = container
+    for index, segment in enumerate(path):
+        if not isinstance(value, Mapping):
+            return None
+        if segment in value:
+            value = value[segment]
+            continue
+        if "." in segment:
+            direct = value.get(segment)
+            if direct is not None:
+                value = direct
+                continue
+            sub_segments = tuple(part for part in segment.split(".") if part)
+            if not sub_segments:
+                return None
+            remaining_path = sub_segments + path[index + 1 :]
+            return _extract_nested_value(value, remaining_path)
+        return None
+    return value
+
+
+def _coerce_datetime_value(value: Any) -> Optional[datetime]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        arr_dt = value
+    else:
+        text = _normalize_str(value)
+        if not text:
+            return None
+        try:
+            arr_dt = safe_parse_dt(text)
+        except Exception:
+            return None
+    if arr_dt.tzinfo is None:
+        arr_dt = arr_dt.replace(tzinfo=timezone.utc)
+    else:
+        arr_dt = arr_dt.astimezone(timezone.utc)
+    return arr_dt
 
 
 def _normalize_str(value: Any) -> Optional[str]:

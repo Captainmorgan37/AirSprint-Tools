@@ -141,6 +141,46 @@ def test_priority_report_validates_turn_time_for_subsequent_leg():
     assert row["has_issue"] is False
 
 
+def test_priority_report_uses_nested_arrival_timestamp():
+    first_departure = dt.datetime(2024, 4, 1, 8, 0, tzinfo=UTC)
+    first_arrival = first_departure + dt.timedelta(hours=2)
+    priority_departure = first_arrival + dt.timedelta(minutes=95)
+
+    rows = [
+        {
+            "dep_time": _iso(first_departure),
+            "arrival": {"actualUtc": _iso(first_arrival)},
+            "times": {"arrival": {"actual": _iso(first_arrival)}},
+            "tail": "C-GNEST",
+            "bookingIdentifier": "BK-1000",
+        },
+        {
+            "dep_time": _iso(priority_departure),
+            "tail": "C-GNEST",
+            "priority_label": "Priority Owner",
+            "bookingIdentifier": "BK-1001",
+        },
+    ]
+
+    config = Fl3xxApiConfig(api_token="token")
+
+    report = mr._build_priority_status_report(
+        rows,
+        config,
+        fetch_postflight_fn=lambda *_args, **_kwargs: {},
+    )
+
+    assert report.metadata["total_priority_flights"] == 1
+    assert report.metadata["validation_required"] == 1
+    assert report.metadata["validated_without_issue"] == 1
+    assert report.metadata["issues_found"] == 0
+
+    row = report.rows[0]
+    assert row["status"].startswith("Turn time meets threshold")
+    assert row["turn_gap_minutes"] == 95.0
+    assert dt.datetime.fromisoformat(row["previous_arrival_time"]) == first_arrival
+
+
 def test_priority_report_flags_short_turn_for_subsequent_leg():
     first_departure = dt.datetime(2024, 4, 1, 12, 0, tzinfo=UTC)
     first_arrival = first_departure + dt.timedelta(hours=1, minutes=15)
