@@ -6,7 +6,7 @@ from collections.abc import Iterable as IterableABC
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 import re
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple
 
 import requests
 
@@ -16,6 +16,7 @@ from fl3xx_api import (
     fetch_flights,
     fetch_flight_notification,
     fetch_leg_details,
+    fetch_postflight,
 )
 from flight_leg_utils import (
     build_fl3xx_api_config,
@@ -85,6 +86,8 @@ _APP_LINE_PREFIXES = (
 _EXPECTED_EMPTY_LEG_ACCOUNT = "AIRSPRINT INC."
 _OCS_ACCOUNT_NAME = "AIRSPRINT INC."
 
+_PRIORITY_CHECKIN_THRESHOLD_MINUTES = 90
+
 
 def run_morning_reports(
     api_settings: Mapping[str, Any],
@@ -133,6 +136,7 @@ def run_morning_reports(
         _build_ocs_pax_report(normalized_rows, config),
         _build_owner_continuous_flight_validation_report(normalized_rows),
         _build_cj3_owners_on_cj2_report(normalized_rows, config),
+        _build_priority_status_report(normalized_rows, config),
     ]
 
     return MorningReportRun(
@@ -572,6 +576,217 @@ def _build_cj3_owners_on_cj2_report(
     )
 
 
+def _build_priority_status_report(
+    rows: Iterable[Mapping[str, Any]],
+    config: Fl3xxApiConfig,
+    *,
+    fetch_postflight_fn: Callable[[Fl3xxApiConfig, Any], Any] = fetch_postflight,
+    threshold_minutes: int = _PRIORITY_CHECKIN_THRESHOLD_MINUTES,
+) -> MorningReportResult:
+    sorted_rows = _sort_rows(rows)
+
+    earliest_departure: Dict[Tuple[str, date], datetime] = {}
+    for row in sorted_rows:
+        tail = _extract_tail(row)
+        dep_dt = _extract_departure_dt(row)
+        if not tail or dep_dt is None:
+            continue
+        key = (tail.upper(), dep_dt.date())
+        current = earliest_departure.get(key)
+        if current is None or dep_dt < current:
+            earliest_departure[key] = dep_dt
+
+    priority_candidates: List[Dict[str, Any]] = []
+    for row in sorted_rows:
+        is_priority, priority_label = _row_priority_info(row)
+        if not is_priority:
+            continue
+        formatted = _format_report_row(row, include_tail=True)
+        tail = formatted.get("tail")
+        dep_dt = _extract_departure_dt(row)
+        dep_date = dep_dt.date() if dep_dt else None
+        is_first_departure = False
+        if tail and dep_date and dep_dt is not None:
+            key = (tail.upper(), dep_date)
+            earliest = earliest_departure.get(key)
+            if earliest is not None:
+                delta = abs((dep_dt - earliest).total_seconds())
+                if delta < 1.0:
+                    is_first_departure = True
+
+        priority_candidates.append(
+            {
+                "row": row,
+                "formatted": formatted,
+                "tail": tail,
+                "dep_dt": dep_dt,
+                "dep_date": dep_date,
+                "priority_label": priority_label,
+                "is_first_departure": is_first_departure,
+            }
+        )
+
+    if not priority_candidates:
+        return MorningReportResult(
+            code="16.1.7",
+            title="Priority Status Report",
+            header_label="Priority Duty-Start Validation",
+            rows=[],
+            metadata={
+                "total_priority_flights": 0,
+                "validation_required": 0,
+                "validated_without_issue": 0,
+                "issues_found": 0,
+                "threshold_minutes": threshold_minutes,
+            },
+        )
+
+    credentials_available = bool(config.api_token or config.auth_header)
+    warning_messages: List[str] = []
+    if not credentials_available:
+        warning_messages.append(
+            "FL3XX credentials are missing; cannot retrieve crew check-in timestamps for priority departures."
+        )
+
+    matches: List[Dict[str, Any]] = []
+    issues_found = 0
+    validation_required = 0
+    validated_without_issue = 0
+
+    for candidate in priority_candidates:
+        formatted = candidate["formatted"]
+        tail = candidate["tail"]
+        dep_dt: Optional[datetime] = candidate["dep_dt"]
+        dep_date = candidate["dep_date"]
+        is_first_departure = candidate["is_first_departure"]
+        label = candidate["priority_label"] or formatted.get("workflow")
+        if not label or "priority" not in label.lower():
+            label = "Priority"
+
+        status = ""
+        issue = False
+        minutes_before: Optional[float] = None
+        earliest_checkin: Optional[datetime] = None
+        latest_checkin: Optional[datetime] = None
+        checkin_count: Optional[int] = None
+        checkin_times_display: Optional[str] = None
+
+        flight_identifier = _extract_flight_identifier(candidate["row"], formatted)
+        needs_validation = bool(is_first_departure and tail and dep_dt)
+        if needs_validation:
+            validation_required += 1
+
+        if dep_dt is None:
+            status = "Missing departure time; cannot validate check-in window"
+            issue = True
+        elif not tail:
+            status = "Missing tail number; cannot validate check-in window"
+            issue = True
+        elif not is_first_departure:
+            status = "Subsequent priority departure (no duty-start validation required)"
+        elif not credentials_available:
+            status = "Missing FL3XX credentials; cannot retrieve check-in timestamps"
+            issue = True
+        elif not flight_identifier:
+            status = "Missing flight identifier; cannot retrieve check-in timestamps"
+            issue = True
+        else:
+            try:
+                payload = fetch_postflight_fn(config, flight_identifier)
+            except Exception as exc:  # pragma: no cover - defensive path
+                status = f"Unable to retrieve check-in data ({exc})"
+                warning_messages.append(
+                    f"{tail or 'Unknown tail'} on {dep_date or 'unknown date'}: {exc}"
+                )
+                issue = True
+            else:
+                values = _extract_checkin_values(payload)
+                target_tz = dep_dt.tzinfo or timezone.utc
+                checkins = [
+                    dt
+                    for value in values
+                    if (dt := _checkin_to_datetime(value, target_tz)) is not None
+                ]
+                if not checkins:
+                    status = "No crew check-in timestamps available"
+                    issue = True
+                else:
+                    checkins.sort()
+                    earliest_checkin = checkins[0]
+                    latest_checkin = checkins[-1]
+                    minutes_before = (
+                        dep_dt - earliest_checkin
+                    ).total_seconds() / 60.0
+                    checkin_count = len(checkins)
+                    checkin_times_display = ", ".join(
+                        dt.strftime("%H:%M") for dt in checkins
+                    )
+                    if minutes_before >= threshold_minutes:
+                        status = (
+                            f"Meets threshold ({minutes_before:.1f} min before departure)"
+                        )
+                        if needs_validation:
+                            validated_without_issue += 1
+                    else:
+                        status = (
+                            f"Check-in only {minutes_before:.1f} min before departure "
+                            f"(requires {threshold_minutes} min)"
+                        )
+                        issue = True
+
+        if issue:
+            issues_found += 1
+
+        line = f"{formatted['line']} | {label} | {status}"
+        row_data = {
+            "line": line,
+            "date": formatted.get("date"),
+            "tail": tail,
+            "priority_label": label,
+            "status": status,
+            "is_first_departure": is_first_departure,
+            "needs_validation": needs_validation,
+            "has_issue": issue,
+            "minutes_before_departure": round(minutes_before, 1)
+            if minutes_before is not None
+            else None,
+            "checkin_count": checkin_count,
+            "checkin_times": checkin_times_display,
+            "earliest_checkin": earliest_checkin.isoformat()
+            if earliest_checkin
+            else None,
+            "latest_checkin": latest_checkin.isoformat() if latest_checkin else None,
+            "departure_time": dep_dt.isoformat() if dep_dt else None,
+            "booking_reference": formatted.get("booking_reference"),
+            "account_name": formatted.get("account_name"),
+            "flight_identifier": flight_identifier,
+            "leg_id": formatted.get("leg_id"),
+            "_sort_key": dep_dt or datetime.max.replace(tzinfo=timezone.utc),
+        }
+        matches.append(row_data)
+
+    matches.sort(key=lambda row: row["_sort_key"])
+    for row in matches:
+        row.pop("_sort_key", None)
+
+    metadata = {
+        "total_priority_flights": len(priority_candidates),
+        "validation_required": validation_required,
+        "validated_without_issue": validated_without_issue,
+        "issues_found": issues_found,
+        "threshold_minutes": threshold_minutes,
+    }
+
+    return MorningReportResult(
+        code="16.1.7",
+        title="Priority Status Report",
+        header_label="Priority Duty-Start Validation",
+        rows=matches,
+        warnings=list(dict.fromkeys(warning_messages)),
+        metadata=metadata,
+    )
+
+
 def _sort_rows(rows: Iterable[Mapping[str, Any]]) -> List[Mapping[str, Any]]:
     return sorted(rows, key=_row_sort_key)
 
@@ -686,6 +901,18 @@ def _normalize_str(value: Any) -> Optional[str]:
     return text or None
 
 
+def _coerce_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+    return bool(value)
+
+
 def _extract_workflow(row: Mapping[str, Any]) -> Optional[str]:
     for key in (
         "workflowCustomName",
@@ -697,6 +924,41 @@ def _extract_workflow(row: Mapping[str, Any]) -> Optional[str]:
         if value:
             return value
     return None
+
+
+def _row_priority_info(row: Mapping[str, Any]) -> Tuple[bool, Optional[str]]:
+    label_candidates = [
+        _normalize_str(row.get("priority_label")),
+        _normalize_str(row.get("priorityLabel")),
+        _normalize_str(row.get("priorityDetail")),
+        _normalize_str(row.get("priority_details")),
+        _normalize_str(row.get("priorityDescription")),
+        _normalize_str(row.get("priority_note")),
+    ]
+    workflow = _extract_workflow(row)
+    if workflow:
+        label_candidates.append(workflow)
+
+    for label in label_candidates:
+        if label and "priority" in label.lower():
+            return True, label
+
+    flag_keys = (
+        "priority",
+        "priorityFlight",
+        "priority_flag",
+        "priorityFlightFlag",
+        "isPriority",
+    )
+    for key in flag_keys:
+        if _coerce_bool(row.get(key)):
+            fallback_label = next((label for label in label_candidates if label), None)
+            if fallback_label and "priority" not in fallback_label.lower():
+                fallback_label = f"Priority - {fallback_label}"
+            return True, fallback_label or "Priority"
+
+    fallback = next((label for label in label_candidates if label), None)
+    return False, fallback
 
 
 def _extract_booking_reference(row: Mapping[str, Any]) -> Optional[str]:
@@ -869,6 +1131,42 @@ def _extract_pax_count(row: Mapping[str, Any]) -> Optional[int]:
                 except ValueError:
                     continue
     return None
+
+
+def _extract_checkin_values(payload: Any) -> List[Any]:
+    values: List[Any] = []
+
+    def _walk(obj: Any) -> None:
+        if isinstance(obj, Mapping):
+            for key, value in obj.items():
+                if isinstance(key, str) and key.lower() == "checkin":
+                    values.append(value)
+                _walk(value)
+        elif isinstance(obj, IterableABC) and not isinstance(obj, (str, bytes, bytearray)):
+            for item in obj:
+                _walk(item)
+
+    _walk(payload)
+    return values
+
+
+def _checkin_to_datetime(value: Any, target_tz: timezone) -> Optional[datetime]:
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return None
+    if seconds <= 0:
+        return None
+    try:
+        dt_utc = datetime.fromtimestamp(seconds, tz=timezone.utc)
+    except (OverflowError, OSError, ValueError):
+        return None
+    if target_tz is None:
+        return dt_utc
+    try:
+        return dt_utc.astimezone(target_tz)
+    except Exception:
+        return dt_utc
 
 
 def _extract_flight_identifier(
