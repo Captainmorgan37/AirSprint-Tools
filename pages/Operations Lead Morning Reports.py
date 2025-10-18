@@ -135,6 +135,11 @@ def _render_results():
         + f" · Dates: {selected_range}"
     )
 
+    st.caption(
+        "Reports included: "
+        + ", ".join(f"{report.code} – {report.title}" for report in run.reports)
+    )
+
     if warning_message:
         st.warning(warning_message)
 
@@ -164,8 +169,9 @@ def main():
     st.markdown(
         """
         Press **Fetch Morning Reports** to run the App Booking, App Line Assignment,
-        Empty Leg, and OCS Pax Flights checks using the latest FL3XX flight data.
-        Review any matching legs and warnings directly in the report tabs below.
+        Empty Leg, OCS Pax Flights, Owner Continuous Flight Validation, and CJ3 Owners
+        on CJ2 checks using the latest FL3XX flight data. Review any matching legs and
+        warnings directly in the report tabs below.
         """
     )
 
@@ -193,7 +199,10 @@ def main():
 
     if st.button(
         "Fetch Morning Reports",
-        help="Fetch FL3XX legs and execute the App Booking, App Line Assignment, Empty Leg, and OCS Pax Flights reports.",
+        help=(
+            "Fetch FL3XX legs and execute the App Booking, App Line Assignment, Empty Leg, "
+            "OCS Pax Flights, Owner Continuous Flight Validation, and CJ3 Owners on CJ2 reports."
+        ),
         use_container_width=False,
     ):
         if selected_to < selected_from:
