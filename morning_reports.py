@@ -1858,18 +1858,51 @@ def _extract_notification_note(payload: Any) -> Optional[str]:
 def _extract_handler_company(payload: Any, departure: bool) -> Optional[str]:
     target_key = "departureHandler" if departure else "arrivalHandler"
 
+    def _coerce_handler_value(handler_value: Any) -> Optional[str]:
+        if isinstance(handler_value, Mapping):
+            for field in ("company", "handler", "name", "fbo", "provider"):
+                text = _normalize_str(handler_value.get(field))
+                if text:
+                    return text
+
+            for nested_key in (
+                "airportService",
+                "airport_service",
+                "service",
+                "handler",
+                "provider",
+                "company",
+                "details",
+            ):
+                if nested_key in handler_value:
+                    nested_result = _coerce_handler_value(handler_value[nested_key])
+                    if nested_result:
+                        return nested_result
+
+            for value in handler_value.values():
+                nested_result = _coerce_handler_value(value)
+                if nested_result:
+                    return nested_result
+            return None
+
+        if isinstance(handler_value, IterableABC) and not isinstance(
+            handler_value, (str, bytes, bytearray)
+        ):
+            for item in handler_value:
+                nested_result = _coerce_handler_value(item)
+                if nested_result:
+                    return nested_result
+            return None
+
+        return _normalize_str(handler_value)
+
     def _search(obj: Any) -> Optional[str]:
         if isinstance(obj, Mapping):
             if target_key in obj:
                 handler_value = obj[target_key]
-                if isinstance(handler_value, Mapping):
-                    for field in ("company", "handler", "name", "fbo", "provider"):
-                        text = _normalize_str(handler_value.get(field))
-                        if text:
-                            return text
-                text = _normalize_str(handler_value)
-                if text:
-                    return text
+                extracted = _coerce_handler_value(handler_value)
+                if extracted:
+                    return extracted
             for value in obj.values():
                 result = _search(value)
                 if result:
