@@ -599,6 +599,38 @@ def normalize_fl3xx_payload(payload: Any) -> Tuple[List[Dict[str, Any]], Dict[st
                     "type",
                 )
 
+            pax_number = _extract_first(
+                leg,
+                "paxNumber",
+                "pax_count",
+                "pax",
+                "passengerCount",
+                "passengers",
+                "passenger_count",
+            )
+            if pax_number is None and isinstance(flight_tail, dict):
+                pax_number = _extract_first(
+                    flight_tail,
+                    "paxNumber",
+                    "pax_count",
+                    "pax",
+                    "passengerCount",
+                    "passengers",
+                    "passenger_count",
+                )
+
+            flight_identifier = None
+            if isinstance(flight_tail, dict):
+                flight_identifier = _extract_first(
+                    flight_tail,
+                    "flightId",
+                    "flight_id",
+                    "id",
+                    "uuid",
+                    "externalId",
+                    "external_id",
+                )
+
             normalized_leg: Dict[str, Any] = {**leg}
             normalized_leg.update(
                 {
@@ -632,6 +664,16 @@ def normalize_fl3xx_payload(payload: Any) -> Tuple[List[Dict[str, Any]], Dict[st
                 normalized_leg.setdefault("account", str(account_name))
             if flight_type:
                 normalized_leg.setdefault("flightType", str(flight_type))
+            if flight_identifier:
+                normalized_leg.setdefault("flightId", str(flight_identifier))
+
+            if pax_number is not None:
+                try:
+                    pax_value = int(float(str(pax_number)))
+                except (TypeError, ValueError):
+                    pax_value = None
+                if pax_value is not None:
+                    normalized_leg.setdefault("paxNumber", pax_value)
 
             if isinstance(leg.get("crewMembers"), list):
                 normalized_leg["crewMembers"] = leg["crewMembers"]
