@@ -9,9 +9,12 @@ import json
 from typing import Any, Dict, Iterable, List, MutableMapping, Optional, Tuple
 
 import requests
+from zoneinfo import ZoneInfo
 
 
 DEFAULT_FL3XX_BASE_URL = "https://app.fl3xx.us/api/external/flight/flights"
+MOUNTAIN_TIME_ZONE_NAME = "America/Edmonton"
+MOUNTAIN_TIME_ZONE = ZoneInfo(MOUNTAIN_TIME_ZONE_NAME)
 
 
 @dataclass(frozen=True)
@@ -56,7 +59,8 @@ def compute_fetch_dates(
         raise ValueError("inclusive_days must be non-negative")
 
     current = now or datetime.now(timezone.utc)
-    start = current.date()
+    mountain_time = current.astimezone(MOUNTAIN_TIME_ZONE)
+    start = mountain_time.date()
     end = start + timedelta(days=inclusive_days + 1)
     return start, end
 
@@ -101,7 +105,7 @@ def fetch_flights(
     params: Dict[str, str] = {
         "from": from_date.isoformat(),
         "to": to_date.isoformat(),
-        "timeZone": "UTC",
+        "timeZone": MOUNTAIN_TIME_ZONE_NAME,
         "value": "ALL",
     }
     params.update(config.extra_params)
