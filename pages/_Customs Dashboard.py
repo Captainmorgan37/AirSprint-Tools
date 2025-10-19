@@ -399,11 +399,12 @@ for _, leg in customs_df.iterrows():
     if clearance_requirements and arr_airport:
         clearance_note = clearance_requirements.get(arr_airport.upper(), "")
 
-    clearance_start_local,
-    clearance_end_local,
-    clearance_end_utc,
-    clearance_goal,
-    = _compute_clearance_window(row, dep_airport, arr_airport, lookup)
+    (
+        clearance_start_local,
+        clearance_end_local,
+        clearance_end_utc,
+        clearance_goal,
+    ) = _compute_clearance_window(row, dep_airport, arr_airport, lookup)
 
     rows.append(
         {
