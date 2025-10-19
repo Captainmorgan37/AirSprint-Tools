@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Optional
 
+import pytz
+
 
 CARIBBEAN_COUNTRY_NAMES = {
     "anguilla",
@@ -100,6 +102,17 @@ ALLOWED_COUNTRY_CODES.update(CARIBBEAN_COUNTRY_CODES)
 ALLOWED_COUNTRY_IDENTIFIERS = ALLOWED_COUNTRY_NAMES | ALLOWED_COUNTRY_CODES
 
 
+COUNTRY_CODE_OVERRIDES = {
+    "bq": "Bonaire, Sint Eustatius, and Saba",
+    "bl": "Saint Barthélemy",
+    "kn": "Saint Kitts and Nevis",
+    "lc": "Saint Lucia",
+    "mf": "Saint Martin",
+    "sx": "Sint Maarten",
+    "vi": "United States Virgin Islands",
+}
+
+
 def normalize_country_name(name: Optional[str]) -> Optional[str]:
     """Lower-case and strip the provided country name or code."""
 
@@ -107,3 +120,26 @@ def normalize_country_name(name: Optional[str]) -> Optional[str]:
         return None
     text = str(name).strip().lower()
     return text or None
+
+
+def country_display_name(country: Optional[str]) -> Optional[str]:
+    """Return a human-readable country name for the given identifier."""
+
+    normalized = normalize_country_name(country)
+    if not normalized:
+        return None
+
+    if len(normalized) == 2 and normalized.isalpha():
+        return COUNTRY_CODE_OVERRIDES.get(normalized) or pytz.country_names.get(normalized) or normalized.upper()
+
+    if country is None:
+        return None
+
+    text = str(country).strip()
+    if not text:
+        return None
+
+    if normalized in ALLOWED_COUNTRY_NAMES:
+        return text.title()
+
+    return text
