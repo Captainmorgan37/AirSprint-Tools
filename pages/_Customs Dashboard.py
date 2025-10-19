@@ -783,7 +783,7 @@ with summary_tab:
     st.dataframe(status_counts, use_container_width=True)
 
 with table_tab:
-    drop_cols = [
+    base_drop_cols = [
         col
         for col in (
             "Arrival Doc Names",
@@ -796,6 +796,20 @@ with table_tab:
         )
         if col in result_df.columns
     ]
+
+    if "Arrival By" in result_df.columns:
+        base_drop_cols.append("Arrival By")
+
+    show_arrival_notes = st.checkbox(
+        "Show arrival notes column",
+        value=False,
+        help="Toggle to include the Arrival Notes column in the table.",
+    )
+
+    drop_cols = list(base_drop_cols)
+    if not show_arrival_notes and "Arrival Notes" in result_df.columns:
+        drop_cols.append("Arrival Notes")
+
     display_df = result_df.drop(columns=drop_cols)
 
     if "_urgency_category" in result_df.columns:
