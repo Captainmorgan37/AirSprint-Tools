@@ -28,12 +28,31 @@ DEFAULT_BUSINESS_DAY_START = time(hour=9)
 DEFAULT_BUSINESS_DAY_END = time(hour=17)
 MOUNTAIN_TIMEZONE = ZoneInfo("America/Edmonton")
 
-URGENCY_COLORS = {
-    "ok": "#d9ead3",  # light green
-    "today": "#fff2cc",  # light yellow
-    "within_5": "#fce5cd",  # light orange
-    "within_2": "#f4cccc",  # light red
-    "overdue": "#ea9999",  # deeper red
+URGENCY_STYLES = {
+    "ok": {
+        "background": "rgba(67, 160, 71, 0.22)",
+        "border": "#43a047",
+    },
+    "today": {
+        "background": "rgba(255, 213, 79, 0.24)",
+        "border": "#fbc02d",
+    },
+    "within_5": {
+        "background": "rgba(255, 167, 38, 0.26)",
+        "border": "#fb8c00",
+    },
+    "within_2": {
+        "background": "rgba(244, 112, 67, 0.28)",
+        "border": "#f4511e",
+    },
+    "overdue": {
+        "background": "rgba(229, 57, 53, 0.30)",
+        "border": "#d32f2f",
+    },
+    "pending": {
+        "background": "rgba(120, 144, 156, 0.18)",
+        "border": "#607d8b",
+    },
 }
 
 _DAY_KEYS = (
@@ -773,13 +792,26 @@ with table_tab:
     display_df = result_df.drop(columns=drop_cols)
 
     if "_urgency_category" in result_df.columns:
-        color_lookup = result_df["_urgency_category"].map(URGENCY_COLORS).to_dict()
+        style_lookup = (
+            result_df["_urgency_category"].apply(lambda cat: URGENCY_STYLES.get(cat)).to_dict()
+        )
 
         def _style_row(row: pd.Series) -> List[str]:
-            color = color_lookup.get(row.name)
-            if not color or pd.isna(color):
+            styles = style_lookup.get(row.name)
+            if not isinstance(styles, Mapping):
                 return [""] * len(row)
-            return [f"background-color: {color}"] * len(row)
+            css_parts: List[str] = []
+            background = styles.get("background")
+            border = styles.get("border")
+            if background:
+                css_parts.append(f"background-color: {background}")
+            if border:
+                css_parts.append(f"border-left: 4px solid {border}")
+            if not css_parts:
+                return [""] * len(row)
+            css_parts.append("color: inherit")
+            css = "; ".join(css_parts)
+            return [css] * len(row)
 
         styler = display_df.style.apply(_style_row, axis=1)
         st.dataframe(styler, use_container_width=True)
