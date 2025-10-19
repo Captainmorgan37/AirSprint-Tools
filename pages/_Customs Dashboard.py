@@ -27,6 +27,16 @@ from fl3xx_api import fetch_flight_migration
 DEFAULT_BUSINESS_DAY_START = time(hour=9)
 DEFAULT_BUSINESS_DAY_END = time(hour=17)
 
+_DAY_KEYS = (
+    "open_mon",
+    "open_tue",
+    "open_wed",
+    "open_thu",
+    "open_fri",
+    "open_sat",
+    "open_sun",
+)
+
 CUSTOMS_RULES_PATH = Path(__file__).resolve().parent.parent / "customs_rules.csv"
 
 
@@ -183,11 +193,68 @@ def _previous_business_day(reference: date) -> date:
     return candidate
 
 
+def _parse_hours_value(value: str) -> Optional[Tuple[time, time]]:
+    if not value:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    upper = normalized.upper()
+    if upper in {"CLOSED", "CLOSE"}:
+        return None
+    if "24" in upper and "H" in upper:
+        return time(hour=0, minute=0), time(hour=23, minute=59)
+    match = re.search(r"(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})", normalized)
+    if not match:
+        return None
+    try:
+        start_time = datetime.strptime(match.group(1), "%H:%M").time()
+        end_time = datetime.strptime(match.group(2), "%H:%M").time()
+    except ValueError:
+        return None
+    if end_time <= start_time:
+        end_time = time(hour=23, minute=59)
+    return start_time, end_time
+
+
+def _rule_hours_for_weekday(rule: Optional[Mapping[str, Any]], weekday: int) -> Optional[Tuple[time, time]]:
+    if not isinstance(rule, Mapping):
+        return None
+    if weekday < 0 or weekday >= len(_DAY_KEYS):
+        return None
+    key = _DAY_KEYS[weekday]
+    if key not in rule:
+        return None
+    value = rule.get(key)
+    if value is None:
+        return None
+    value_str = str(value).strip()
+    if not value_str or value_str.upper() == "NAN":
+        return None
+    return _parse_hours_value(value_str)
+
+
+def _previous_operating_window(
+    event_local: datetime,
+    rule: Optional[Mapping[str, Any]],
+) -> Tuple[date, time, time]:
+    if isinstance(rule, Mapping):
+        for offset in range(1, 8):
+            candidate_date = event_local.date() - timedelta(days=offset)
+            hours = _rule_hours_for_weekday(rule, candidate_date.weekday())
+            if hours:
+                start_time, end_time = hours
+                return candidate_date, start_time, end_time
+    target_date = _previous_business_day(event_local.date())
+    return target_date, DEFAULT_BUSINESS_DAY_START, DEFAULT_BUSINESS_DAY_END
+
+
 def _compute_clearance_window(
     row: Mapping[str, Any],
     dep_airport: str,
     arr_airport: str,
     lookup: Dict[str, Dict[str, Optional[str]]],
+    rule: Optional[Mapping[str, Any]],
 ) -> Tuple[str, str, str, str]:
     event_candidates = (
         "arrivalTime",
@@ -225,18 +292,22 @@ def _compute_clearance_window(
     else:
         event_local = _to_local(event_dt, None)
 
-    target_date = _previous_business_day(event_local.date())
+    target_date, window_start_time, window_end_time = _previous_operating_window(
+        event_local,
+        rule,
+    )
+
     tzinfo = event_local.tzinfo or ZoneInfo("UTC")
 
-    start_local = datetime.combine(target_date, DEFAULT_BUSINESS_DAY_START).replace(tzinfo=tzinfo)
-    end_local = datetime.combine(target_date, DEFAULT_BUSINESS_DAY_END).replace(tzinfo=tzinfo)
+    start_local = datetime.combine(target_date, window_start_time, tzinfo=tzinfo)
+    end_local = datetime.combine(target_date, window_end_time, tzinfo=tzinfo)
 
     start_local_str = start_local.strftime("%Y-%m-%d %H:%M %Z")
     end_local_str = end_local.strftime("%Y-%m-%d %H:%M %Z")
     end_utc_str = end_local.astimezone(pytz.UTC).strftime("%Y-%m-%d %H:%M UTC")
     goal_summary = (
-        f"Complete during prior business day ({start_local.strftime('%b %d')} {DEFAULT_BUSINESS_DAY_START.strftime('%H:%M')}"
-        f"-{DEFAULT_BUSINESS_DAY_END.strftime('%H:%M')} local)."
+        f"Complete during prior operating window ({start_local.strftime('%b %d')} "
+        f"{window_start_time.strftime('%H:%M')}-{window_end_time.strftime('%H:%M')} local)."
     )
 
     return start_local_str, end_local_str, end_utc_str, goal_summary
@@ -566,7 +637,7 @@ for _, leg in customs_df.iterrows():
         clearance_end_local,
         _,
         clearance_goal,
-    ) = _compute_clearance_window(row, dep_airport, arr_airport, lookup)
+    ) = _compute_clearance_window(row, dep_airport, arr_airport, lookup, rule)
 
     rows.append(
         {
