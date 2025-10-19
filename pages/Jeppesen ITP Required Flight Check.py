@@ -106,6 +106,20 @@ _ALLOWED_COUNTRIES = {
 _ALLOWED_COUNTRIES.update(_CARIBBEAN_COUNTRIES)
 
 
+_CHUNK_SIZE_DAYS = 5
+
+
+def _iter_date_chunks(start: date, end: date, chunk_size: int) -> Iterable[Tuple[date, date]]:
+    if chunk_size <= 0:
+        raise ValueError("chunk_size must be positive")
+    current = start
+    delta = timedelta(days=chunk_size - 1)
+    while current <= end:
+        chunk_end = min(current + delta, end)
+        yield current, chunk_end
+        current = chunk_end + timedelta(days=1)
+
+
 def _normalize_country_name(name: Optional[str]) -> Optional[str]:
     if not name:
         return None
@@ -244,18 +258,61 @@ except Exception as exc:
     st.error(f"Error preparing FL3XX API configuration: {exc}")
     st.stop()
 
-with st.spinner("Fetching flights from FL3XX..."):
-    try:
-        legs_df, metadata, _ = fetch_legs_dataframe(
-            config,
-            from_date=start_date,
-            to_date=end_date,
-            departure_window=None,
-            fetch_crew=False,
+chunks = list(_iter_date_chunks(start_date, end_date, _CHUNK_SIZE_DAYS))
+progress_placeholder = st.empty()
+progress_bar = progress_placeholder.progress(0.0) if len(chunks) > 1 else None
+
+chunk_dataframes: List[pd.DataFrame] = []
+chunk_metadata: List[Dict[str, Any]] = []
+
+with st.spinner(f"Fetching flights from FL3XX in {_CHUNK_SIZE_DAYS}-day batches..."):
+    for idx, (chunk_start, chunk_end) in enumerate(chunks, start=1):
+        try:
+            chunk_df, chunk_meta, _ = fetch_legs_dataframe(
+                config,
+                from_date=chunk_start,
+                to_date=chunk_end,
+                departure_window=None,
+                fetch_crew=False,
+            )
+        except Exception as exc:
+            st.error(
+                "Error fetching data from FL3XX API for %s to %s: %s"
+                % (chunk_start.isoformat(), chunk_end.isoformat(), exc)
+            )
+            st.stop()
+
+        if not chunk_df.empty:
+            chunk_dataframes.append(chunk_df)
+
+        chunk_metadata.append(
+            {
+                "chunk_index": idx,
+                "request_range": {
+                    "from": chunk_start.isoformat(),
+                    "to": chunk_end.isoformat(),
+                },
+                "response": chunk_meta,
+            }
         )
-    except Exception as exc:
-        st.error(f"Error fetching data from FL3XX API: {exc}")
-        st.stop()
+
+        if progress_bar is not None:
+            progress_bar.progress(idx / len(chunks))
+
+if progress_bar is not None:
+    progress_placeholder.empty()
+
+if chunk_dataframes:
+    legs_df = pd.concat(chunk_dataframes, ignore_index=True)
+else:
+    legs_df = pd.DataFrame()
+
+metadata = {
+    "chunk_size_days": _CHUNK_SIZE_DAYS,
+    "chunk_count": len(chunks),
+    "total_rows": int(legs_df.shape[0]),
+    "chunks": chunk_metadata,
+}
 
 if legs_df.empty:
     st.success("No flights found in the selected window.")
