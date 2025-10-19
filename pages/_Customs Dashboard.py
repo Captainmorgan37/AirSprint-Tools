@@ -26,6 +26,7 @@ from fl3xx_api import fetch_flight_migration
 
 DEFAULT_BUSINESS_DAY_START = time(hour=9)
 DEFAULT_BUSINESS_DAY_END = time(hour=17)
+MOUNTAIN_TIMEZONE = ZoneInfo("America/Edmonton")
 
 _DAY_KEYS = (
     "open_mon",
@@ -255,7 +256,7 @@ def _compute_clearance_window(
     arr_airport: str,
     lookup: Dict[str, Dict[str, Optional[str]]],
     rule: Optional[Mapping[str, Any]],
-) -> Tuple[str, str, str, str]:
+) -> Tuple[Optional[datetime], Optional[datetime], str]:
     event_candidates = (
         "arrivalTime",
         "arrival_time",
@@ -278,7 +279,7 @@ def _compute_clearance_window(
             continue
 
     if event_dt is None:
-        return "", "", "", ""
+        return None, None, ""
 
     tz_name = _extract_airport_timezone(arr_airport, lookup) or _candidate_timezone_from_row(row)
     if not tz_name:
@@ -302,15 +303,12 @@ def _compute_clearance_window(
     start_local = datetime.combine(target_date, window_start_time, tzinfo=tzinfo)
     end_local = datetime.combine(target_date, window_end_time, tzinfo=tzinfo)
 
-    start_local_str = start_local.strftime("%Y-%m-%d %H:%M %Z")
-    end_local_str = end_local.strftime("%Y-%m-%d %H:%M %Z")
-    end_utc_str = end_local.astimezone(pytz.UTC).strftime("%Y-%m-%d %H:%M UTC")
     goal_summary = (
         f"Complete during prior operating window ({start_local.strftime('%b %d')} "
         f"{window_start_time.strftime('%H:%M')}-{window_end_time.strftime('%H:%M')} local)."
     )
 
-    return start_local_str, end_local_str, end_utc_str, goal_summary
+    return start_local, end_local, goal_summary
 
 
 @st.cache_data(show_spinner=False)
@@ -325,6 +323,15 @@ def _load_customs_rules(path: str) -> pd.DataFrame:
         return df
     df.columns = [str(col).strip() for col in df.columns]
     return df
+
+
+def _format_in_timezone(dt: Optional[datetime], tz: ZoneInfo) -> str:
+    if dt is None:
+        return ""
+    try:
+        return dt.astimezone(tz).strftime("%Y-%m-%d %H:%M %Z")
+    except Exception:
+        return dt.strftime("%Y-%m-%d %H:%M %Z")
 
 
 def _normalize_bool(value: Any) -> Optional[bool]:
@@ -583,15 +590,11 @@ for _, leg in customs_df.iterrows():
 
     rule = rules_lookup.get(arr_airport.upper()) if arr_airport else None
     lead_time_arrival = ""
-    lead_time_departure = ""
     hours_summary = ""
     after_hours = ""
     contacts = ""
-    rule_notes = ""
-    rule_source = ""
     if isinstance(rule, Mapping):
         lead_time_arrival = str(rule.get("lead_time_arrival_hours") or "").strip()
-        lead_time_departure = str(rule.get("lead_time_departure_hours") or "").strip()
         hours_summary = _format_hours_summary(rule)
         after_hours_bool = _normalize_bool(rule.get("after_hours_available"))
         if after_hours_bool is None and "after_hours_available" in rule:
@@ -599,8 +602,6 @@ for _, leg in customs_df.iterrows():
         elif after_hours_bool is not None:
             after_hours = "Yes" if after_hours_bool else "No"
         contacts = str(rule.get("contacts") or "").strip()
-        rule_notes = str(rule.get("notes") or "").strip()
-        rule_source = str(rule.get("source") or "").strip()
 
     flight_id = (
         row.get("flightId")
@@ -622,22 +623,27 @@ for _, leg in customs_df.iterrows():
     else:
         errors.append(f"Missing flight ID for tail {tail} departing {dep_utc}.")
 
-    arr_status, arr_by, arr_notes, arr_docs, arr_doc_names = _extract_migration_fields(
+    arr_status, arr_by, arr_notes, _arr_docs, arr_doc_names = _extract_migration_fields(
         migration_payload, "arrivalMigration"
     )
 
     clearance_note = ""
     if clearance_requirements and arr_airport:
         clearance_note = clearance_requirements.get(arr_airport.upper(), "")
-    if not clearance_note and rule_notes:
-        clearance_note = rule_notes
+    if not clearance_note and isinstance(rule, Mapping):
+        clearance_note = str(rule.get("notes") or "").strip()
+    if clearance_note:
+        arr_notes = arr_notes.strip()
+        if arr_notes:
+            arr_notes = f"{arr_notes} | {clearance_note}"
+        else:
+            arr_notes = clearance_note
 
-    (
-        clearance_start_local,
-        clearance_end_local,
-        _,
-        clearance_goal,
-    ) = _compute_clearance_window(row, dep_airport, arr_airport, lookup, rule)
+    clearance_start_dt, clearance_end_dt, clearance_goal = _compute_clearance_window(
+        row, dep_airport, arr_airport, lookup, rule
+    )
+    clearance_start_mt = _format_in_timezone(clearance_start_dt, MOUNTAIN_TIMEZONE)
+    clearance_end_mt = _format_in_timezone(clearance_end_dt, MOUNTAIN_TIMEZONE)
 
     rows.append(
         {
@@ -648,18 +654,14 @@ for _, leg in customs_df.iterrows():
             "Arrival Status": arr_status,
             "Arrival By": arr_by,
             "Arrival Notes": arr_notes,
-            "Arrival Documents": arr_docs,
             "Arrival Doc Names": arr_doc_names,
-            "Clearance Requirement": clearance_note,
-            "Clearance Target Start (Local)": clearance_start_local,
-            "Clearance Target End (Local)": clearance_end_local,
+            "Clearance Target Start (MT)": clearance_start_mt,
+            "Clearance Target End (MT)": clearance_end_mt,
             "Clearance Goal": clearance_goal,
             "Rule Lead Time Arrival (hrs)": lead_time_arrival,
-            "Rule Lead Time Departure (hrs)": lead_time_departure,
             "Rule Operating Hours": hours_summary,
             "Rule After Hours Available": after_hours,
             "Rule Contacts": contacts,
-            "Rule Source": rule_source,
         }
     )
 
