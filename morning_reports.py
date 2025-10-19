@@ -1282,10 +1282,9 @@ def _build_upgrade_flights_report(
 
             formatted = _format_report_row(row, include_tail=True)
             dep_dt = _extract_departure_dt(row)
-            date_component = (
-                dep_dt.date().isoformat()
-                if dep_dt
-                else formatted.get("date")
+            date_component = _format_mountain_date_component(
+                dep_dt,
+                formatted.get("date"),
             )
 
             tail = formatted.get("tail")

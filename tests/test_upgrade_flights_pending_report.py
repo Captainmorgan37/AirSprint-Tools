@@ -135,6 +135,27 @@ def test_includes_booking_note_and_requested_type():
     assert entry["line"].startswith("2024-08-10-C-GLXY-BOOK-1-Acme Corp-")
 
 
+def test_departure_date_normalized_to_mountain_time():
+    dep = dt.datetime(2024, 8, 20, 3, 30, tzinfo=dt.timezone.utc)
+    row = _leg(
+        dep=dep,
+        workflow="Owner Upgrade Request",
+        quote_id="Q-MTN",
+        booking="BOOK-MTN",
+    )
+
+    result = _build_upgrade_flights_report(
+        [row],
+        Fl3xxApiConfig(),
+        fetch_leg_details_fn=_stub_fetch({}),
+    )
+
+    assert len(result.rows) == 1
+    entry = result.rows[0]
+    assert entry["date"] == "2024-08-19"
+    assert entry["line"].startswith("2024-08-19-C-GLXY-BOOK-MTN-Acme Corp-")
+
+
 def test_missing_quote_id_includes_warning_and_row():
     dep = dt.datetime(2024, 9, 5, 9, 0)
     row = _leg(
