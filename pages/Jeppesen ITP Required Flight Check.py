@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 from datetime import date, datetime, timedelta
 from math import inf
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
@@ -226,6 +227,10 @@ if not generate_report:
 
 try:
     config = build_fl3xx_api_config(fl3xx_settings)
+    config = replace(
+        config,
+        extra_params={**config.extra_params, "timeZone": "UTC"},
+    )
 except FlightDataError as exc:
     st.error(str(exc))
     st.stop()
