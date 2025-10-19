@@ -89,7 +89,7 @@ def test_flags_legs_exceeding_thresholds():
     )
     assert entry["threshold_status"] == "Threshold exceeded"
     assert entry["threshold_breached"] is True
-    assert entry["threshold_reasons"] == ["Block time above limit"]
+    assert entry["threshold_reasons"] == ["Block time at or above limit"]
 
 
 def test_skips_within_threshold_requests():
@@ -132,6 +132,47 @@ def test_skips_within_threshold_requests():
     assert entry["threshold_status"] == "Within thresholds"
     assert entry["threshold_breached"] is False
     assert entry["threshold_reasons"] == []
+
+
+def test_flags_when_threshold_values_met():
+    dep = dt.datetime(2024, 6, 2, 12, 0)
+    row = _leg(
+        account="Owner Three",
+        tail="C-GCJ2",
+        dep=dep,
+        leg_id="L3",
+        quote_id="Q3",
+        flight_id="F300",
+        booking_identifier="B300",
+    )
+
+    payload_map = {
+        "Q3": [
+            {
+                "planningNotes": "Owner requesting CJ3",
+                "pax": 5,
+                "blockTime": 180,
+                "departureDateUTC": iso(dep),
+            }
+        ]
+    }
+
+    result = _build_cj3_owners_on_cj2_report(
+        [row],
+        Fl3xxApiConfig(),
+        fetch_leg_details_fn=_stub_fetch(payload_map),
+    )
+
+    assert result.metadata["flagged_candidates"] == 1
+    assert result.metadata["match_count"] == 1
+    assert len(result.rows) == 1
+    entry = result.rows[0]
+    assert entry["threshold_breached"] is True
+    assert entry["threshold_status"] == "Threshold exceeded"
+    assert entry["threshold_reasons"] == [
+        "Passenger count at or above limit",
+        "Block time at or above limit",
+    ]
 
 
 def test_ignores_cj2_requests():
