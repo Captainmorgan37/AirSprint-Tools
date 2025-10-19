@@ -191,6 +191,35 @@ def _format_local_time(row: Mapping[str, Any]) -> Tuple[str, str]:
     )
 
 
+def _format_time_to_clear(row: Mapping[str, Any], reference: datetime) -> str:
+    dt = row.get("_clearance_end_mt")
+    status = str(row.get("Arrival Status") or "").upper()
+
+    if status == "OK":
+        return "Cleared"
+    if not isinstance(dt, datetime):
+        return ""
+
+    delta = dt - reference
+    total_seconds = int(delta.total_seconds())
+    sign = "-" if total_seconds < 0 else ""
+    total_seconds = abs(total_seconds)
+
+    hours = total_seconds // 3600
+    minutes = (total_seconds % 3600) // 60
+
+    if hours == 0 and minutes == 0:
+        return "Now"
+
+    parts: List[str] = []
+    if hours:
+        parts.append(f"{hours}h")
+    if minutes or not parts:
+        parts.append(f"{minutes}m")
+
+    return f"{sign}{' '.join(parts)}"
+
+
 def _extract_airport_timezone(
     airport_code: str, lookup: Dict[str, Dict[str, Optional[str]]]
 ) -> Optional[str]:
@@ -337,8 +366,8 @@ def _compute_clearance_window(
     end_local = datetime.combine(target_date, window_end_time, tzinfo=tzinfo)
 
     goal_summary = (
-        f"Complete during prior operating window ({start_local.strftime('%b %d')} "
-        f"{window_start_time.strftime('%H:%M')}-{window_end_time.strftime('%H:%M')} local)."
+        f"Prior operating window: {start_local.strftime('%b %d')} "
+        f"{window_start_time.strftime('%H:%M')}-{window_end_time.strftime('%H:%M')} local."
     )
 
     return start_local, end_local, goal_summary
@@ -757,16 +786,25 @@ if not result_df.empty:
         ),
         axis=1,
     )
+    result_df["Time to Clear"] = result_df.apply(
+        lambda row: _format_time_to_clear(row, now_mt),
+        axis=1,
+    )
+
+    if "Arrival Status" in result_df.columns and "Time to Clear" in result_df.columns:
+        cols = list(result_df.columns)
+        cols.insert(
+            cols.index("Arrival Status") + 1,
+            cols.pop(cols.index("Time to Clear")),
+        )
+        result_df = result_df[cols]
+
     result_df.sort_values(
         by=["_status_priority", "_hours_until_clearance"],
         ascending=[True, False],
         na_position="last",
         inplace=True,
     )
-
-status_counts = (
-    result_df["Arrival Status"].value_counts().rename_axis("Arrival Status").reset_index(name="Legs")
-)
 
 col1, col2 = st.columns(2)
 with col1:
@@ -777,88 +815,90 @@ with col2:
         int((result_df["Arrival Status"] != "OK").sum()),
     )
 
-summary_tab, table_tab = st.tabs(["Status summary", "Detailed view"])
-with summary_tab:
-    st.subheader("Arrival status distribution")
-    st.dataframe(status_counts, use_container_width=True)
+base_drop_cols = [
+    col
+    for col in (
+        "Arrival Doc Names",
+        "_clearance_start_dt",
+        "_clearance_end_dt",
+        "_clearance_end_mt",
+        "_hours_until_clearance",
+        "_status_priority",
+        "_urgency_category",
+    )
+    if col in result_df.columns
+]
 
-with table_tab:
-    base_drop_cols = [
-        col
-        for col in (
-            "Arrival Doc Names",
-            "_clearance_start_dt",
-            "_clearance_end_dt",
-            "_clearance_end_mt",
-            "_hours_until_clearance",
-            "_status_priority",
-            "_urgency_category",
-        )
-        if col in result_df.columns
-    ]
+if "Arrival By" in result_df.columns:
+    base_drop_cols.append("Arrival By")
 
-    if "Arrival By" in result_df.columns:
-        base_drop_cols.append("Arrival By")
+show_arrival_notes = st.checkbox(
+    "Show arrival notes column",
+    value=False,
+    help="Toggle to include the Arrival Notes column in the table.",
+)
 
-    show_arrival_notes = st.checkbox(
-        "Show arrival notes column",
-        value=False,
-        help="Toggle to include the Arrival Notes column in the table.",
+drop_cols = list(base_drop_cols)
+if not show_arrival_notes and "Arrival Notes" in result_df.columns:
+    drop_cols.append("Arrival Notes")
+
+display_df = result_df.drop(columns=drop_cols)
+
+if "Arrival Status" in display_df.columns and "Time to Clear" in display_df.columns:
+    display_cols = list(display_df.columns)
+    display_cols.insert(
+        display_cols.index("Arrival Status") + 1,
+        display_cols.pop(display_cols.index("Time to Clear")),
+    )
+    display_df = display_df[display_cols]
+
+if "_urgency_category" in result_df.columns:
+    style_lookup = (
+        result_df["_urgency_category"].apply(lambda cat: URGENCY_STYLES.get(cat)).to_dict()
     )
 
-    drop_cols = list(base_drop_cols)
-    if not show_arrival_notes and "Arrival Notes" in result_df.columns:
-        drop_cols.append("Arrival Notes")
+    def _style_row(row: pd.Series) -> List[str]:
+        styles = style_lookup.get(row.name)
+        if not isinstance(styles, Mapping):
+            return [""] * len(row)
+        css_parts: List[str] = []
+        background = styles.get("background")
+        border = styles.get("border")
+        text = styles.get("text")
+        if background:
+            css_parts.append(f"background-color: {background}")
+        if border:
+            css_parts.append(f"border-left: 4px solid {border}")
+        if not css_parts:
+            return [""] * len(row)
+        if text:
+            css_parts.append(f"color: {text}")
+        else:
+            css_parts.append("color: inherit")
+        css_parts.append("font-weight: 600")
+        css = "; ".join(css_parts)
+        return [css] * len(row)
 
-    display_df = result_df.drop(columns=drop_cols)
-
-    if "_urgency_category" in result_df.columns:
-        style_lookup = (
-            result_df["_urgency_category"].apply(lambda cat: URGENCY_STYLES.get(cat)).to_dict()
-        )
-
-        def _style_row(row: pd.Series) -> List[str]:
-            styles = style_lookup.get(row.name)
-            if not isinstance(styles, Mapping):
-                return [""] * len(row)
-            css_parts: List[str] = []
-            background = styles.get("background")
-            border = styles.get("border")
-            text = styles.get("text")
-            if background:
-                css_parts.append(f"background-color: {background}")
-            if border:
-                css_parts.append(f"border-left: 4px solid {border}")
-            if not css_parts:
-                return [""] * len(row)
-            if text:
-                css_parts.append(f"color: {text}")
-            else:
-                css_parts.append("color: inherit")
-            css_parts.append("font-weight: 600")
-            css = "; ".join(css_parts)
-            return [css] * len(row)
-
-        styler = display_df.style.apply(_style_row, axis=1)
-        st.dataframe(styler, use_container_width=True)
-    else:
-        st.dataframe(display_df, use_container_width=True)
-    st.caption(
-        "Clearance goals assume completion during the prior business day between %s and %s local time."
-        % (
-            DEFAULT_BUSINESS_DAY_START.strftime("%H:%M"),
-            DEFAULT_BUSINESS_DAY_END.strftime("%H:%M"),
-        )
+    styler = display_df.style.apply(_style_row, axis=1)
+    st.dataframe(styler, use_container_width=True)
+else:
+    st.dataframe(display_df, use_container_width=True)
+st.caption(
+    "Clearance goals assume completion during the prior business day between %s and %s local time."
+    % (
+        DEFAULT_BUSINESS_DAY_START.strftime("%H:%M"),
+        DEFAULT_BUSINESS_DAY_END.strftime("%H:%M"),
     )
-    if not result_df.empty:
-        csv_buffer = io.StringIO()
-        result_df.to_csv(csv_buffer, index=False)
-        st.download_button(
-            "Download CSV",
-            data=csv_buffer.getvalue().encode("utf-8"),
-            file_name="customs_dashboard.csv",
-            mime="text/csv",
-        )
+)
+if not result_df.empty:
+    csv_buffer = io.StringIO()
+    result_df.to_csv(csv_buffer, index=False)
+    st.download_button(
+        "Download CSV",
+        data=csv_buffer.getvalue().encode("utf-8"),
+        file_name="customs_dashboard.csv",
+        mime="text/csv",
+    )
 
 if clearance_requirements:
     st.info(
