@@ -23,6 +23,32 @@ The enhancement plan is sequenced into four workstreams. Each stream can be deve
 
 ### 1. Rules Data Model & Ingestion
 1. Define and publish the `customs_rules` sheet with the columns suggested in the concept brief (airport, lead times, open hours, flags, contacts, notes, updated_at).
+
+   #### Current Google Sheet columns
+
+   | Column | Purpose / Notes | Example values from seed sheet |
+   | --- | --- | --- |
+   | `airport_icao` | Four-letter ICAO identifier that keys each record. | `CYTZ`, `CYYZ`, `KBOS` |
+   | `airport_iata` | Three-letter IATA shorthand used in other ops tooling. | `YTZ`, `YYZ`, `BOS` |
+   | `country` | Country code so we can branch CBSA vs. CBP handling. | `CA`, `US` |
+   | `agency_service` | Agency providing service at the port. | `CBSA`, `CBP` |
+   | `service_type` | Service classification for the port (e.g., AOE, AOE/15, AOE/CANPASS, US). | `AOE`, `AOE/15`, `AOE/CANPASS`, `US` |
+   | `lead_time_arrival_hours` | Minimum filing lead time before an arrival in hours. | `2`, `4`, `8` |
+   | `lead_time_departure_hours` | Minimum filing lead time before a departure in hours. | `2`, `4` |
+   | `hours_open_mon` | Published operating window for Mondays (24h, ranges, or `CLOSED`). | `24h`, `0600-2200`, `CLOSED` |
+   | `hours_open_tue` | Same pattern as Monday for Tuesday coverage. | `24h`, `0600-2200`, `CLOSED` |
+   | `hours_open_wed` | Same pattern as Monday for Wednesday coverage. | `24h`, `0600-2200`, `CLOSED` |
+   | `hours_open_thu` | Same pattern as Monday for Thursday coverage. | `24h`, `0600-2200`, `CLOSED` |
+   | `hours_open_fri` | Same pattern as Monday for Friday coverage. | `24h`, `0600-2200`, `CLOSED` |
+   | `hours_open_sat` | Same pattern as Monday for Saturday coverage. | `24h`, `0600-2000`, `CLOSED` |
+   | `hours_open_sun` | Same pattern as Monday for Sunday coverage. | `24h`, `0600-2000`, `CLOSED` |
+   | `open_after_hours` | Checkbox that flags whether the port physically opens outside the published hours. | `TRUE`, `FALSE` |
+   | `after_hours_available` | Checkbox that indicates whether after-hours coverage can actually be requested. | `TRUE`, `FALSE` |
+   | `canpass_only` | Flag noting ports restricted to CANPASS-only processing. | `TRUE`, `FALSE` |
+   | `contacts` | Contact instructions when the port has CANPASS-only or special handling (phones, emails, FBO). | `1-888-226-7277`, `ops@fbo.com` |
+   | `notes` | Free-form operational notes (e.g., “CBSA email required to confirm after hours”). | `“CBSA email after hours to confirm availability.”` |
+   | `source` | Where the rule originated so we can audit it later. | `YBdocs`, `Ops call` |
+   | `entered` | Who last updated the record in the sheet. | `YBdocs`, `ND` |
 2. Implement a loader utility to read the sheet/CSV (support both uploaded file and hosted URL/Google Sheet via secrets). Cache parsed results and expose diagnostics for missing/invalid records.
 3. Parse open-hour strings into per-day intervals and ingest optional holiday calendars (either airport-specific sheet or jurisdiction-based lookup).
 4. Extend the dashboard sidebar to show rule source summary (last refreshed, record count, warning badges for missing critical fields).
