@@ -255,7 +255,7 @@ def _compute_clearance_window(
     arr_airport: str,
     lookup: Dict[str, Dict[str, Optional[str]]],
     rule: Optional[Mapping[str, Any]],
-) -> Tuple[str, str, str, str]:
+) -> Tuple[str, str, str, str, Optional[datetime]]:
     event_candidates = (
         "arrivalTime",
         "arrival_time",
@@ -310,7 +310,48 @@ def _compute_clearance_window(
         f"{window_start_time.strftime('%H:%M')}-{window_end_time.strftime('%H:%M')} local)."
     )
 
-    return start_local_str, end_local_str, end_utc_str, goal_summary
+    return start_local_str, end_local_str, end_utc_str, goal_summary, end_local
+
+
+def _determine_row_background(row: Mapping[str, Any], reference_utc: datetime) -> str:
+    status = str(row.get("Arrival Status") or "").upper()
+    if status == "OK":
+        return "#d3f9d8"  # light green for cleared legs
+
+    due_utc_value = row.get("_clearance_end_utc_dt")
+    due_local_value = row.get("_clearance_end_local_dt")
+
+    if isinstance(due_utc_value, pd.Timestamp):
+        due_utc_dt = due_utc_value.to_pydatetime()
+    elif isinstance(due_utc_value, datetime):
+        due_utc_dt = due_utc_value
+    else:
+        due_utc_dt = None
+
+    if isinstance(due_local_value, pd.Timestamp):
+        due_local_dt = due_local_value.to_pydatetime()
+    elif isinstance(due_local_value, datetime):
+        due_local_dt = due_local_value
+    else:
+        due_local_dt = None
+
+    if due_utc_dt is None:
+        return ""
+
+    delta_hours = (due_utc_dt - reference_utc).total_seconds() / 3600.0
+    if delta_hours <= 2:
+        return "#ffa8a8"  # red
+    if delta_hours <= 5:
+        return "#ffd8a8"  # orange
+
+    if due_local_dt and due_local_dt.tzinfo:
+        now_local = reference_utc.astimezone(due_local_dt.tzinfo)
+        if due_local_dt.date() == now_local.date():
+            return "#fff3bf"  # yellow for due today
+    elif due_utc_dt.date() == reference_utc.date():
+        return "#fff3bf"
+
+    return ""
 
 
 @st.cache_data(show_spinner=False)
@@ -635,9 +676,15 @@ for _, leg in customs_df.iterrows():
     (
         clearance_start_local,
         clearance_end_local,
-        _,
+        clearance_end_utc,
         clearance_goal,
+        clearance_end_local_dt,
     ) = _compute_clearance_window(row, dep_airport, arr_airport, lookup, rule)
+
+    if isinstance(clearance_end_local_dt, datetime):
+        clearance_end_utc_dt: Optional[datetime] = clearance_end_local_dt.astimezone(pytz.UTC)
+    else:
+        clearance_end_utc_dt = None
 
     rows.append(
         {
@@ -653,6 +700,7 @@ for _, leg in customs_df.iterrows():
             "Clearance Requirement": clearance_note,
             "Clearance Target Start (Local)": clearance_start_local,
             "Clearance Target End (Local)": clearance_end_local,
+            "Clearance Target End (UTC)": clearance_end_utc,
             "Clearance Goal": clearance_goal,
             "Rule Lead Time Arrival (hrs)": lead_time_arrival,
             "Rule Lead Time Departure (hrs)": lead_time_departure,
@@ -660,10 +708,20 @@ for _, leg in customs_df.iterrows():
             "Rule After Hours Available": after_hours,
             "Rule Contacts": contacts,
             "Rule Source": rule_source,
+            "_clearance_end_local_dt": clearance_end_local_dt,
+            "_clearance_end_utc_dt": clearance_end_utc_dt,
         }
     )
 
 result_df = pd.DataFrame(rows)
+
+if not result_df.empty:
+    reference_utc = datetime.now(pytz.UTC)
+    row_backgrounds = result_df.apply(
+        lambda df_row: _determine_row_background(df_row, reference_utc), axis=1
+    )
+else:
+    row_backgrounds = pd.Series(dtype="object")
 
 status_counts = (
     result_df["Arrival Status"].value_counts().rename_axis("Arrival Status").reset_index(name="Legs")
@@ -684,8 +742,25 @@ with summary_tab:
     st.dataframe(status_counts, use_container_width=True)
 
 with table_tab:
-    drop_cols = [col for col in ("Arrival Doc Names",) if col in result_df.columns]
-    st.dataframe(result_df.drop(columns=drop_cols), use_container_width=True)
+    display_drop_cols = [
+        col
+        for col in (
+            "Arrival Doc Names",
+            "_clearance_end_local_dt",
+            "_clearance_end_utc_dt",
+        )
+        if col in result_df.columns
+    ]
+    display_df = result_df.drop(columns=display_drop_cols)
+
+    def _style_row(row: pd.Series) -> List[str]:
+        color = row_backgrounds.get(row.name, "")
+        if color:
+            return [f"background-color: {color}"] * len(row)
+        return [""] * len(row)
+
+    styled_df = display_df.style.apply(_style_row, axis=1)
+    st.dataframe(styled_df, use_container_width=True)
     st.caption(
         "Clearance goals assume completion during the prior business day between %s and %s local time."
         % (
@@ -695,7 +770,15 @@ with table_tab:
     )
     if not result_df.empty:
         csv_buffer = io.StringIO()
-        result_df.to_csv(csv_buffer, index=False)
+        export_drop_cols = [
+            col
+            for col in (
+                "_clearance_end_local_dt",
+                "_clearance_end_utc_dt",
+            )
+            if col in result_df.columns
+        ]
+        result_df.drop(columns=export_drop_cols).to_csv(csv_buffer, index=False)
         st.download_button(
             "Download CSV",
             data=csv_buffer.getvalue().encode("utf-8"),
