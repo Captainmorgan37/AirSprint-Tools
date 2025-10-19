@@ -1,6 +1,7 @@
 import io
 from collections.abc import Mapping
 from datetime import date, datetime, time, timedelta
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -24,6 +25,8 @@ from fl3xx_api import fetch_flight_migration
 
 DEFAULT_BUSINESS_DAY_START = time(hour=9)
 DEFAULT_BUSINESS_DAY_END = time(hour=17)
+
+CUSTOMS_RULES_PATH = Path(__file__).resolve().parent.parent / "customs_rules.csv"
 
 
 st.set_page_config(page_title="Customs Dashboard", layout="wide")
@@ -208,6 +211,58 @@ def _compute_clearance_window(
     return start_local_str, end_local_str, end_utc_str, goal_summary
 
 
+@st.cache_data(show_spinner=False)
+def _load_customs_rules(path: str) -> pd.DataFrame:
+    try:
+        df = pd.read_csv(path)
+    except FileNotFoundError:
+        return pd.DataFrame()
+    except Exception:
+        raise
+    if df.empty:
+        return df
+    df.columns = [str(col).strip() for col in df.columns]
+    return df
+
+
+def _normalize_bool(value: Any) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "t", "yes", "y", "1"}:
+            return True
+        if normalized in {"false", "f", "no", "n", "0"}:
+            return False
+    return None
+
+
+def _format_hours_summary(rule: Mapping[str, Any]) -> str:
+    days = (
+        ("Mon", "open_mon"),
+        ("Tue", "open_tue"),
+        ("Wed", "open_wed"),
+        ("Thu", "open_thu"),
+        ("Fri", "open_fri"),
+        ("Sat", "open_sat"),
+        ("Sun", "open_sun"),
+    )
+    segments: List[str] = []
+    for label, key in days:
+        value = rule.get(key)
+        if value is None:
+            continue
+        value_str = str(value).strip()
+        if not value_str or value_str.upper() == "NAN":
+            continue
+        segments.append(f"{label}: {value_str}")
+    return "; ".join(segments)
+
+
 st.sidebar.header("Configuration")
 
 fl3xx_cfg: Dict[str, Any] = {}
@@ -244,47 +299,94 @@ st.sidebar.write(
 )
 
 clearance_file = st.sidebar.file_uploader(
-    "Optional: Upload clearance requirements (CSV or Excel)",
+    "Optional: Upload customs rules (CSV or Excel)",
     type=["csv", "xls", "xlsx"],
-    help="Provide airport-specific clearance lead times or notes to display alongside each leg.",
+    help="Provide airport-specific customs lead times or notes to display alongside each leg.",
 )
 
-clearance_requirements: Dict[str, str] = {}
+customs_rules_df = pd.DataFrame()
+customs_rules_note = ""
+
+if CUSTOMS_RULES_PATH.exists():
+    try:
+        customs_rules_df = _load_customs_rules(str(CUSTOMS_RULES_PATH))
+    except Exception as exc:  # pragma: no cover - defensive
+        st.sidebar.error(f"Error loading bundled customs rules: {exc}")
+    else:
+        if customs_rules_df.empty:
+            st.sidebar.warning(
+                f"Bundled customs rules file `{CUSTOMS_RULES_PATH.name}` is empty."
+            )
+        else:
+            customs_rules_note = f"Loaded default rules from `{CUSTOMS_RULES_PATH.name}`."
+else:
+    st.sidebar.info(
+        "Add a `customs_rules.csv` file to load default customs lead times and operating hours."
+    )
+
 if clearance_file is not None:
     try:
         if clearance_file.name.lower().endswith(".csv"):
-            clearance_df = pd.read_csv(clearance_file)
+            uploaded_df = pd.read_csv(clearance_file)
         else:
-            clearance_df = pd.read_excel(clearance_file)
+            uploaded_df = pd.read_excel(clearance_file)
     except Exception as exc:
-        st.sidebar.error(f"Unable to read clearance reference: {exc}")
+        st.sidebar.error(f"Unable to read uploaded customs rules: {exc}")
     else:
-        if clearance_df.empty:
-            st.sidebar.warning("Uploaded clearance reference is empty.")
+        if uploaded_df.empty:
+            st.sidebar.warning("Uploaded customs rules sheet is empty.")
         else:
-            code_candidates = [
-                col
-                for col in clearance_df.columns
-                if any(token in str(col).lower() for token in ("airport", "icao", "port"))
-            ]
-            if not code_candidates:
-                code_candidates = [clearance_df.columns[0]]
-            value_candidates = [col for col in clearance_df.columns if col not in code_candidates]
-            if not value_candidates:
-                value_candidates = [clearance_df.columns[-1]]
-            code_col = code_candidates[0]
-            value_col = value_candidates[0]
-            for _, rec in clearance_df.iterrows():
-                code = str(rec.get(code_col) or "").strip().upper()
-                if not code:
-                    continue
-                requirement = str(rec.get(value_col) or "").strip()
-                clearance_requirements[code] = requirement
-            with st.sidebar.expander("Preview clearance reference", expanded=False):
-                st.dataframe(clearance_df)
-                st.caption(
-                    f"Using `{code_col}` for airport code and `{value_col}` for requirement."
-                )
+            customs_rules_df = uploaded_df.copy()
+            customs_rules_note = f"Using uploaded rules file `{clearance_file.name}`."
+            st.sidebar.success("Customs rules overridden by uploaded sheet.")
+            with st.sidebar.expander("Preview uploaded rules", expanded=False):
+                st.dataframe(uploaded_df)
+
+if customs_rules_note:
+    st.sidebar.caption(customs_rules_note)
+
+clearance_requirements: Dict[str, str] = {}
+rules_lookup: Dict[str, Mapping[str, Any]] = {}
+
+if not customs_rules_df.empty:
+    normalized_country_col = None
+    if "country" in customs_rules_df.columns:
+        normalized_country_col = "country"
+    elif "Country" in customs_rules_df.columns:
+        normalized_country_col = "Country"
+
+    for _, rec in customs_rules_df.iterrows():
+        code = str(rec.get("airport_icao") or rec.get("Airport_icao") or rec.get("airport") or "").strip().upper()
+        if not code:
+            continue
+        rules_lookup[code] = rec.to_dict()
+        if "notes" in rec and isinstance(rec["notes"], str):
+            clearance_requirements[code] = rec["notes"].strip()
+
+    us_rules = customs_rules_df
+    if normalized_country_col is not None:
+        us_mask = customs_rules_df[normalized_country_col].astype(str).str.upper() == "US"
+        us_rules = customs_rules_df.loc[us_mask]
+    st.sidebar.success(f"Customs rules loaded: {len(us_rules)} US ports, {len(customs_rules_df)} total records.")
+    with st.sidebar.expander("US customs rules preview", expanded=False):
+        preview_cols = [
+            col
+            for col in (
+                "airport_icao",
+                "lead_time_arrival_hours",
+                "lead_time_departure_hours",
+                "open_mon",
+                "open_tue",
+                "open_wed",
+                "open_thu",
+                "open_fri",
+                "after_hours_available",
+                "notes",
+            )
+            if col in us_rules.columns
+        ]
+        st.dataframe(us_rules[preview_cols])
+
 
 fetch_button = st.button("Load customs legs", type="primary")
 
@@ -368,6 +470,27 @@ for _, leg in customs_df.iterrows():
     arr_airport = _detect_airport_value(row, ARRIVAL_AIRPORT_COLUMNS)
     dep_utc, dep_local = _format_local_time(row)
 
+    rule = rules_lookup.get(arr_airport.upper()) if arr_airport else None
+    lead_time_arrival = ""
+    lead_time_departure = ""
+    hours_summary = ""
+    after_hours = ""
+    contacts = ""
+    rule_notes = ""
+    rule_source = ""
+    if isinstance(rule, Mapping):
+        lead_time_arrival = str(rule.get("lead_time_arrival_hours") or "").strip()
+        lead_time_departure = str(rule.get("lead_time_departure_hours") or "").strip()
+        hours_summary = _format_hours_summary(rule)
+        after_hours_bool = _normalize_bool(rule.get("after_hours_available"))
+        if after_hours_bool is None and "after_hours_available" in rule:
+            after_hours = str(rule.get("after_hours_available") or "").strip()
+        elif after_hours_bool is not None:
+            after_hours = "Yes" if after_hours_bool else "No"
+        contacts = str(rule.get("contacts") or "").strip()
+        rule_notes = str(rule.get("notes") or "").strip()
+        rule_source = str(rule.get("source") or "").strip()
+
     flight_id = (
         row.get("flightId")
         or row.get("flight_id")
@@ -395,6 +518,8 @@ for _, leg in customs_df.iterrows():
     clearance_note = ""
     if clearance_requirements and arr_airport:
         clearance_note = clearance_requirements.get(arr_airport.upper(), "")
+    if not clearance_note and rule_notes:
+        clearance_note = rule_notes
 
     (
         clearance_start_local,
@@ -420,6 +545,12 @@ for _, leg in customs_df.iterrows():
             "Clearance Target End (Local)": clearance_end_local,
             "Clearance Target End (UTC)": clearance_end_utc,
             "Clearance Goal": clearance_goal,
+            "Rule Lead Time Arrival (hrs)": lead_time_arrival,
+            "Rule Lead Time Departure (hrs)": lead_time_departure,
+            "Rule Operating Hours": hours_summary,
+            "Rule After Hours Available": after_hours,
+            "Rule Contacts": contacts,
+            "Rule Source": rule_source,
         }
     )
 
