@@ -20,6 +20,7 @@ from flight_leg_utils import (
     load_airport_metadata_lookup,
     safe_parse_dt,
 )
+from jeppesen_itp_utils import ALLOWED_COUNTRY_IDENTIFIERS, normalize_country_name
 
 
 st.set_page_config(page_title="Jeppesen ITP Required Flight Check", layout="wide")
@@ -52,59 +53,6 @@ def _load_fl3xx_settings() -> Dict[str, Any]:
     return settings
 
 
-# The Caribbean list intentionally includes common variants that appear in airport metadata.
-_CARIBBEAN_COUNTRIES = {
-    "anguilla",
-    "antigua and barbuda",
-    "aruba",
-    "bahamas",
-    "bahamas, the",
-    "barbados",
-    "bermuda",
-    "bonaire",
-    "british virgin islands",
-    "cayman islands",
-    "cuba",
-    "curacao",
-    "dominica",
-    "dominican republic",
-    "french guiana",
-    "grenada",
-    "guadeloupe",
-    "haiti",
-    "jamaica",
-    "martinique",
-    "montserrat",
-    "puerto rico",
-    "saba",
-    "saint barthelemy",
-    "saint kitts and nevis",
-    "saint lucia",
-    "saint martin",
-    "saint vincent and the grenadines",
-    "sint eustatius",
-    "sint maarten",
-    "st. barthelemy",
-    "st. kitts and nevis",
-    "st. lucia",
-    "st. martin",
-    "st. vincent and the grenadines",
-    "trinidad and tobago",
-    "turks and caicos islands",
-    "u.s. virgin islands",
-    "united states virgin islands",
-    "virgin islands",
-}
-
-_ALLOWED_COUNTRIES = {
-    "canada",
-    "mexico",
-    "united states",
-    "united states of america",
-    "usa",
-}
-_ALLOWED_COUNTRIES.update(_CARIBBEAN_COUNTRIES)
-
 
 _CHUNK_SIZE_DAYS = 5
 
@@ -121,10 +69,7 @@ def _iter_date_chunks(start: date, end: date, chunk_size: int) -> Iterable[Tuple
 
 
 def _normalize_country_name(name: Optional[str]) -> Optional[str]:
-    if not name:
-        return None
-    text = str(name).strip().lower()
-    return text or None
+    return normalize_country_name(name)
 
 
 _CODE_PATTERN = re.compile(r"\b[A-Za-z0-9]{3,4}\b")
@@ -350,11 +295,11 @@ for idx, (_, leg) in enumerate(legs_df.iterrows()):
     triggered_countries: List[str] = []
 
     dep_normalized = _normalize_country_name(dep_country)
-    if dep_normalized and dep_normalized not in _ALLOWED_COUNTRIES:
+    if dep_normalized and dep_normalized not in ALLOWED_COUNTRY_IDENTIFIERS:
         triggered_countries.append(dep_country or dep_normalized.title())
 
     arr_normalized = _normalize_country_name(arr_country)
-    if arr_normalized and arr_normalized not in _ALLOWED_COUNTRIES:
+    if arr_normalized and arr_normalized not in ALLOWED_COUNTRY_IDENTIFIERS:
         triggered_countries.append(arr_country or arr_normalized.title())
 
     if not triggered_countries:
