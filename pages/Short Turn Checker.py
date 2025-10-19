@@ -1095,12 +1095,41 @@ if not legs_df.empty:
                 "arr_onblock", ascending=True, kind="mergesort"
             )
         column_order = [col for col in desired_order if col in display_short_df.columns]
-        st.dataframe(
-            display_short_df,
-            use_container_width=True,
-            hide_index=True,
-            column_config=col_config,
-            column_order=column_order if column_order else None,
+
+        if "priority_flag" in display_short_df.columns:
+            priority_mask = (
+                display_short_df["priority_flag"].fillna(False).astype(bool)
+            )
+        else:
+            priority_mask = pd.Series(
+                False, index=display_short_df.index, dtype="bool"
+            )
+
+        regular_short_df = display_short_df[~priority_mask]
+        priority_short_df = display_short_df[priority_mask]
+
+        def _render_short_turn_table(df: pd.DataFrame, title: str, empty_message: str) -> None:
+            st.markdown(f"#### {title}")
+            if df.empty:
+                st.info(empty_message)
+                return
+            st.dataframe(
+                df,
+                use_container_width=True,
+                hide_index=True,
+                column_config=col_config,
+                column_order=column_order if column_order else None,
+            )
+
+        _render_short_turn_table(
+            regular_short_df,
+            "Regular short turns",
+            "No standard short turns were found for the selected window.",
+        )
+        _render_short_turn_table(
+            priority_short_df,
+            "Priority short turns",
+            "No priority short turns were found for the selected window.",
         )
 
         # Download
