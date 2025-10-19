@@ -388,9 +388,6 @@ for _, leg in customs_df.iterrows():
     else:
         errors.append(f"Missing flight ID for tail {tail} departing {dep_utc}.")
 
-    dep_status, dep_by, dep_notes, dep_docs, dep_doc_names = _extract_migration_fields(
-        migration_payload, "departureMigration"
-    )
     arr_status, arr_by, arr_notes, arr_docs, arr_doc_names = _extract_migration_fields(
         migration_payload, "arrivalMigration"
     )
@@ -413,16 +410,11 @@ for _, leg in customs_df.iterrows():
             "Arrival": arr_airport,
             "Departure UTC": dep_utc,
             "Departure Local": dep_local,
-            "Departure Status": dep_status,
-            "Departure By": dep_by,
-            "Departure Notes": dep_notes,
-            "Departure Documents": dep_docs,
             "Arrival Status": arr_status,
             "Arrival By": arr_by,
             "Arrival Notes": arr_notes,
             "Arrival Documents": arr_docs,
             "Arrival Doc Names": arr_doc_names,
-            "Departure Doc Names": dep_doc_names,
             "Clearance Requirement": clearance_note,
             "Clearance Target Start (Local)": clearance_start_local,
             "Clearance Target End (Local)": clearance_end_local,
@@ -436,28 +428,24 @@ result_df = pd.DataFrame(rows)
 status_counts = (
     result_df["Arrival Status"].value_counts().rename_axis("Arrival Status").reset_index(name="Legs")
 )
-status_counts_dep = (
-    result_df["Departure Status"].value_counts().rename_axis("Departure Status").reset_index(name="Legs")
-)
 
 col1, col2 = st.columns(2)
 with col1:
     st.metric("Customs legs", result_df.shape[0])
 with col2:
     st.metric(
-        "Pending departures",
-        int((result_df["Departure Status"] != "OK").sum()),
+        "Pending arrivals",
+        int((result_df["Arrival Status"] != "OK").sum()),
     )
 
 summary_tab, table_tab = st.tabs(["Status summary", "Detailed view"])
 with summary_tab:
-    st.subheader("Departure status distribution")
-    st.dataframe(status_counts_dep, use_container_width=True)
     st.subheader("Arrival status distribution")
     st.dataframe(status_counts, use_container_width=True)
 
 with table_tab:
-    st.dataframe(result_df.drop(columns=["Departure Doc Names", "Arrival Doc Names"]), use_container_width=True)
+    drop_cols = [col for col in ("Arrival Doc Names",) if col in result_df.columns]
+    st.dataframe(result_df.drop(columns=drop_cols), use_container_width=True)
     st.caption(
         "Clearance goals assume completion during the prior business day between %s and %s local time."
         % (
