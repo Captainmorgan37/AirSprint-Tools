@@ -1,6 +1,6 @@
 import io
 from collections.abc import Mapping
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -20,6 +20,10 @@ from flight_leg_utils import (
     safe_parse_dt,
 )
 from fl3xx_api import fetch_flight_migration
+
+
+DEFAULT_BUSINESS_DAY_START = time(hour=9)
+DEFAULT_BUSINESS_DAY_END = time(hour=17)
 
 
 st.set_page_config(page_title="Customs Dashboard", layout="wide")
@@ -107,6 +111,101 @@ def _format_local_time(row: Mapping[str, Any]) -> Tuple[str, str]:
         dt.astimezone(pytz.UTC).strftime("%Y-%m-%d %H:%M UTC"),
         dt_local.strftime("%Y-%m-%d %H:%M %Z"),
     )
+
+
+def _extract_airport_timezone(
+    airport_code: str, lookup: Dict[str, Dict[str, Optional[str]]]
+) -> Optional[str]:
+    if not airport_code:
+        return None
+    record = lookup.get(airport_code)
+    if not isinstance(record, Mapping):
+        return None
+    tz_value = record.get("tz")
+    if isinstance(tz_value, str) and tz_value.strip():
+        return tz_value.strip()
+    return None
+
+
+def _candidate_timezone_from_row(row: Mapping[str, Any]) -> Optional[str]:
+    timezone_keys = (
+        "arrivalTimeZone",
+        "arrival_tz",
+        "arr_tz",
+        "dep_tz",
+        "departureTimeZone",
+    )
+    for key in timezone_keys:
+        value = row.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _previous_business_day(reference: date) -> date:
+    candidate = reference - timedelta(days=1)
+    while candidate.weekday() >= 5:  # 5=Saturday, 6=Sunday
+        candidate -= timedelta(days=1)
+    return candidate
+
+
+def _compute_clearance_window(
+    row: Mapping[str, Any],
+    dep_airport: str,
+    arr_airport: str,
+    lookup: Dict[str, Dict[str, Optional[str]]],
+) -> Tuple[str, str, str, str]:
+    event_candidates = (
+        "arrivalTime",
+        "arrival_time",
+        "arr_time",
+        "eta",
+        "sta",
+        "scheduledArrival",
+        "dep_time",
+        "departureTime",
+    )
+    event_dt: Optional[datetime] = None
+    for key in event_candidates:
+        raw_value = row.get(key)
+        if not raw_value:
+            continue
+        try:
+            event_dt = safe_parse_dt(str(raw_value))
+            break
+        except Exception:
+            continue
+
+    if event_dt is None:
+        return "", "", "", ""
+
+    tz_name = _extract_airport_timezone(arr_airport, lookup) or _candidate_timezone_from_row(row)
+    if not tz_name:
+        tz_name = _extract_airport_timezone(dep_airport, lookup)
+
+    if tz_name:
+        try:
+            event_local = event_dt.astimezone(ZoneInfo(tz_name))
+        except Exception:
+            event_local = _to_local(event_dt, None)
+    else:
+        event_local = _to_local(event_dt, None)
+
+    target_date = _previous_business_day(event_local.date())
+    tzinfo = event_local.tzinfo or ZoneInfo("UTC")
+
+    start_local = datetime.combine(target_date, DEFAULT_BUSINESS_DAY_START).replace(tzinfo=tzinfo)
+    end_local = datetime.combine(target_date, DEFAULT_BUSINESS_DAY_END).replace(tzinfo=tzinfo)
+
+    start_local_str = start_local.strftime("%Y-%m-%d %H:%M %Z")
+    end_local_str = end_local.strftime("%Y-%m-%d %H:%M %Z")
+    end_utc_str = end_local.astimezone(pytz.UTC).strftime("%Y-%m-%d %H:%M UTC")
+    goal_summary = (
+        f"Complete during prior business day ({start_local.strftime('%b %d')} {DEFAULT_BUSINESS_DAY_START.strftime('%H:%M')}"
+        f"-{DEFAULT_BUSINESS_DAY_END.strftime('%H:%M')} local)."
+    )
+
+    return start_local_str, end_local_str, end_utc_str, goal_summary
 
 
 st.sidebar.header("Configuration")
@@ -300,6 +399,12 @@ for _, leg in customs_df.iterrows():
     if clearance_requirements and arr_airport:
         clearance_note = clearance_requirements.get(arr_airport.upper(), "")
 
+    clearance_start_local,
+    clearance_end_local,
+    clearance_end_utc,
+    clearance_goal,
+    = _compute_clearance_window(row, dep_airport, arr_airport, lookup)
+
     rows.append(
         {
             "Tail": tail,
@@ -318,6 +423,10 @@ for _, leg in customs_df.iterrows():
             "Arrival Doc Names": arr_doc_names,
             "Departure Doc Names": dep_doc_names,
             "Clearance Requirement": clearance_note,
+            "Clearance Target Start (Local)": clearance_start_local,
+            "Clearance Target End (Local)": clearance_end_local,
+            "Clearance Target End (UTC)": clearance_end_utc,
+            "Clearance Goal": clearance_goal,
         }
     )
 
@@ -348,6 +457,13 @@ with summary_tab:
 
 with table_tab:
     st.dataframe(result_df.drop(columns=["Departure Doc Names", "Arrival Doc Names"]), use_container_width=True)
+    st.caption(
+        "Clearance goals assume completion during the prior business day between %s and %s local time."
+        % (
+            DEFAULT_BUSINESS_DAY_START.strftime("%H:%M"),
+            DEFAULT_BUSINESS_DAY_END.strftime("%H:%M"),
+        )
+    )
     if not result_df.empty:
         csv_buffer = io.StringIO()
         result_df.to_csv(csv_buffer, index=False)
@@ -372,3 +488,4 @@ if errors:
 st.caption(
     "Statuses sourced from FL3XX flight migration endpoint. Upload updated clearance references as needed."
 )
+
