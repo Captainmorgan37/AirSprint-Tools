@@ -28,6 +28,33 @@ DEFAULT_BUSINESS_DAY_START = time(hour=9)
 DEFAULT_BUSINESS_DAY_END = time(hour=17)
 MOUNTAIN_TIMEZONE = ZoneInfo("America/Edmonton")
 
+URGENCY_STYLES = {
+    "ok": {
+        "background": "rgba(67, 160, 71, 0.22)",
+        "border": "#43a047",
+    },
+    "today": {
+        "background": "rgba(255, 213, 79, 0.24)",
+        "border": "#fbc02d",
+    },
+    "within_5": {
+        "background": "rgba(255, 167, 38, 0.26)",
+        "border": "#fb8c00",
+    },
+    "within_2": {
+        "background": "rgba(244, 112, 67, 0.28)",
+        "border": "#f4511e",
+    },
+    "overdue": {
+        "background": "rgba(229, 57, 53, 0.30)",
+        "border": "#d32f2f",
+    },
+    "pending": {
+        "background": "rgba(120, 144, 156, 0.18)",
+        "border": "#607d8b",
+    },
+}
+
 _DAY_KEYS = (
     "open_mon",
     "open_tue",
@@ -332,6 +359,38 @@ def _format_in_timezone(dt: Optional[datetime], tz: ZoneInfo) -> str:
         return dt.astimezone(tz).strftime("%Y-%m-%d %H:%M %Z")
     except Exception:
         return dt.strftime("%Y-%m-%d %H:%M %Z")
+
+
+def _to_timezone(dt: Optional[datetime], tz: ZoneInfo) -> Optional[datetime]:
+    if not isinstance(dt, datetime):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=pytz.UTC)
+    try:
+        return dt.astimezone(tz)
+    except Exception:
+        return dt
+
+
+def _classify_urgency(
+    status: str,
+    deadline: Optional[datetime],
+    reference: datetime,
+) -> str:
+    if status == "OK":
+        return "ok"
+    if not isinstance(deadline, datetime):
+        return "pending"
+    hours_until = (deadline - reference).total_seconds() / 3600
+    if hours_until <= 0:
+        return "overdue"
+    if hours_until <= 2:
+        return "within_2"
+    if hours_until <= 5:
+        return "within_5"
+    if deadline.date() == reference.date():
+        return "today"
+    return "pending"
 
 
 def _normalize_bool(value: Any) -> Optional[bool]:
@@ -662,10 +721,41 @@ for _, leg in customs_df.iterrows():
             "Rule Operating Hours": hours_summary,
             "Rule After Hours Available": after_hours,
             "Rule Contacts": contacts,
+            "_clearance_start_dt": clearance_start_dt,
+            "_clearance_end_dt": clearance_end_dt,
         }
     )
 
 result_df = pd.DataFrame(rows)
+
+if not result_df.empty:
+    now_mt = datetime.now(MOUNTAIN_TIMEZONE)
+    result_df["_clearance_end_mt"] = result_df["_clearance_end_dt"].apply(
+        lambda dt: _to_timezone(dt, MOUNTAIN_TIMEZONE)
+    )
+    result_df["_hours_until_clearance"] = result_df["_clearance_end_mt"].apply(
+        lambda dt: (dt - now_mt).total_seconds() / 3600 if isinstance(dt, datetime) else None
+    )
+    result_df["_hours_until_clearance"] = pd.to_numeric(
+        result_df["_hours_until_clearance"], errors="coerce"
+    )
+    result_df["_status_priority"] = result_df["Arrival Status"].apply(
+        lambda status: 0 if status == "OK" else 1
+    )
+    result_df["_urgency_category"] = result_df.apply(
+        lambda row: _classify_urgency(
+            row.get("Arrival Status", ""),
+            row.get("_clearance_end_mt"),
+            now_mt,
+        ),
+        axis=1,
+    )
+    result_df.sort_values(
+        by=["_status_priority", "_hours_until_clearance"],
+        ascending=[True, False],
+        na_position="last",
+        inplace=True,
+    )
 
 status_counts = (
     result_df["Arrival Status"].value_counts().rename_axis("Arrival Status").reset_index(name="Legs")
@@ -686,8 +776,47 @@ with summary_tab:
     st.dataframe(status_counts, use_container_width=True)
 
 with table_tab:
-    drop_cols = [col for col in ("Arrival Doc Names",) if col in result_df.columns]
-    st.dataframe(result_df.drop(columns=drop_cols), use_container_width=True)
+    drop_cols = [
+        col
+        for col in (
+            "Arrival Doc Names",
+            "_clearance_start_dt",
+            "_clearance_end_dt",
+            "_clearance_end_mt",
+            "_hours_until_clearance",
+            "_status_priority",
+            "_urgency_category",
+        )
+        if col in result_df.columns
+    ]
+    display_df = result_df.drop(columns=drop_cols)
+
+    if "_urgency_category" in result_df.columns:
+        style_lookup = (
+            result_df["_urgency_category"].apply(lambda cat: URGENCY_STYLES.get(cat)).to_dict()
+        )
+
+        def _style_row(row: pd.Series) -> List[str]:
+            styles = style_lookup.get(row.name)
+            if not isinstance(styles, Mapping):
+                return [""] * len(row)
+            css_parts: List[str] = []
+            background = styles.get("background")
+            border = styles.get("border")
+            if background:
+                css_parts.append(f"background-color: {background}")
+            if border:
+                css_parts.append(f"border-left: 4px solid {border}")
+            if not css_parts:
+                return [""] * len(row)
+            css_parts.append("color: inherit")
+            css = "; ".join(css_parts)
+            return [css] * len(row)
+
+        styler = display_df.style.apply(_style_row, axis=1)
+        st.dataframe(styler, use_container_width=True)
+    else:
+        st.dataframe(display_df, use_container_width=True)
     st.caption(
         "Clearance goals assume completion during the prior business day between %s and %s local time."
         % (
