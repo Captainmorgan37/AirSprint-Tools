@@ -20,7 +20,11 @@ from flight_leg_utils import (
     load_airport_metadata_lookup,
     safe_parse_dt,
 )
-from jeppesen_itp_utils import ALLOWED_COUNTRY_IDENTIFIERS, normalize_country_name
+from jeppesen_itp_utils import (
+    ALLOWED_COUNTRY_IDENTIFIERS,
+    country_display_name,
+    normalize_country_name,
+)
 
 
 st.set_page_config(page_title="Jeppesen ITP Required Flight Check", layout="wide")
@@ -296,11 +300,13 @@ for idx, (_, leg) in enumerate(legs_df.iterrows()):
 
     dep_normalized = _normalize_country_name(dep_country)
     if dep_normalized and dep_normalized not in ALLOWED_COUNTRY_IDENTIFIERS:
-        triggered_countries.append(dep_country or dep_normalized.title())
+        display = country_display_name(dep_country) or dep_normalized.title()
+        triggered_countries.append(display)
 
     arr_normalized = _normalize_country_name(arr_country)
     if arr_normalized and arr_normalized not in ALLOWED_COUNTRY_IDENTIFIERS:
-        triggered_countries.append(arr_country or arr_normalized.title())
+        display = country_display_name(arr_country) or arr_normalized.title()
+        triggered_countries.append(display)
 
     if not triggered_countries:
         continue
