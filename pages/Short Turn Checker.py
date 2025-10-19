@@ -896,10 +896,10 @@ st.sidebar.header("Data Source")
 source = st.sidebar.radio("Choose source", ["FL3XX API", "Upload CSV/JSON"], index=0)
 threshold = st.sidebar.number_input("Short-turn threshold (minutes)", min_value=5, max_value=240, value=DEFAULT_TURN_THRESHOLD_MIN, step=5)
 
-# Date selector defaults: night shift usually looks at "tomorrow" for the next few days
+# Date selector defaults: highlight the current day through the next few days
 local_today = datetime.now(LOCAL_TZ).date()
-default_start = local_today + timedelta(days=1)
-default_end = default_start + timedelta(days=4)
+default_start = local_today
+default_end = local_today + timedelta(days=3)
 selected_dates = st.sidebar.date_input(
     "Date range (local)",
     value=(default_start, default_end),
