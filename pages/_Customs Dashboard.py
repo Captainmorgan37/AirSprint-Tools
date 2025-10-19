@@ -466,10 +466,11 @@ additional_days = st.sidebar.slider(
     value=4,
     help="Fetch flights for the selected start date plus this many additional days.",
 )
-end_date = start_date + timedelta(days=additional_days)
+end_date_inclusive = start_date + timedelta(days=additional_days)
+end_date_exclusive = end_date_inclusive + timedelta(days=1)
 
 st.sidebar.write(
-    f"Fetching window: **{start_date.isoformat()}** → **{end_date.isoformat()}**"
+    f"Fetching window: **{start_date.isoformat()}** → **{end_date_inclusive.isoformat()}** (inclusive)"
 )
 
 clearance_file = st.sidebar.file_uploader(
@@ -582,7 +583,7 @@ with st.spinner("Fetching FL3XX flights..."):
         legs_df, metadata, _ = fetch_legs_dataframe(
             config,
             from_date=start_date,
-            to_date=end_date,
+            to_date=end_date_exclusive,
             departure_window=None,
             fetch_crew=False,
         )
