@@ -28,12 +28,37 @@ DEFAULT_BUSINESS_DAY_START = time(hour=9)
 DEFAULT_BUSINESS_DAY_END = time(hour=17)
 MOUNTAIN_TIMEZONE = ZoneInfo("America/Edmonton")
 
-URGENCY_COLORS = {
-    "ok": "#d9ead3",  # light green
-    "today": "#fff2cc",  # light yellow
-    "within_5": "#fce5cd",  # light orange
-    "within_2": "#f4cccc",  # light red
-    "overdue": "#ea9999",  # deeper red
+URGENCY_STYLES = {
+    "ok": {
+        "background": "rgba(129, 199, 132, 0.48)",
+        "border": "#2e7d32",
+        "text": "#0b2e13",
+    },
+    "today": {
+        "background": "rgba(255, 245, 157, 0.65)",
+        "border": "#fbc02d",
+        "text": "#3b2f04",
+    },
+    "within_5": {
+        "background": "rgba(255, 204, 128, 0.70)",
+        "border": "#fb8c00",
+        "text": "#422306",
+    },
+    "within_2": {
+        "background": "rgba(255, 171, 145, 0.70)",
+        "border": "#f4511e",
+        "text": "#3b0a05",
+    },
+    "overdue": {
+        "background": "rgba(255, 138, 128, 0.75)",
+        "border": "#c62828",
+        "text": "#3a0404",
+    },
+    "pending": {
+        "background": "rgba(176, 190, 197, 0.50)",
+        "border": "#546e7a",
+        "text": "#132128",
+    },
 }
 
 _DAY_KEYS = (
@@ -773,13 +798,31 @@ with table_tab:
     display_df = result_df.drop(columns=drop_cols)
 
     if "_urgency_category" in result_df.columns:
-        color_lookup = result_df["_urgency_category"].map(URGENCY_COLORS).to_dict()
+        style_lookup = (
+            result_df["_urgency_category"].apply(lambda cat: URGENCY_STYLES.get(cat)).to_dict()
+        )
 
         def _style_row(row: pd.Series) -> List[str]:
-            color = color_lookup.get(row.name)
-            if not color or pd.isna(color):
+            styles = style_lookup.get(row.name)
+            if not isinstance(styles, Mapping):
                 return [""] * len(row)
-            return [f"background-color: {color}"] * len(row)
+            css_parts: List[str] = []
+            background = styles.get("background")
+            border = styles.get("border")
+            text = styles.get("text")
+            if background:
+                css_parts.append(f"background-color: {background}")
+            if border:
+                css_parts.append(f"border-left: 4px solid {border}")
+            if not css_parts:
+                return [""] * len(row)
+            if text:
+                css_parts.append(f"color: {text}")
+            else:
+                css_parts.append("color: inherit")
+            css_parts.append("font-weight: 600")
+            css = "; ".join(css_parts)
+            return [css] * len(row)
 
         styler = display_df.style.apply(_style_row, axis=1)
         st.dataframe(styler, use_container_width=True)
