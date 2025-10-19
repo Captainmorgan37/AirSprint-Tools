@@ -88,7 +88,7 @@ class MorningReportRun:
 def _format_upgraded_flights_block(report: MorningReportResult) -> str:
     return _render_preferred_block(
         report.rows,
-        header="UPGRADES:",
+        header=f"UPGRADES: (based on the {report.title})",
         line_builder=_build_upgrade_line,
     )
 
@@ -96,7 +96,7 @@ def _format_upgraded_flights_block(report: MorningReportResult) -> str:
 def _format_cj3_on_cj2_block(report: MorningReportResult) -> str:
     return _render_preferred_block(
         report.rows,
-        header="CJ3 CLIENTS ON CJ2:",
+        header=f"CJ3 CLIENTS ON CJ2: (based on the {report.title})",
         line_builder=_build_cj3_line,
     )
 
@@ -104,7 +104,7 @@ def _format_cj3_on_cj2_block(report: MorningReportResult) -> str:
 def _format_priority_status_block(report: MorningReportResult) -> str:
     return _render_preferred_block(
         report.rows,
-        header="PRIORITY CLIENTS:",
+        header=f"PRIORITY CLIENTS: (based on the {report.title})",
         line_builder=_build_priority_line,
     )
 
@@ -715,9 +715,9 @@ def _build_cj3_owners_on_cj2_report(
                     f"Missing passenger count for quote {quote_id}; flagging for review"
                 )
                 violation_reasons.append("Missing passenger count")
-            elif pax_count > 5:
+            elif pax_count >= 5:
                 violation = True
-                violation_reasons.append("Passenger count above limit")
+                violation_reasons.append("Passenger count at or above limit")
 
             if block_minutes is None:
                 violation = True
@@ -725,9 +725,9 @@ def _build_cj3_owners_on_cj2_report(
                     f"Missing block time for quote {quote_id}; flagging for review"
                 )
                 violation_reasons.append("Missing block time")
-            elif block_minutes > 180:
+            elif block_minutes >= 180:
                 violation = True
-                violation_reasons.append("Block time above limit")
+                violation_reasons.append("Block time at or above limit")
 
             threshold_status = (
                 "Threshold exceeded" if violation else "Within thresholds"

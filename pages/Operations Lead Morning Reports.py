@@ -1,3 +1,4 @@
+import pandas as pd
 import streamlit as st
 from datetime import date, datetime, timedelta, timezone
 from typing import Iterable, List, Mapping, Optional, Sequence, Tuple
@@ -71,6 +72,19 @@ def _build_expected_reports(
 
 st.set_page_config(page_title="Operations Lead Morning Reports", layout="wide")
 st.title("📋 Operations Lead Morning Reports")
+
+
+def _highlight_cj3_thresholds(row: pd.Series) -> List[str]:
+    highlight = bool(row.get("threshold_breached"))
+    color = "color: red" if highlight else ""
+    return [color] * len(row)
+
+
+def _build_cj3_row_display(rows: Iterable[Mapping[str, object]]):
+    df = pd.DataFrame(rows)
+    if df.empty or "threshold_breached" not in df.columns:
+        return df
+    return df.style.apply(_highlight_cj3_thresholds, axis=1)
 
 
 def _format_timestamp(ts: datetime) -> str:
@@ -171,7 +185,13 @@ def _render_report_output(report: MorningReportResult):
 
     if report.rows:
         st.markdown("#### Matching legs")
-        st.dataframe(report.rows, use_container_width=True)
+        if report.code == "16.1.6":
+            st.dataframe(
+                _build_cj3_row_display(report.rows),
+                use_container_width=True,
+            )
+        else:
+            st.dataframe(report.rows, use_container_width=True)
     else:
         st.info("No matching legs found for this report.")
 
