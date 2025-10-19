@@ -102,20 +102,29 @@ def fetch_flights(
         if to_date is None:
             to_date = default_to
 
-    params: Dict[str, str] = {
-        "from": from_date.isoformat(),
-        "to": to_date.isoformat(),
-        "timeZone": MOUNTAIN_TIME_ZONE_NAME,
-        "value": "ALL",
-    }
-    params.update(config.extra_params)
+    params_sequence: List[Tuple[str, str]] = [
+        ("from", from_date.isoformat()),
+        ("timeZone", MOUNTAIN_TIME_ZONE_NAME),
+        ("to", to_date.isoformat()),
+        ("value", "ALL"),
+    ]
+
+    sequence_index: Dict[str, int] = {name: idx for idx, (name, _) in enumerate(params_sequence)}
+    for key, value in config.extra_params.items():
+        if key in sequence_index:
+            params_sequence[sequence_index[key]] = (key, value)
+        else:
+            sequence_index[key] = len(params_sequence)
+            params_sequence.append((key, value))
+
+    params: Dict[str, str] = dict(params_sequence)
 
     headers = config.build_headers()
 
     http = session or requests.Session()
     response = http.get(
         config.base_url,
-        params=params,
+        params=params_sequence,
         headers=headers,
         timeout=config.timeout,
         verify=config.verify_ssl,
