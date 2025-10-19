@@ -1,4 +1,5 @@
 import io
+import re
 from collections.abc import Mapping
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
@@ -72,6 +73,36 @@ def _detect_airport_value(row: Mapping[str, Any], columns: Tuple[str, ...]) -> s
         if isinstance(value, str) and value.strip():
             return value.strip().upper()
     return ""
+
+
+def _extract_codes(value: str) -> List[str]:
+    cleaned = value.strip().upper()
+    if not cleaned:
+        return []
+    if cleaned.replace(" ", "").isalnum() and len(cleaned) in {3, 4}:
+        return [cleaned]
+    return [token.upper() for token in re.findall(r"\b[A-Za-z0-9]{3,4}\b", cleaned)]
+
+
+def _airport_country_from_value(value: str, lookup: Mapping[str, Mapping[str, Any]]) -> Optional[str]:
+    for code in _extract_codes(value):
+        record = lookup.get(code)
+        if not isinstance(record, Mapping):
+            continue
+        country = record.get("country")
+        if isinstance(country, str) and country.strip():
+            return country.strip().upper()
+    return None
+
+
+def _arrival_country_from_row(row: Mapping[str, Any], lookup: Mapping[str, Mapping[str, Any]]) -> Optional[str]:
+    for column in ARRIVAL_AIRPORT_COLUMNS:
+        value = row.get(column)
+        if isinstance(value, str) and value.strip():
+            country = _airport_country_from_value(value, lookup)
+            if country:
+                return country
+    return None
 
 
 def _extract_migration_fields(payload: Optional[Mapping[str, Any]], key: str) -> Tuple[str, str, str, int, str]:
@@ -452,8 +483,17 @@ def _is_customs_row(row: Mapping[str, Any]) -> bool:
 customs_mask = legs_df.apply(lambda r: _is_customs_row(r.to_dict()), axis=1)
 customs_df = legs_df.loc[customs_mask].copy()
 
+
+def _is_us_arrival(row: Mapping[str, Any]) -> bool:
+    country = _arrival_country_from_row(row, lookup)
+    return country == "US"
+
+
+us_arrival_mask = customs_df.apply(lambda r: _is_us_arrival(r.to_dict()), axis=1)
+customs_df = customs_df.loc[us_arrival_mask].copy()
+
 if customs_df.empty:
-    st.success("No customs legs found in the selected window.")
+    st.success("No US customs arrivals found in the selected window.")
     st.stop()
 
 customs_df["dep_time"] = customs_df["dep_time"].astype(str)
@@ -524,7 +564,7 @@ for _, leg in customs_df.iterrows():
     (
         clearance_start_local,
         clearance_end_local,
-        clearance_end_utc,
+        _,
         clearance_goal,
     ) = _compute_clearance_window(row, dep_airport, arr_airport, lookup)
 
@@ -533,7 +573,6 @@ for _, leg in customs_df.iterrows():
             "Tail": tail,
             "Departure": dep_airport,
             "Arrival": arr_airport,
-            "Departure UTC": dep_utc,
             "Departure Local": dep_local,
             "Arrival Status": arr_status,
             "Arrival By": arr_by,
@@ -543,7 +582,6 @@ for _, leg in customs_df.iterrows():
             "Clearance Requirement": clearance_note,
             "Clearance Target Start (Local)": clearance_start_local,
             "Clearance Target End (Local)": clearance_end_local,
-            "Clearance Target End (UTC)": clearance_end_utc,
             "Clearance Goal": clearance_goal,
             "Rule Lead Time Arrival (hrs)": lead_time_arrival,
             "Rule Lead Time Departure (hrs)": lead_time_departure,
