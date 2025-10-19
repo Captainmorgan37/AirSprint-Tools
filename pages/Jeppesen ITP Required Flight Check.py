@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import replace
 from datetime import date, datetime, timedelta
 from math import inf
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import pandas as pd
 import streamlit as st
@@ -43,6 +44,11 @@ def _load_fl3xx_settings() -> Dict[str, Any]:
         settings = {str(key): secrets_section[key] for key in secrets_section}
     elif isinstance(secrets_section, dict):
         settings = dict(secrets_section)
+
+    for nested_key in ("extra_headers", "extra_params"):
+        value = settings.get(nested_key)
+        if isinstance(value, Mapping):
+            settings[nested_key] = {str(k): str(value[k]) for k in value}
     return settings
 
 
