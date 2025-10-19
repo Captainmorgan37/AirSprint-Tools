@@ -1,17 +1,26 @@
 # Customs Dashboard Improvement Plan
 
 ## Current Capabilities
-The existing Streamlit customs dashboard provides the following functionality:
+The existing Streamlit customs dashboard now delivers the following functionality:
 
 - Pulls flights from FL3XX within a configurable date window using stored credentials when available.
 - Filters the dataset to customs-relevant legs via the shared `flight_leg_utils` helper.
-- Fetches migration (arrival/departure) status payloads per flight and surfaces key fields (status, by, notes, document count, document names).
+- Fetches migration (arrival/departure) status payloads per flight and surfaces key fields (status, by, notes, document names).
 - Displays per-leg information (tail, departure/arrival airports, departure timestamps in UTC/local, migration statuses, clearance note).
 - Accepts an optional uploaded clearance requirements spreadsheet and maps the first airport/code column to a free-text requirement shown in the results table.
-- Presents summary metrics (customs legs count, pending departures) and tabbed views for status distribution and detailed table, with CSV export.
-- Highlights missing timezone coverage and API warnings surfaced while fetching flight/migration data.
+- Loads a bundled `customs_rules.csv` file (with optional override via upload) and exposes lead time, operating hours, after-hours availability, and contacts for each arrival port.
+- Calculates a clearance goal window for each leg by translating the arrival event into the arrival airport timezone and rolling back to the prior operating window published in the rules file (falling back to default business hours when rules are missing).
+- Derives urgency cues (`OK`, `Overdue`, `Within 2/5 Hours`, `Due Today`, `Pending`) and a human-readable "Time to Clear" countdown using the calculated clearance goal, rendering the table with color-coded styling.
+- Presents summary metrics (customs legs count, pending arrivals) alongside the urgency-enhanced table with CSV export, warnings for API errors, and guidance on improving timezone coverage.
 
-These pieces provide a reliable feed of customs legs and surface the raw arrival/departure migration status, but they stop short of determining compliance deadlines or providing workflow triage views.
+These pieces provide a reliable feed of customs legs, surface the raw arrival migration status, and add first-pass compliance cues derived from the rules file. The remaining work focuses on deepening the compliance engine, richer workflow views, and audit support.
+
+## Progress Overview
+
+- **Rules data ingestion**: Bundled CSV loader and upload override implemented; operating hours parsed for each weekday with after-hours and contact metadata surfaced in the UI.
+- **Compliance calculations**: Baseline clearance goal window and urgency categorization complete. Evidence-driven filing detection and holiday awareness remain outstanding.
+- **Workflow UX**: Table styling, urgency sorting, and high-level metrics shipped. Dedicated queue views (e.g., Now/Next 24h) and port-day boards still to do.
+- **Audit & warnings**: API warning expander exists, but no persistent audit trail or advanced warning categories yet.
 
 ## Guiding Principles
 - **Single source of truth for rules:** Maintain a simple, editable customs rules sheet (CSV/Google Sheet) that includes lead times, open hours, restrictions, and contacts. Cache the sheet and surface a “last loaded” timestamp in-app.
@@ -22,59 +31,31 @@ These pieces provide a reliable feed of customs legs and surface the raw arrival
 The enhancement plan is sequenced into four workstreams. Each stream can be developed iteratively, but the ordering below optimizes dependencies.
 
 ### 1. Rules Data Model & Ingestion
-1. Define and publish the `customs_rules` sheet with the columns suggested in the concept brief (airport, lead times, open hours, flags, contacts, notes, updated_at).
-
-   #### Current Google Sheet columns
-
-   | Column | Purpose / Notes | Example values from seed sheet |
-   | --- | --- | --- |
-   | `airport_icao` | Four-letter ICAO identifier that keys each record. | `CYTZ`, `CYYZ`, `KBOS` |
-   | `airport_iata` | Three-letter IATA shorthand used in other ops tooling. | `YTZ`, `YYZ`, `BOS` |
-   | `country` | Country code so we can branch CBSA vs. CBP handling. | `CA`, `US` |
-   | `agency_service` | Agency providing service at the port. | `CBSA`, `CBP` |
-   | `service_type` | Service classification for the port (e.g., AOE, AOE/15, AOE/CANPASS, US). | `AOE`, `AOE/15`, `AOE/CANPASS`, `US` |
-   | `lead_time_arrival_hours` | Minimum filing lead time before an arrival in hours. | `2`, `4`, `8` |
-   | `lead_time_departure_hours` | Minimum filing lead time before a departure in hours. | `2`, `4` |
-   | `hours_open_mon` | Published operating window for Mondays (24h, ranges, or `CLOSED`). | `24h`, `0600-2200`, `CLOSED` |
-   | `hours_open_tue` | Same pattern as Monday for Tuesday coverage. | `24h`, `0600-2200`, `CLOSED` |
-   | `hours_open_wed` | Same pattern as Monday for Wednesday coverage. | `24h`, `0600-2200`, `CLOSED` |
-   | `hours_open_thu` | Same pattern as Monday for Thursday coverage. | `24h`, `0600-2200`, `CLOSED` |
-   | `hours_open_fri` | Same pattern as Monday for Friday coverage. | `24h`, `0600-2200`, `CLOSED` |
-   | `hours_open_sat` | Same pattern as Monday for Saturday coverage. | `24h`, `0600-2000`, `CLOSED` |
-   | `hours_open_sun` | Same pattern as Monday for Sunday coverage. | `24h`, `0600-2000`, `CLOSED` |
-   | `open_after_hours` | Checkbox that flags whether the port physically opens outside the published hours. | `TRUE`, `FALSE` |
-   | `after_hours_available` | Checkbox that indicates whether after-hours coverage can actually be requested. | `TRUE`, `FALSE` |
-   | `canpass_only` | Flag noting ports restricted to CANPASS-only processing. | `TRUE`, `FALSE` |
-   | `contacts` | Contact instructions when the port has CANPASS-only or special handling (phones, emails, FBO). | `1-888-226-7277`, `ops@fbo.com` |
-   | `notes` | Free-form operational notes (e.g., “CBSA email required to confirm after hours”). | `“CBSA email after hours to confirm availability.”` |
-   | `source` | Where the rule originated so we can audit it later. | `YBdocs`, `Ops call` |
-   | `entered` | Who last updated the record in the sheet. | `YBdocs`, `ND` |
-2. Implement a loader utility to read the sheet/CSV (support both uploaded file and hosted URL/Google Sheet via secrets). Cache parsed results and expose diagnostics for missing/invalid records.
-3. Parse open-hour strings into per-day intervals and ingest optional holiday calendars (either airport-specific sheet or jurisdiction-based lookup).
-4. Extend the dashboard sidebar to show rule source summary (last refreshed, record count, warning badges for missing critical fields).
+1. ✅ Bundled `customs_rules.csv` published with lead time, operating hours, after-hours, contacts, and notes columns. Continue curating the sheet and document the refresh workflow.
+2. ✅ Loader utility supports bundled CSV plus optional uploaded overrides, normalizes column names, and feeds rule details into the UI. Extend to pull from a hosted URL/Google Sheet via secrets and surface load diagnostics (last refreshed timestamp, missing critical fields, record counts).
+3. 🔄 Per-day operating windows parsed and leveraged for clearance goal calculations. Next step is to incorporate jurisdiction/airport-specific holiday calendars and explicit closed days.
+4. ⏭️ Add sidebar summary of rule source metadata (refresh status, file origin) and highlight airports missing lead times or timezone coverage.
 
 ### 2. Compliance Deadline Engine
-1. For each customs leg, determine governing airport/event (arrival vs departure) using the rule flags and flight direction.
-2. Convert scheduled times to airport-local timezone (guarding for DST and missing tz via the existing airport lookup fallback).
-3. Compute raw deadlines: `deadline_raw = event_local_time - lead_time_hours` using arrival/departure lead times with sensible defaults when data is missing.
-4. Adjust deadlines for hours of operation:
-   - If the deadline falls outside open hours and after-hours service is unavailable, roll back to the last open minute.
-   - Respect holiday/closure exceptions and propagate warnings when no valid open window exists.
-5. Determine earliest filing evidence using migration timestamps, document upload times, or manual overrides (future audit table) and calculate compliance state (`OK`, `Due Soon`, `Late`, `Missing`, `Filed Late`).
-6. Persist intermediate values (deadline, evidence source, adjustments applied) for transparency within the UI.
+1. ✅ Arrival-focused rule lookup wired in; dashboard uses arrival airport metadata when available.
+2. ✅ Scheduled event times converted into airport-local timezone with lookup fallbacks.
+3. ✅ Clearance window derived by rolling arrival event back to the prior operating window; default business hours used when rules are absent.
+4. 🔄 Continue refining deadline adjustments: honor explicit lead-time hour offsets from the sheet, respect after-hours availability flags, and integrate holiday/closure logic.
+5. ⏭️ Incorporate evidence tracking (migration timestamps, document uploads, manual overrides) to classify compliance states beyond the current urgency heuristic.
+6. ⏭️ Persist and display intermediate calculations (deadline, adjustments applied, evidence source) within a leg detail view for operator transparency.
 
 ### 3. Workflow & Visualization Upgrades
-1. Replace/augment current metrics with deadline-aware counters (Late, Due <2h, Due Today, OK, Missing Rules/TZ) derived from the compliance engine.
-2. Introduce urgency tabs or quick filters for Now / Next 24h / Next 72h windows.
-3. Implement Port-Day board view grouping legs by arrival airport and local date, with cards showing key fields (tail, ETA, pax/crew counts when available, status badge).
-4. Add leg detail drawer/modal revealing evidence timestamps, rule text, notes, documents, and compliance reasoning (including “after-hours” or “rule default” badges).
-5. Provide quick communication helpers: copy-to-clipboard contact blocks populated from rule sheet (emails, phones) and flight specifics; optionally integrate webhook trigger scaffolding for late legs.
+1. 🔄 Existing metrics cover leg count and pending arrivals; extend with deadline-aware counters (Late, Due <2h, Due Today, Missing Rules/TZ) derived from the urgency/compliance engine.
+2. ⏭️ Add urgency tabs or quick filters for Now / Next 24h / Next 72h windows using the `_urgency_category` and clearance timestamps.
+3. ⏭️ Build a Port-Day board view grouping legs by arrival airport and local date with cards showing tail, ETA, pax/crew counts, and status badges.
+4. ⏭️ Create a leg detail drawer/modal revealing evidence timestamps, rule text, notes, documents, and compliance reasoning (including after-hours or rule-default badges).
+5. ⏭️ Provide quick communication helpers: copy-to-clipboard contact blocks from the rule sheet plus flight specifics; explore webhook triggers for overdue legs once compliance signals mature.
 
 ### 4. Audit Trail & Smart Warnings
-1. Create an internal audit log model (in-memory or lightweight database/CSV) to record manual confirmations (who, when, notes, artifacts). Surface recent log entries per leg.
-2. Track and display evidence sources (“arrivalMigration.updatedAt”, first document timestamp, manual override) and allow operators to override with justification.
-3. Implement smart warnings for missing rules, missing timezone data, incompatible port flags (e.g., CANPASS-only), and NOTAM/holiday conflicts (using imported holiday list or manual NOTAM entries).
-4. Expand the warnings expander to categorize issues and offer suggested next actions (e.g., “Arrange alternate airport” when port cannot service full customs).
+1. ⏭️ Create an internal audit log model (in-memory or lightweight database/CSV) to record manual confirmations (who, when, notes, artifacts). Surface recent log entries per leg.
+2. ⏭️ Track and display evidence sources (“arrivalMigration.updatedAt”, first document timestamp, manual override) and allow operators to override with justification.
+3. 🔄 Warnings expander currently surfaces API/data issues. Expand with smart warnings for missing rules, missing timezone data, incompatible port flags (e.g., CANPASS-only), and NOTAM/holiday conflicts.
+4. ⏭️ Categorize warnings and surface suggested next actions (e.g., “Arrange alternate airport” when port cannot service full customs) alongside communication helpers.
 
 ## Incremental Delivery Suggestions
 - **Milestone 1:** Ship the rules loader with compliance deadline calculations, replacing the simple clearance note field with computed status columns while keeping the existing table layout. This delivers immediate value with minimal UI upheaval.
