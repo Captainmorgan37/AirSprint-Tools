@@ -1126,6 +1126,84 @@ if not legs_df.empty:
             "Regular short turns",
             "No standard short turns were found for the selected window.",
         )
+        if not regular_short_df.empty:
+            def _normalise_timestamp(value: Any) -> Optional[pd.Timestamp]:
+                if pd.isna(value):
+                    return None
+                if isinstance(value, pd.Timestamp):
+                    ts = value
+                elif isinstance(value, datetime):
+                    ts = pd.Timestamp(value)
+                elif isinstance(value, str):
+                    ts = parse_dt(value)
+                else:
+                    return None
+                if ts is pd.NaT or pd.isna(ts):
+                    return None
+                if ts.tzinfo is None:
+                    try:
+                        ts = ts.tz_localize(LOCAL_TZ)
+                    except (TypeError, ValueError):
+                        return None
+                else:
+                    ts = ts.tz_convert(LOCAL_TZ)
+                return ts
+
+            def _extract_turn_timestamp(row: pd.Series) -> Optional[pd.Timestamp]:
+                for key in ("arr_onblock", "dep_offblock"):
+                    ts = _normalise_timestamp(row.get(key))
+                    if ts is not None:
+                        return ts
+                return None
+
+            def _stringify(value: Any, fallback: str) -> str:
+                if value is None or (isinstance(value, float) and pd.isna(value)):
+                    return fallback
+                text = str(value).strip()
+                return text or fallback
+
+            def _format_turn_minutes(value: Any) -> str:
+                if value is None or (isinstance(value, float) and pd.isna(value)):
+                    return "Unknown turn time"
+                try:
+                    minutes = float(value)
+                except (TypeError, ValueError):
+                    return str(value)
+                rounded = round(minutes)
+                if abs(minutes - rounded) < 0.05:
+                    return f"{int(rounded)} min"
+                return f"{minutes:.1f} min"
+
+            summary_df = regular_short_df.copy()
+            summary_df["__turn_ts"] = summary_df.apply(_extract_turn_timestamp, axis=1)
+            summary_df["__turn_date_label"] = summary_df["__turn_ts"].apply(
+                lambda ts: ts.strftime("%Y-%m-%d") if ts is not None else "Unknown date"
+            )
+            summary_df = summary_df.sort_values(
+                ["__turn_ts", "tail", "station", "arr_leg_id", "dep_leg_id"],
+                kind="mergesort",
+            )
+
+            lines: list[str] = ["SHORT TURNS:"]
+            for date_label, group in summary_df.groupby("__turn_date_label", sort=False):
+                lines.append("")
+                lines.append(date_label)
+                for _, row in group.iterrows():
+                    tail = _stringify(row.get("tail"), "Unknown tail")
+                    arr_leg = _stringify(row.get("arr_leg_id"), "?")
+                    dep_leg = _stringify(row.get("dep_leg_id"), "?")
+                    station = _stringify(row.get("station"), "Unknown station")
+                    turn_text = _format_turn_minutes(row.get("turn_min"))
+                    lines.append(f"{tail} - {arr_leg}/{dep_leg} - {station} - {turn_text}")
+
+            summary_text = "\n".join(lines)
+            line_count = summary_text.count("\n") + 1
+            st.text_area(
+                "Copy regular short turns summary",
+                summary_text,
+                height=min(600, max(160, 24 * line_count)),
+                help="Copy and paste this text block wherever you need to share the regular short turns.",
+            )
         _render_short_turn_table(
             priority_short_df,
             "Priority short turns",
