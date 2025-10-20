@@ -5,7 +5,7 @@ import os
 from datetime import datetime, date, timedelta, timezone
 from typing import Any, Iterable, Mapping, Optional, Sequence, Tuple
 
-from fl3xx_api import Fl3xxApiConfig, fetch_flights
+from fl3xx_api import Fl3xxApiConfig, fetch_flights, compute_flights_digest
 from flight_leg_utils import filter_out_subcharter_rows, normalize_fl3xx_payload, safe_parse_dt
 
 st.set_page_config(page_title="OCS vs Fl3xx Slot Compliance", layout="wide")
@@ -24,6 +24,7 @@ This tool normalizes both formats and compares them against Fl3xx with airport-s
 
 # ---------------- Config ----------------
 WINDOWS_MIN = {"CYYC": 30, "CYVR": 30, "CYYZ": 60, "CYUL": 15}
+FL3XX_FETCH_CHUNK_DAYS = 5
 MONTHS = {m: i for i, m in enumerate(
     ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"], 1)}
 
@@ -395,6 +396,27 @@ def _normalise_fl3xx_rows(rows: Sequence[Mapping[str, Any]]) -> pd.DataFrame:
     return df
 
 
+def _iter_date_chunks(start: date, end: date, chunk_days: int) -> Iterable[Tuple[date, date]]:
+    """Yield (start, end) pairs covering the range in chunk_days spans."""
+
+    if chunk_days <= 0:
+        raise ValueError("chunk_days must be positive")
+
+    if end < start:
+        start, end = end, start
+
+    if end <= start:
+        yield start, end
+        return
+
+    cursor = start
+    delta = timedelta(days=chunk_days)
+    while cursor < end:
+        chunk_end = min(cursor + delta, end)
+        yield cursor, chunk_end
+        cursor = chunk_end
+
+
 @st.cache_data(show_spinner=True, ttl=180)
 def fetch_fl3xx_dataframe(token: str, start: date, end: date) -> Tuple[pd.DataFrame, dict]:
     config = _build_fl3xx_config(token)
@@ -407,18 +429,74 @@ def fetch_fl3xx_dataframe(token: str, start: date, end: date) -> Tuple[pd.DataFr
     if end < start:
         start, end = end, start
 
-    flights, metadata = fetch_flights(config, from_date=start, to_date=end)
+    all_flights = []
+    seen_ids = set()
+    duplicate_collisions = 0
+    chunk_summaries = []
+    raw_flight_count = 0
+    last_metadata: Optional[dict] = None
 
-    normalized_rows, stats = normalize_fl3xx_payload({"items": flights})
+    for chunk_start, chunk_end in _iter_date_chunks(start, end, FL3XX_FETCH_CHUNK_DAYS):
+        flights, metadata = fetch_flights(
+            config, from_date=chunk_start, to_date=chunk_end
+        )
+        last_metadata = metadata
+        raw_flight_count += len(flights)
+
+        chunk_summary = {
+            **metadata,
+            "chunk_range": {
+                "from": chunk_start.isoformat(),
+                "to": chunk_end.isoformat(),
+            },
+            "flight_count": len(flights),
+        }
+        chunk_summaries.append(chunk_summary)
+
+        for flight in flights:
+            flight_id = flight.get("id") if isinstance(flight, Mapping) else None
+            if flight_id is not None:
+                if flight_id in seen_ids:
+                    duplicate_collisions += 1
+                    continue
+                seen_ids.add(flight_id)
+            all_flights.append(flight)
+
+    normalized_rows, stats = normalize_fl3xx_payload({"items": all_flights})
     normalized_rows, skipped_subcharter = filter_out_subcharter_rows(normalized_rows)
     stats["skipped_subcharter"] = skipped_subcharter
 
     df = _normalise_fl3xx_rows(normalized_rows)
 
+    fetched_at = last_metadata.get("fetched_at") if last_metadata else None
+    time_zone = last_metadata.get("time_zone") if last_metadata else None
+    value = last_metadata.get("value") if last_metadata else None
+    request_params = {
+        "from": start.isoformat(),
+        "to": end.isoformat(),
+    }
+    if time_zone:
+        request_params["timeZone"] = time_zone
+    if value:
+        request_params["value"] = value
+    request_params.update(config.extra_params)
+
     metadata = {
-        **metadata,
+        "from_date": start.isoformat(),
+        "to_date": end.isoformat(),
+        "time_zone": time_zone,
+        "value": value,
+        "fetched_at": fetched_at,
+        "hash": compute_flights_digest(all_flights),
+        "request_url": config.base_url,
+        "request_params": request_params,
+        "chunk_size_days": FL3XX_FETCH_CHUNK_DAYS,
+        "chunk_count": len(chunk_summaries),
+        "chunk_summaries": chunk_summaries,
+        "raw_flight_count": raw_flight_count,
+        "duplicate_collisions": duplicate_collisions,
         "normalization": stats,
-        "flight_count": len(flights),
+        "flight_count": len(all_flights),
     }
 
     return df, metadata
