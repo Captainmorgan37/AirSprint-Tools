@@ -965,6 +965,7 @@ if st.session_state.get("_run"):
         file_name=f"daily_flight_sheet_{selected_date}.docx",
         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         use_container_width=True,
+        key="download-daily-flight-sheet",
     )
 
     if per_shift_docs:
@@ -982,6 +983,7 @@ if st.session_state.get("_run"):
                     file_name=f"daily_flight_sheet_{selected_date}_{_label_slug(label)}.docx",
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                     use_container_width=True,
+                    key=f"download-shift-{idx}-{_label_slug(label)}",
                 )
     st.download_button(
         label="⬇️ Download assignments (CSV)",
@@ -989,6 +991,7 @@ if st.session_state.get("_run"):
         file_name=f"tail_assignments_{selected_date}.csv",
         mime="text/csv",
         use_container_width=True,
+        key="download-assignments-csv",
     )
 
     st.success("Done. Adjust inputs and re-run as needed.")
