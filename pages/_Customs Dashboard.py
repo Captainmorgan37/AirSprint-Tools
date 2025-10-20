@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 import pytz
 import streamlit as st
-from zoneinfo import ZoneInfo
+from zoneinfo_compat import ZoneInfo
 
 from flight_leg_utils import (
     AIRPORT_TZ_FILENAME,

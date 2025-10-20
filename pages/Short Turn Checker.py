@@ -2,7 +2,7 @@ import os
 from collections.abc import Mapping
 from datetime import datetime, timedelta
 from typing import Any, Optional
-from zoneinfo import ZoneInfo
+from zoneinfo_compat import ZoneInfo
 import pandas as pd
 import streamlit as st
 

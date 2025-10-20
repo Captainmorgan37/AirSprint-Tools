@@ -9,7 +9,7 @@ from typing import List, Dict, Any, Tuple, Optional, Set, Sequence
 
 import pandas as pd
 import pytz
-from zoneinfo import ZoneInfo
+from zoneinfo_compat import ZoneInfo
 import streamlit as st
 from pandas.api.types import is_scalar
 
