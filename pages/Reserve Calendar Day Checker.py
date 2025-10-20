@@ -106,8 +106,27 @@ for date_result in result.dates:
         continue
 
     df = pd.DataFrame(date_result.rows)
-    display_df = df.drop(columns=[col for col in ["club_detected", "workflow_has_as_available"] if col in df.columns])
-    st.dataframe(display_df, use_container_width=True)
+    highlight_columns = {"club_detected", "workflow_has_as_available"}
+    highlight_indices = set()
+
+    if highlight_columns.issubset(df.columns):
+        mask = df["club_detected"] & ~df["workflow_has_as_available"]
+        highlight_indices = set(df.index[mask].tolist())
+
+    display_df = df.drop(columns=[col for col in highlight_columns if col in df.columns])
+
+    def _highlight_row(row: pd.Series) -> list[str]:
+        if row.name in highlight_indices:
+            return ["background-color: rgba(255, 0, 0, 0.15);"] * len(row)
+        return [""] * len(row)
+
+    styler = display_df.style.apply(_highlight_row, axis=1)
+    try:
+        styler = styler.hide(axis="index")
+    except AttributeError:
+        pass
+
+    st.dataframe(styler, use_container_width=True)
 
 if result.warnings:
     st.markdown("---")
