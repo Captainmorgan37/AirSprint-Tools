@@ -61,6 +61,15 @@ URGENCY_STYLES = {
     },
 }
 
+URGENCY_SORT_ORDER = {
+    "overdue": 0,
+    "within_2": 1,
+    "within_5": 2,
+    "today": 3,
+    "pending": 4,
+    "ok": 5,
+}
+
 _DAY_KEYS = (
     "open_mon",
     "open_tue",
@@ -775,9 +784,6 @@ if not result_df.empty:
     result_df["_hours_until_clearance"] = pd.to_numeric(
         result_df["_hours_until_clearance"], errors="coerce"
     )
-    result_df["_status_priority"] = result_df["Arrival Status"].apply(
-        lambda status: 0 if status == "OK" else 1
-    )
     result_df["_urgency_category"] = result_df.apply(
         lambda row: _classify_urgency(
             row.get("Arrival Status", ""),
@@ -785,6 +791,9 @@ if not result_df.empty:
             now_mt,
         ),
         axis=1,
+    )
+    result_df["_urgency_priority"] = result_df["_urgency_category"].map(
+        lambda category: URGENCY_SORT_ORDER.get(category, len(URGENCY_SORT_ORDER))
     )
     result_df["Time to Clear"] = result_df.apply(
         lambda row: _format_time_to_clear(row, now_mt),
@@ -800,8 +809,8 @@ if not result_df.empty:
         result_df = result_df[cols]
 
     result_df.sort_values(
-        by=["_status_priority", "_hours_until_clearance"],
-        ascending=[True, False],
+        by=["_urgency_priority", "_hours_until_clearance"],
+        ascending=[True, True],
         na_position="last",
         inplace=True,
     )
@@ -823,8 +832,8 @@ base_drop_cols = [
         "_clearance_end_dt",
         "_clearance_end_mt",
         "_hours_until_clearance",
-        "_status_priority",
         "_urgency_category",
+        "_urgency_priority",
     )
     if col in result_df.columns
 ]
