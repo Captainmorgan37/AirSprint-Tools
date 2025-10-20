@@ -2,13 +2,17 @@ import streamlit as st
 import pandas as pd
 import re
 import os
-from datetime import datetime
+from datetime import datetime, date, timedelta, timezone
+from typing import Any, Iterable, Mapping, Optional, Sequence, Tuple
+
+from fl3xx_api import Fl3xxApiConfig, fetch_flights
+from flight_leg_utils import filter_out_subcharter_rows, normalize_fl3xx_payload, safe_parse_dt
 
 st.set_page_config(page_title="OCS vs Fl3xx Slot Compliance", layout="wide")
 st.title("🛫 OCS vs Fl3xx Slot Compliance")
 
 st.markdown("""
-Upload **Fl3xx CSV(s)** and **OCS CSV(s)** (CYYZ GIR free-text or structured export).
+Fetch **Fl3xx flights via the API** or upload **Fl3xx CSV(s)**, then upload **OCS CSV(s)** (CYYZ GIR free-text or structured export).
 This tool normalizes both formats and compares them against Fl3xx with airport-specific time windows.
 
 **Results**
@@ -51,6 +55,373 @@ def with_datestr(df: pd.DataFrame, date_col="Date"):
 
 
 SLOT_AIRPORTS = set(WINDOWS_MIN.keys())
+
+
+# ---------------- FL3XX API helpers ----------------
+def _coerce_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+    return bool(value)
+
+
+def _build_fl3xx_config(token: str) -> Fl3xxApiConfig:
+    secrets_section = st.secrets.get("fl3xx_api", {})
+
+    base_url = (
+        secrets_section.get("base_url")
+        or os.getenv("FL3XX_BASE_URL")
+        or Fl3xxApiConfig().base_url
+    )
+    auth_header_name = (
+        secrets_section.get("auth_header_name")
+        or os.getenv("FL3XX_AUTH_HEADER")
+        or "Authorization"
+    )
+    auth_header = secrets_section.get("auth_header") or os.getenv("FL3XX_AUTH_HEADER_VALUE")
+    api_token_scheme = secrets_section.get("api_token_scheme") or os.getenv("FL3XX_TOKEN_SCHEME")
+
+    extra_headers = {}
+    if isinstance(secrets_section.get("extra_headers"), Mapping):
+        extra_headers = {
+            str(k): str(v)
+            for k, v in secrets_section["extra_headers"].items()
+        }
+
+    extra_params = {}
+    if isinstance(secrets_section.get("extra_params"), Mapping):
+        extra_params = {
+            str(k): str(v)
+            for k, v in secrets_section["extra_params"].items()
+        }
+
+    verify_ssl_value = secrets_section.get("verify_ssl")
+    if verify_ssl_value is None:
+        verify_ssl_value = os.getenv("FL3XX_VERIFY_SSL")
+    verify_ssl = _coerce_bool(verify_ssl_value) if verify_ssl_value is not None else True
+
+    timeout_value = secrets_section.get("timeout") or os.getenv("FL3XX_TIMEOUT")
+    timeout = None
+    if timeout_value is not None:
+        try:
+            timeout = int(timeout_value)
+        except (TypeError, ValueError):
+            timeout = None
+
+    config_kwargs = {
+        "base_url": base_url,
+        "api_token": token or secrets_section.get("api_token"),
+        "auth_header": auth_header,
+        "auth_header_name": auth_header_name,
+        "api_token_scheme": api_token_scheme,
+        "extra_headers": extra_headers,
+        "extra_params": extra_params,
+        "verify_ssl": verify_ssl,
+    }
+
+    if timeout is not None:
+        config_kwargs["timeout"] = timeout
+
+    return Fl3xxApiConfig(**config_kwargs)
+
+
+def _normalize_str(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        text = value.strip()
+    else:
+        text = str(value).strip()
+    return text or None
+
+
+def _extract_nested_value(container: Mapping[str, Any], path: Tuple[str, ...]) -> Any:
+    value: Any = container
+    for index, segment in enumerate(path):
+        if not isinstance(value, Mapping):
+            return None
+        if segment in value:
+            value = value[segment]
+            continue
+        if "." in segment:
+            direct = value.get(segment)
+            if direct is not None:
+                value = direct
+                continue
+            sub_segments = tuple(part for part in segment.split(".") if part)
+            if not sub_segments:
+                return None
+            remaining_path = sub_segments + path[index + 1 :]
+            return _extract_nested_value(value, remaining_path)
+        return None
+    return value
+
+
+def _coerce_datetime_value(value: Any) -> Optional[datetime]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        text = _normalize_str(value)
+        if not text:
+            return None
+        try:
+            dt = safe_parse_dt(text)
+        except Exception:
+            try:
+                dt = pd.to_datetime(text, utc=True).to_pydatetime()
+            except Exception:
+                return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    return dt
+
+
+def _extract_departure_dt(row: Mapping[str, Any]) -> Optional[datetime]:
+    candidate_paths: Sequence[Tuple[str, ...]] = [
+        ("dep_time",),
+        ("departureTimeUtc",),
+        ("departure_time_utc",),
+        ("departureTime",),
+        ("departure_time",),
+        ("offBlockEstUTC",),
+        ("offBlockEstUtc",),
+        ("offBlockEstLocal",),
+        ("offBlockEstimatedUTC",),
+        ("offBlockEstimatedUtc",),
+        ("offBlockEstimateUTC",),
+        ("offBlockEstimateUtc",),
+        ("scheduledOut",),
+        ("offBlock", "estimatedUtc"),
+        ("offBlock", "scheduledUtc"),
+        ("offBlock", "actualUtc"),
+        ("times", "offBlock", "estimatedUtc"),
+        ("times", "offBlock", "scheduledUtc"),
+        ("times", "offBlock", "actualUtc"),
+        ("times", "departure", "estimatedUtc"),
+        ("times", "departure", "scheduledUtc"),
+        ("times", "departure", "actualUtc"),
+        ("departure", "estimatedUtc"),
+        ("departure", "scheduledUtc"),
+        ("departure", "actualUtc"),
+    ]
+    for path in candidate_paths:
+        value = _extract_nested_value(row, path)
+        if value is None:
+            continue
+        dt = _coerce_datetime_value(value)
+        if dt is not None:
+            return dt
+    return None
+
+
+def _extract_arrival_dt(row: Mapping[str, Any]) -> Optional[datetime]:
+    candidate_paths: Sequence[Tuple[str, ...]] = [
+        ("arrivalOnBlockUtc",),
+        ("arrivalOnBlock",),
+        ("arrOnBlock",),
+        ("blockOnEstUTC",),
+        ("blockOnEstUtc",),
+        ("blockOnEstLocal",),
+        ("blockOnEstimatedUTC",),
+        ("blockOnEstimatedUtc",),
+        ("blockOnEstimateUTC",),
+        ("blockOnEstimateUtc",),
+        ("scheduledIn",),
+        ("onBlock",),
+        ("onBlockActual",),
+        ("onBlockScheduled",),
+        ("times", "onBlock", "estimatedUtc"),
+        ("times", "onBlock", "scheduledUtc"),
+        ("times", "onBlock", "actualUtc"),
+        ("times", "arrival", "estimatedUtc"),
+        ("times", "arrival", "scheduledUtc"),
+        ("times", "arrival", "actualUtc"),
+        ("arrival", "estimatedUtc"),
+        ("arrival", "scheduledUtc"),
+        ("arrival", "actualUtc"),
+    ]
+    for path in candidate_paths:
+        value = _extract_nested_value(row, path)
+        if value is None:
+            continue
+        dt = _coerce_datetime_value(value)
+        if dt is not None:
+            return dt
+    return None
+
+
+def _normalize_airport(value: Any) -> Optional[str]:
+    if isinstance(value, Mapping):
+        for key in ("icao", "iata", "code", "name", "airport"):
+            nested = value.get(key)
+            result = _normalize_airport(nested)
+            if result:
+                return result
+        return None
+    text = _normalize_str(value)
+    if not text:
+        return None
+    upper = text.upper()
+    match = re.search(r"[A-Z]{4}", upper)
+    if match:
+        return match.group(0)
+    match = re.search(r"[A-Z]{3}", upper)
+    if match:
+        return match.group(0)
+    return upper
+
+
+def _extract_airport(row: Mapping[str, Any], keys: Iterable[str]) -> Optional[str]:
+    for key in keys:
+        value = row.get(key)
+        result = _normalize_airport(value)
+        if result:
+            return result
+        if isinstance(value, Mapping):
+            continue
+        if value is None and isinstance(row.get("times"), Mapping):
+            nested = row.get("times", {})
+            nested_value = nested.get(key)
+            result = _normalize_airport(nested_value)
+            if result:
+                return result
+    return None
+
+
+def _first_non_empty(row: Mapping[str, Any], keys: Sequence[str]) -> Optional[str]:
+    for key in keys:
+        value = row.get(key)
+        text = _normalize_str(value)
+        if text:
+            return text
+    return None
+
+
+def _to_naive_utc(dt: Optional[datetime]) -> pd.Timestamp:
+    if dt is None:
+        return pd.NaT
+    ts = pd.to_datetime(dt, utc=True)
+    if pd.isna(ts):
+        return pd.NaT
+    return ts.tz_localize(None)
+
+
+def _normalise_fl3xx_rows(rows: Sequence[Mapping[str, Any]]) -> pd.DataFrame:
+    records = []
+    for row in rows:
+        tail = _normalize_str(row.get("tail"))
+        if tail:
+            tail = tail.replace("-", "").upper()
+        booking = _first_non_empty(
+            row,
+            (
+                "bookingCode",
+                "bookingReference",
+                "bookingNumber",
+                "bookingId",
+                "booking",
+                "salesOrderNumber",
+            ),
+        )
+        from_icao = _extract_airport(
+            row,
+            (
+                "departure_airport",
+                "dep_airport",
+                "departureAirport",
+                "airportFrom",
+                "fromAirport",
+                "departure",
+            ),
+        )
+        to_icao = _extract_airport(
+            row,
+            (
+                "arrival_airport",
+                "arr_airport",
+                "arrivalAirport",
+                "airportTo",
+                "toAirport",
+                "arrival",
+            ),
+        )
+        offblock = _to_naive_utc(_extract_departure_dt(row))
+        onblock = _to_naive_utc(_extract_arrival_dt(row))
+        aircraft_type = _first_non_empty(
+            row,
+            (
+                "assignedAircraftType",
+                "aircraftType",
+                "aircraftCategory",
+                "aircraftClass",
+            ),
+        )
+        workflow = _first_non_empty(
+            row,
+            (
+                "workflowCustomName",
+                "workflowName",
+                "workflow",
+            ),
+        )
+
+        records.append(
+            {
+                "Booking": booking,
+                "From (ICAO)": from_icao,
+                "To (ICAO)": to_icao,
+                "Tail": tail or "",
+                "OffBlock": offblock,
+                "OnBlock": onblock,
+                "Aircraft Type": aircraft_type,
+                "Workflow": workflow,
+            }
+        )
+
+    df = pd.DataFrame(records)
+    if df.empty:
+        return df
+
+    df["Tail"] = df["Tail"].fillna("").astype(str).str.replace("-", "", regex=False).str.upper()
+    return df
+
+
+@st.cache_data(show_spinner=True, ttl=180)
+def fetch_fl3xx_dataframe(token: str, start: date, end: date) -> Tuple[pd.DataFrame, dict]:
+    config = _build_fl3xx_config(token)
+
+    if not (config.api_token or config.auth_header):
+        raise RuntimeError(
+            "No FL3XX credentials configured. Provide a token or set secrets in Streamlit."
+        )
+
+    if end < start:
+        start, end = end, start
+
+    flights, metadata = fetch_flights(config, from_date=start, to_date=end)
+
+    normalized_rows, stats = normalize_fl3xx_payload({"items": flights})
+    normalized_rows, skipped_subcharter = filter_out_subcharter_rows(normalized_rows)
+    stats["skipped_subcharter"] = skipped_subcharter
+
+    df = _normalise_fl3xx_rows(normalized_rows)
+
+    metadata = {
+        **metadata,
+        "normalization": stats,
+        "flight_count": len(flights),
+    }
+
+    return df, metadata
 
 # ---------------- Helpers ----------------
 def _cyvr_future_exempt(ap: str, sched_dt: pd.Timestamp, threshold_days: int = 4) -> bool:
@@ -102,6 +473,56 @@ if TAILS:
     st.sidebar.success(f"Loaded {len(TAILS)} company tails from tails.csv")
 else:
     st.sidebar.warning("No tails.csv found — showing all OCS slots")
+
+
+def _default_date_range() -> Tuple[date, date]:
+    today = datetime.utcnow().date()
+    return today, today + timedelta(days=1)
+
+
+st.sidebar.markdown("---")
+st.sidebar.header("FL3XX Flights Source")
+
+default_start, default_end = _default_date_range()
+date_selection = st.sidebar.date_input(
+    "Flight window (UTC)",
+    value=(default_start, default_end),
+)
+
+if isinstance(date_selection, (tuple, list)) and len(date_selection) == 2:
+    fl3xx_from, fl3xx_to = date_selection
+else:
+    fl3xx_from = fl3xx_to = date_selection
+
+token_default = st.secrets.get("fl3xx_api", {}).get("api_token", "")
+api_token_input = st.sidebar.text_input(
+    "FL3XX API token", value=token_default or "", type="password"
+)
+
+fetch_clicked = st.sidebar.button("Fetch flights from FL3XX")
+
+if fetch_clicked:
+    try:
+        with st.spinner("Fetching flights from FL3XX..."):
+            api_df, api_meta = fetch_fl3xx_dataframe(
+                api_token_input or "", fl3xx_from, fl3xx_to
+            )
+    except Exception as exc:
+        st.sidebar.error(f"FL3XX fetch failed: {exc}")
+    else:
+        st.session_state["fl3xx_api_df"] = api_df
+        st.session_state["fl3xx_api_meta"] = api_meta
+        if api_df.empty:
+            st.sidebar.warning("FL3XX API returned no legs for the selected window.")
+        else:
+            st.sidebar.success(
+                f"Fetched {len(api_df)} FL3XX legs covering {api_meta.get('flight_count', 0)} flights."
+            )
+
+if "fl3xx_api_meta" in st.session_state:
+    meta = st.session_state.get("fl3xx_api_meta", {})
+    with st.sidebar.expander("Latest FL3XX fetch details", expanded=False):
+        st.json(meta)
 
 # ---------------- Utils ----------------
 def _read_csv_reset(file, **kwargs):
@@ -514,8 +935,16 @@ def compare(fl3xx_df: pd.DataFrame, ocs_df: pd.DataFrame):
 fl3xx_files = st.file_uploader("Upload Fl3xx CSV(s)", type="csv", accept_multiple_files=True)
 ocs_files = st.file_uploader("Upload OCS CSV(s)", type="csv", accept_multiple_files=True)
 
-if fl3xx_files and ocs_files:
-    fl3xx_df = pd.concat([parse_fl3xx_file(f) for f in fl3xx_files], ignore_index=True)
+fl3xx_frames = []
+if fl3xx_files:
+    fl3xx_frames.extend(parse_fl3xx_file(f) for f in fl3xx_files)
+
+api_dataframe = st.session_state.get("fl3xx_api_df")
+if isinstance(api_dataframe, pd.DataFrame) and not api_dataframe.empty:
+    fl3xx_frames.append(api_dataframe)
+
+if fl3xx_frames and ocs_files:
+    fl3xx_df = pd.concat(fl3xx_frames, ignore_index=True)
     ocs_list = [parse_ocs_file(f) for f in ocs_files]
     ocs_list = [df for df in ocs_list if not df.empty]
     ocs_df = pd.concat(ocs_list, ignore_index=True) if ocs_list else pd.DataFrame(columns=["SlotAirport","Date","Movement","SlotTimeHHMM","Tail","SlotRef"])
@@ -551,5 +980,7 @@ if fl3xx_files and ocs_files:
     show_table(stale_df,    "⚠ Stale Slots",      "stale")
 
 
+elif not ocs_files:
+    st.info("Upload OCS CSV files to compare against FL3XX data.")
 else:
-    st.info("Upload both Fl3xx and OCS files to begin.")
+    st.info("Provide FL3XX data via the API fetch or CSV uploads to begin.")
