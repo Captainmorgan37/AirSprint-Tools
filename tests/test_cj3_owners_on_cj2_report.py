@@ -107,7 +107,7 @@ def test_skips_within_threshold_requests():
     payload_map = {
         "Q2": [
             {
-                "planningNotes": "Owner requesting CJ3",
+                "planningNotes": "Owner requesting a CJ3",
                 "pax": 4,
                 "blockTime": 150,
                 "departureDateUTC": iso(dep),

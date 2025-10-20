@@ -2330,9 +2330,29 @@ _NON_CJ2_REQUEST_KEYWORDS = (
     "LEGACY 450",
 )
 
+_REQUEST_ARTICLE_PATTERN = r"(?:\s+(?:A|AN|THE)\b)?"
+
+
+def _build_request_keyword_pattern(keyword: str) -> re.Pattern[str]:
+    return re.compile(
+        rf"\bREQUESTING\b{_REQUEST_ARTICLE_PATTERN}[^A-Z0-9]*{re.escape(keyword)}(?=\b|[^A-Z0-9]|$)",
+        re.IGNORECASE,
+    )
+
+
+_NON_CJ2_REQUEST_PATTERNS = tuple(
+    _build_request_keyword_pattern(keyword) for keyword in _NON_CJ2_REQUEST_KEYWORDS
+)
+
 _CJ_REQUEST_PATTERNS = (
-    re.compile(r"\bREQUESTING\b[^A-Z0-9]*(CJ(?:[-\s]?\d)?\+?)", re.IGNORECASE),
-    re.compile(r"\bREQUESTING\b[^A-Z0-9]*(CITATION(?:\s+[A-Z0-9]+)?)", re.IGNORECASE),
+    re.compile(
+        rf"\bREQUESTING\b{_REQUEST_ARTICLE_PATTERN}[^A-Z0-9]*(CJ(?:[-\s]?\d)?\+?)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        rf"\bREQUESTING\b{_REQUEST_ARTICLE_PATTERN}[^A-Z0-9]*(CITATION(?:\s+[A-Z0-9]+)?)",
+        re.IGNORECASE,
+    ),
 )
 
 
@@ -2346,8 +2366,8 @@ def _planning_note_requests_non_cj2(note: Optional[str]) -> bool:
         keyword in text for keyword in _NON_CJ2_REQUEST_KEYWORDS
     ):
         return False
-    for keyword in _NON_CJ2_REQUEST_KEYWORDS:
-        if f"REQUESTING {keyword}" in text:
+    for pattern in _NON_CJ2_REQUEST_PATTERNS:
+        if pattern.search(note):
             return True
     return False
 
