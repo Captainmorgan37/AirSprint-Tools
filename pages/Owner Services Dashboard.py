@@ -87,6 +87,54 @@ def _extract_airport_code(value: Any) -> Optional[str]:
     return None
 
 
+def _coerce_text(value: Any) -> Optional[str]:
+    if value in (None, ""):
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _extract_booking_identifier(leg: Mapping[str, Any]) -> Optional[str]:
+    booking_keys = (
+        "bookingIdentifier",
+        "booking_identifier",
+        "bookingReference",
+        "booking_reference",
+        "bookingCode",
+        "booking_code",
+        "bookingNumber",
+        "booking_number",
+        "bookingId",
+        "booking_id",
+        "bookingID",
+        "bookingRef",
+        "booking",
+        "salesOrderNumber",
+        "salesOrder",
+        "reservationNumber",
+        "reservationId",
+    )
+
+    for key in booking_keys:
+        text = _coerce_text(leg.get(key))
+        if text:
+            return text
+
+    nested_candidates = []
+    for nested_key in ("booking", "reservation", "salesOrder"):
+        nested_value = leg.get(nested_key)
+        if isinstance(nested_value, Mapping):
+            nested_candidates.append(nested_value)
+
+    for nested in nested_candidates:
+        for key in ("identifier", "reference", "code", "number", "id"):
+            text = _coerce_text(nested.get(key))
+            if text:
+                return text
+
+    return None
+
+
 def _build_display_row(
     leg: Mapping[str, Any],
     summary: OwnerServicesSummary,
@@ -101,7 +149,7 @@ def _build_display_row(
     )
 
     tail = str(leg.get("tail") or "Unknown")
-    leg_id = str(leg.get("leg_id") or leg.get("id") or "")
+    booking_identifier = _extract_booking_identifier(leg)
     dep_ap = _extract_airport_code(
         leg.get("departure_airport") or leg.get("departureAirport")
     )
@@ -131,7 +179,7 @@ def _build_display_row(
         "Departure (UTC)": departure_label,
         "Arrival (UTC)": arrival_label,
         "Tail": tail,
-        "Leg ID": leg_id,
+        "Booking Identifier": booking_identifier or "—",
         "Route": route,
         "Owner": owner_text,
         "Owner Services Status": status_label,
@@ -367,7 +415,7 @@ def _render_results() -> None:
             "Departure (UTC)",
             "Arrival (UTC)",
             "Tail",
-            "Leg ID",
+            "Booking Identifier",
             "Route",
             "Owner",
             "Owner Services Status",
