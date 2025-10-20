@@ -71,6 +71,9 @@ _SENSITIVE_KEYWORDS: tuple[str, ...] = (
     "cats",
     "commercial",
     "connecting",
+    "esta",    
+    "visa",
+    "perrier",
 )
 
 _KEYWORD_PATTERN = re.compile(
