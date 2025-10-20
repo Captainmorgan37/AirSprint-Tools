@@ -265,6 +265,44 @@ def _previous_business_day(reference: date) -> date:
     return candidate
 
 
+def _parse_lead_time_hours(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        normalized = value.strip()
+        if not normalized:
+            return None
+        match = re.search(r"(\d+(?:\.\d+)?)", normalized)
+        if not match:
+            return None
+        try:
+            return float(match.group(1))
+        except ValueError:
+            return None
+    return None
+
+
+def _extract_departure_dt(row: Mapping[str, Any]) -> Optional[datetime]:
+    departure_keys = (
+        "departureTime",
+        "dep_time",
+        "std",
+        "scheduledDeparture",
+        "etd",
+    )
+    for key in departure_keys:
+        raw_value = row.get(key)
+        if not raw_value:
+            continue
+        try:
+            return safe_parse_dt(str(raw_value))
+        except Exception:
+            continue
+    return None
+
+
 def _parse_hours_value(value: str) -> Optional[Tuple[time, time]]:
     if not value:
         return None
@@ -327,7 +365,8 @@ def _compute_clearance_window(
     arr_airport: str,
     lookup: Dict[str, Dict[str, Optional[str]]],
     rule: Optional[Mapping[str, Any]],
-) -> Tuple[Optional[datetime], Optional[datetime], str]:
+    arrival_status: str,
+) -> Tuple[Optional[datetime], Optional[datetime], str, str]:
     event_candidates = (
         "arrivalTime",
         "arrival_time",
@@ -350,7 +389,7 @@ def _compute_clearance_window(
             continue
 
     if event_dt is None:
-        return None, None, ""
+        return None, None, "", "Unknown"
 
     tz_name = _extract_airport_timezone(arr_airport, lookup) or _candidate_timezone_from_row(row)
     if not tz_name:
@@ -379,7 +418,109 @@ def _compute_clearance_window(
         f"{window_start_time.strftime('%H:%M')}-{window_end_time.strftime('%H:%M')} local."
     )
 
-    return start_local, end_local, goal_summary
+    timing_label = "Prior Day"
+
+    normalized_status = (arrival_status or "").strip().upper()
+    if normalized_status != "OK" and isinstance(end_local, datetime):
+        now_local = datetime.now(end_local.tzinfo or ZoneInfo("UTC"))
+        if now_local > end_local:
+            lead_hours: Optional[float] = None
+            same_day_hours: Optional[Tuple[time, time]] = None
+            rule_same_day_hours: Optional[Tuple[time, time]] = None
+            if isinstance(rule, Mapping):
+                lead_hours = _parse_lead_time_hours(rule.get("lead_time_arrival_hours"))
+                rule_same_day_hours = _rule_hours_for_weekday(
+                    rule, event_local.weekday()
+                )
+                same_day_hours = rule_same_day_hours
+
+            if same_day_hours is None:
+                same_day_hours = (
+                    DEFAULT_BUSINESS_DAY_START,
+                    DEFAULT_BUSINESS_DAY_END,
+                )
+
+            same_day_start_time, same_day_end_time = same_day_hours
+            same_day_start_local = datetime.combine(
+                event_local.date(), same_day_start_time, tzinfo=tzinfo
+            )
+            same_day_end_local = datetime.combine(
+                event_local.date(), same_day_end_time, tzinfo=tzinfo
+            )
+
+            lead_deadline: Optional[datetime] = None
+            if lead_hours is not None:
+                lead_deadline = event_local - timedelta(hours=lead_hours)
+
+            if isinstance(lead_deadline, datetime):
+                lead_deadline = lead_deadline.astimezone(tzinfo)
+
+            departure_dt = _extract_departure_dt(row)
+            departure_local: Optional[datetime] = None
+            if isinstance(departure_dt, datetime):
+                if departure_dt.tzinfo is None:
+                    departure_dt = departure_dt.replace(tzinfo=pytz.UTC)
+                try:
+                    departure_local = departure_dt.astimezone(tzinfo)
+                except Exception:
+                    departure_local = departure_dt
+
+            fallback_end_local = same_day_end_local
+            if isinstance(lead_deadline, datetime):
+                fallback_end_local = min(fallback_end_local, lead_deadline)
+            if isinstance(departure_local, datetime):
+                fallback_end_local = min(fallback_end_local, departure_local)
+
+            fallback_start_local = same_day_start_local
+            deadline_before_open = False
+            if fallback_end_local < fallback_start_local:
+                deadline_before_open = True
+                fallback_end_local = fallback_start_local
+
+            port_window_desc = (
+                f"Port hours {same_day_start_time.strftime('%H:%M')}"
+                f"-{same_day_end_time.strftime('%H:%M')} local."
+                if rule_same_day_hours is not None
+                else (
+                    "Default same-day window "
+                    f"{DEFAULT_BUSINESS_DAY_START.strftime('%H:%M')}"
+                    f"-{DEFAULT_BUSINESS_DAY_END.strftime('%H:%M')} local."
+                )
+            )
+
+            summary_parts = ["Prior day clearance window missed.", port_window_desc]
+
+            if isinstance(lead_deadline, datetime):
+                lead_hours_text = f"{lead_hours:g}" if lead_hours is not None else ""
+                summary_parts.append(
+                    "Lead time"
+                    f" ({lead_hours_text}h) deadline {lead_deadline.strftime('%H:%M %Z')}."
+                )
+
+            if isinstance(departure_local, datetime):
+                summary_parts.append(
+                    "Flight departs "
+                    f"{departure_local.strftime('%Y-%m-%d %H:%M %Z')}."
+                )
+
+            if deadline_before_open:
+                summary_parts.append(
+                    "Lead/departure deadline occurs before port opens; action required at opening."
+                )
+
+            summary_parts.append(
+                "Same-day clearance window "
+                f"{fallback_start_local.strftime('%Y-%m-%d %H:%M %Z')}"
+                " → "
+                f"{fallback_end_local.strftime('%Y-%m-%d %H:%M %Z')}."
+            )
+
+            start_local = fallback_start_local
+            end_local = fallback_end_local
+            goal_summary = " ".join(summary_parts)
+            timing_label = "Same Day"
+
+    return start_local, end_local, goal_summary, timing_label
 
 
 @st.cache_data(show_spinner=False)
@@ -743,8 +884,8 @@ for _, leg in customs_df.iterrows():
         else:
             arr_notes = clearance_note
 
-    clearance_start_dt, clearance_end_dt, clearance_goal = _compute_clearance_window(
-        row, dep_airport, arr_airport, lookup, rule
+    clearance_start_dt, clearance_end_dt, clearance_goal, clearance_timing = _compute_clearance_window(
+        row, dep_airport, arr_airport, lookup, rule, arr_status
     )
     clearance_start_mt = _format_in_timezone(clearance_start_dt, MOUNTAIN_TIMEZONE)
     clearance_end_mt = _format_in_timezone(clearance_end_dt, MOUNTAIN_TIMEZONE)
@@ -762,6 +903,7 @@ for _, leg in customs_df.iterrows():
             "Clearance Target Start (MT)": clearance_start_mt,
             "Clearance Target End (MT)": clearance_end_mt,
             "Clearance Goal": clearance_goal,
+            "Clearance Timing": clearance_timing,
             "Rule Lead Time Arrival (hrs)": lead_time_arrival,
             "Rule Operating Hours": hours_summary,
             "Rule After Hours Available": after_hours,
