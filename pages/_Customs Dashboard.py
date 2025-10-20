@@ -61,6 +61,15 @@ URGENCY_STYLES = {
     },
 }
 
+URGENCY_SORT_ORDER = {
+    "overdue": 0,
+    "within_2": 1,
+    "within_5": 2,
+    "today": 3,
+    "pending": 4,
+    "ok": 5,
+}
+
 _DAY_KEYS = (
     "open_mon",
     "open_tue",
@@ -775,9 +784,6 @@ if not result_df.empty:
     result_df["_hours_until_clearance"] = pd.to_numeric(
         result_df["_hours_until_clearance"], errors="coerce"
     )
-    result_df["_status_priority"] = result_df["Arrival Status"].apply(
-        lambda status: 0 if status == "OK" else 1
-    )
     result_df["_urgency_category"] = result_df.apply(
         lambda row: _classify_urgency(
             row.get("Arrival Status", ""),
@@ -785,6 +791,9 @@ if not result_df.empty:
             now_mt,
         ),
         axis=1,
+    )
+    result_df["_urgency_priority"] = result_df["_urgency_category"].map(
+        lambda category: URGENCY_SORT_ORDER.get(category, len(URGENCY_SORT_ORDER))
     )
     result_df["Time to Clear"] = result_df.apply(
         lambda row: _format_time_to_clear(row, now_mt),
@@ -800,8 +809,8 @@ if not result_df.empty:
         result_df = result_df[cols]
 
     result_df.sort_values(
-        by=["_status_priority", "_hours_until_clearance"],
-        ascending=[True, False],
+        by=["_urgency_priority", "_hours_until_clearance"],
+        ascending=[True, True],
         na_position="last",
         inplace=True,
     )
@@ -823,8 +832,8 @@ base_drop_cols = [
         "_clearance_end_dt",
         "_clearance_end_mt",
         "_hours_until_clearance",
-        "_status_priority",
         "_urgency_category",
+        "_urgency_priority",
     )
     if col in result_df.columns
 ]
@@ -842,47 +851,77 @@ drop_cols = list(base_drop_cols)
 if not show_arrival_notes and "Arrival Notes" in result_df.columns:
     drop_cols.append("Arrival Notes")
 
-display_df = result_df.drop(columns=drop_cols)
 
-if "Arrival Status" in display_df.columns and "Time to Clear" in display_df.columns:
-    display_cols = list(display_df.columns)
-    display_cols.insert(
-        display_cols.index("Arrival Status") + 1,
-        display_cols.pop(display_cols.index("Time to Clear")),
-    )
-    display_df = display_df[display_cols]
+def _render_customs_table(
+    source_df: pd.DataFrame,
+    drop_columns: List[str],
+    empty_message: str,
+) -> None:
+    if source_df.empty:
+        st.info(empty_message)
+        return
 
-if "_urgency_category" in result_df.columns:
-    style_lookup = (
-        result_df["_urgency_category"].apply(lambda cat: URGENCY_STYLES.get(cat)).to_dict()
-    )
+    working_df = source_df.reset_index(drop=True)
+    display_df = working_df.drop(columns=drop_columns)
 
-    def _style_row(row: pd.Series) -> List[str]:
-        styles = style_lookup.get(row.name)
-        if not isinstance(styles, Mapping):
-            return [""] * len(row)
-        css_parts: List[str] = []
-        background = styles.get("background")
-        border = styles.get("border")
-        text = styles.get("text")
-        if background:
-            css_parts.append(f"background-color: {background}")
-        if border:
-            css_parts.append(f"border-left: 4px solid {border}")
-        if not css_parts:
-            return [""] * len(row)
-        if text:
-            css_parts.append(f"color: {text}")
-        else:
-            css_parts.append("color: inherit")
-        css_parts.append("font-weight: 600")
-        css = "; ".join(css_parts)
-        return [css] * len(row)
+    if "Arrival Status" in display_df.columns and "Time to Clear" in display_df.columns:
+        display_cols = list(display_df.columns)
+        display_cols.insert(
+            display_cols.index("Arrival Status") + 1,
+            display_cols.pop(display_cols.index("Time to Clear")),
+        )
+        display_df = display_df[display_cols]
 
-    styler = display_df.style.apply(_style_row, axis=1)
-    st.dataframe(styler, use_container_width=True)
-else:
-    st.dataframe(display_df, use_container_width=True)
+    if "_urgency_category" in working_df.columns:
+        style_lookup = (
+            working_df["_urgency_category"].apply(lambda cat: URGENCY_STYLES.get(cat)).to_dict()
+        )
+
+        def _style_row(row: pd.Series) -> List[str]:
+            styles = style_lookup.get(row.name)
+            if not isinstance(styles, Mapping):
+                return [""] * len(row)
+            css_parts: List[str] = []
+            background = styles.get("background")
+            border = styles.get("border")
+            text = styles.get("text")
+            if background:
+                css_parts.append(f"background-color: {background}")
+            if border:
+                css_parts.append(f"border-left: 4px solid {border}")
+            if not css_parts:
+                return [""] * len(row)
+            if text:
+                css_parts.append(f"color: {text}")
+            else:
+                css_parts.append("color: inherit")
+            css_parts.append("font-weight: 600")
+            css = "; ".join(css_parts)
+            return [css] * len(row)
+
+        styler = display_df.style.apply(_style_row, axis=1)
+        st.dataframe(styler, use_container_width=True)
+    else:
+        st.dataframe(display_df, use_container_width=True)
+
+
+pending_mask = result_df["Arrival Status"].astype(str).str.upper() != "OK"
+pending_df = result_df.loc[pending_mask].copy()
+ok_df = result_df.loc[~pending_mask].copy()
+
+st.subheader("Flights requiring customs clearance")
+_render_customs_table(
+    pending_df,
+    drop_columns=drop_cols,
+    empty_message="No flights currently require customs clearance.",
+)
+
+st.subheader("Flights cleared (OK status)")
+_render_customs_table(
+    ok_df,
+    drop_columns=drop_cols,
+    empty_message="No flights currently cleared.",
+)
 st.caption(
     "Clearance goals assume completion during the prior business day between %s and %s local time."
     % (
