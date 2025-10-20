@@ -9,7 +9,7 @@ import json
 from typing import Any, Dict, Iterable, List, MutableMapping, Optional, Tuple
 
 import requests
-from zoneinfo import ZoneInfo
+from zoneinfo_compat import ZoneInfo
 
 
 DEFAULT_FL3XX_BASE_URL = "https://app.fl3xx.us/api/external/flight/flights"

@@ -35,3 +35,4 @@ html5lib>=1.1
 # ASP Tracking Dashboard
 streamlit-autorefresh
 tzdata
+backports.zoneinfo; python_version < "3.9"
