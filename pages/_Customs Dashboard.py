@@ -851,47 +851,77 @@ drop_cols = list(base_drop_cols)
 if not show_arrival_notes and "Arrival Notes" in result_df.columns:
     drop_cols.append("Arrival Notes")
 
-display_df = result_df.drop(columns=drop_cols)
 
-if "Arrival Status" in display_df.columns and "Time to Clear" in display_df.columns:
-    display_cols = list(display_df.columns)
-    display_cols.insert(
-        display_cols.index("Arrival Status") + 1,
-        display_cols.pop(display_cols.index("Time to Clear")),
-    )
-    display_df = display_df[display_cols]
+def _render_customs_table(
+    source_df: pd.DataFrame,
+    drop_columns: List[str],
+    empty_message: str,
+) -> None:
+    if source_df.empty:
+        st.info(empty_message)
+        return
 
-if "_urgency_category" in result_df.columns:
-    style_lookup = (
-        result_df["_urgency_category"].apply(lambda cat: URGENCY_STYLES.get(cat)).to_dict()
-    )
+    working_df = source_df.reset_index(drop=True)
+    display_df = working_df.drop(columns=drop_columns)
 
-    def _style_row(row: pd.Series) -> List[str]:
-        styles = style_lookup.get(row.name)
-        if not isinstance(styles, Mapping):
-            return [""] * len(row)
-        css_parts: List[str] = []
-        background = styles.get("background")
-        border = styles.get("border")
-        text = styles.get("text")
-        if background:
-            css_parts.append(f"background-color: {background}")
-        if border:
-            css_parts.append(f"border-left: 4px solid {border}")
-        if not css_parts:
-            return [""] * len(row)
-        if text:
-            css_parts.append(f"color: {text}")
-        else:
-            css_parts.append("color: inherit")
-        css_parts.append("font-weight: 600")
-        css = "; ".join(css_parts)
-        return [css] * len(row)
+    if "Arrival Status" in display_df.columns and "Time to Clear" in display_df.columns:
+        display_cols = list(display_df.columns)
+        display_cols.insert(
+            display_cols.index("Arrival Status") + 1,
+            display_cols.pop(display_cols.index("Time to Clear")),
+        )
+        display_df = display_df[display_cols]
 
-    styler = display_df.style.apply(_style_row, axis=1)
-    st.dataframe(styler, use_container_width=True)
-else:
-    st.dataframe(display_df, use_container_width=True)
+    if "_urgency_category" in working_df.columns:
+        style_lookup = (
+            working_df["_urgency_category"].apply(lambda cat: URGENCY_STYLES.get(cat)).to_dict()
+        )
+
+        def _style_row(row: pd.Series) -> List[str]:
+            styles = style_lookup.get(row.name)
+            if not isinstance(styles, Mapping):
+                return [""] * len(row)
+            css_parts: List[str] = []
+            background = styles.get("background")
+            border = styles.get("border")
+            text = styles.get("text")
+            if background:
+                css_parts.append(f"background-color: {background}")
+            if border:
+                css_parts.append(f"border-left: 4px solid {border}")
+            if not css_parts:
+                return [""] * len(row)
+            if text:
+                css_parts.append(f"color: {text}")
+            else:
+                css_parts.append("color: inherit")
+            css_parts.append("font-weight: 600")
+            css = "; ".join(css_parts)
+            return [css] * len(row)
+
+        styler = display_df.style.apply(_style_row, axis=1)
+        st.dataframe(styler, use_container_width=True)
+    else:
+        st.dataframe(display_df, use_container_width=True)
+
+
+pending_mask = result_df["Arrival Status"].astype(str).str.upper() != "OK"
+pending_df = result_df.loc[pending_mask].copy()
+ok_df = result_df.loc[~pending_mask].copy()
+
+st.subheader("Flights requiring customs clearance")
+_render_customs_table(
+    pending_df,
+    drop_columns=drop_cols,
+    empty_message="No flights currently require customs clearance.",
+)
+
+st.subheader("Flights cleared (OK status)")
+_render_customs_table(
+    ok_df,
+    drop_columns=drop_cols,
+    empty_message="No flights currently cleared.",
+)
 st.caption(
     "Clearance goals assume completion during the prior business day between %s and %s local time."
     % (
