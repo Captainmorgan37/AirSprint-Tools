@@ -52,9 +52,9 @@ The sections below capture implementation specifics for the completed reports an
 - **Follow-up:** Extend the matchers if additional upgrade note formats or aircraft families need coverage.
 
 ## 16.1.10 Upgraded Flights Report (Implemented)
-- **Current Capability:** `_build_upgrade_flights_report` lists every upgrade workflow leg, displaying the booking reference, requested vs. assigned equipment transition, booking notes, and any missing quote identifier warnings.
-- **Required Inputs:** None pending – data sources already expose the requested equipment, assigned type, and booking note context.
-- **Next Steps:** Monitor for new upgrade workflow variants and extend validation heuristics as additional business rules are introduced.
+- **Current Capability:** `_build_upgrade_flights_report` lists every upgrade workflow leg, displaying the booking reference, requested vs. assigned equipment transition, booking notes, and any missing quote identifier warnings. The report metadata now captures which workflow labels were inspected, how many legs were considered upgrade candidates, and whether quote identifiers or booking references were missing.
+- **Required Inputs:** Legs must surface an upgrade-oriented workflow label (e.g., `workflowCustomName` containing "upgrade"), the quote identifier (so we can fetch booking notes and requested types), and ideally the booking reference directly on the flight payload. When either identifier is absent the leg still appears, but the metadata will highlight the missing field counts for troubleshooting.
+- **Next Steps:** Monitor for new upgrade workflow variants and extend validation heuristics as additional business rules are introduced. Review the metadata summaries if the report ever renders empty to confirm whether upgrade-labelled workflows were present in the fetch window.
 
 ## 16.1.11 FBO Disconnects (Pending)
 - **Current Capability:** The normalised payload already exposes airports and timestamps, allowing us to match legs operating from the same field.
