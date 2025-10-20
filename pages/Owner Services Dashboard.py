@@ -414,6 +414,25 @@ def _extract_leg_notes(payload: Any) -> Optional[str]:
     return None
 
 
+def _extract_service_notes(payload: Any) -> List[tuple[str, str]]:
+    summary = OwnerServicesSummary.from_payload(payload)
+    notes: List[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    for entry in summary.all_entries():
+        if not entry.notes:
+            continue
+        description = (entry.description or "").strip()
+        label = f"Owner service – {description}" if description else "Owner service"
+        candidate = (label, entry.notes)
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        notes.append(candidate)
+
+    return notes
+
+
 def _highlight_keywords(note_text: str) -> tuple[str, List[str]]:
     matches: List[str] = []
     parts: List[str] = []
@@ -446,48 +465,107 @@ def _build_sensitive_notes_rows(
         "detail_requests": 0,
         "detail_failures": 0,
         "legs_with_detail": 0,
+        "legs_with_leg_notes": 0,
         "legs_with_notes": 0,
         "legs_flagged": 0,
+        "missing_flight_ids": 0,
+        "service_requests": 0,
+        "service_failures": 0,
+        "legs_with_service_data": 0,
+        "legs_with_service_notes": 0,
     }
 
     detail_cache: Dict[str, Optional[Any]] = {}
+    services_cache: Dict[str, Optional[Any]] = {}
+    missing_flight_seen: set[tuple[str, str]] = set()
 
     session = requests.Session()
     try:
         for leg in rows:
+            note_blocks: List[tuple[str, str]] = []
+
             quote_id = _extract_quote_identifier(leg)
+            payload: Optional[Any] = None
             if not quote_id:
                 stats["missing_quote_ids"] += 1
-                continue
+            else:
+                if quote_id not in detail_cache:
+                    stats["detail_requests"] += 1
+                    try:
+                        payload = fetch_leg_details(config, quote_id, session=session)
+                    except Exception as exc:
+                        stats["detail_failures"] += 1
+                        detail_cache[quote_id] = None
+                        warnings.append(
+                            f"Failed to fetch leg details for quote {quote_id}: {exc}"
+                        )
+                    else:
+                        detail_cache[quote_id] = payload
+                payload = detail_cache.get(quote_id)
+                if payload is not None:
+                    stats["legs_with_detail"] += 1
+                    note_text = _extract_leg_notes(payload)
+                    if note_text:
+                        stats["legs_with_leg_notes"] += 1
+                        note_blocks.append(("Leg notes", note_text))
 
-            payload: Optional[Any]
-            if quote_id not in detail_cache:
-                stats["detail_requests"] += 1
-                try:
-                    payload = fetch_leg_details(config, quote_id, session=session)
-                except Exception as exc:
-                    stats["detail_failures"] += 1
-                    detail_cache[quote_id] = None
+            flight_id = leg.get("flightId") or leg.get("flight_id")
+            services_payload: Optional[Any] = None
+            if not flight_id:
+                stats["missing_flight_ids"] += 1
+                leg_identifier = (
+                    str(leg.get("leg_id") or leg.get("legId") or leg.get("id") or "")
+                )
+                warning_key = (str(leg.get("tail") or "Unknown"), leg_identifier)
+                if warning_key not in missing_flight_seen:
+                    missing_flight_seen.add(warning_key)
                     warnings.append(
-                        f"Failed to fetch leg details for quote {quote_id}: {exc}"
+                        f"Leg {leg_identifier or 'unknown'} ({warning_key[0]}) is missing a flight "
+                        "identifier; skipping owner services note lookup."
                     )
-                    continue
-                else:
-                    detail_cache[quote_id] = payload
-            payload = detail_cache.get(quote_id)
-            if payload is None:
-                continue
+            else:
+                flight_key = str(flight_id)
+                if flight_key not in services_cache:
+                    stats["service_requests"] += 1
+                    try:
+                        services_payload = fetch_flight_services(
+                            config, flight_key, session=session
+                        )
+                    except Exception as exc:
+                        stats["service_failures"] += 1
+                        services_cache[flight_key] = None
+                        warnings.append(
+                            f"Failed to fetch services for flight {flight_key}: {exc}"
+                        )
+                    else:
+                        services_cache[flight_key] = services_payload
+                services_payload = services_cache.get(flight_key)
+                if services_payload is not None:
+                    stats["legs_with_service_data"] += 1
+                    service_notes = _extract_service_notes(services_payload)
+                    if service_notes:
+                        stats["legs_with_service_notes"] += 1
+                        note_blocks.extend(service_notes)
 
-            stats["legs_with_detail"] += 1
-
-            note_text = _extract_leg_notes(payload)
-            if not note_text:
+            if not note_blocks:
                 continue
 
             stats["legs_with_notes"] += 1
 
-            highlighted, matched_keywords = _highlight_keywords(note_text)
-            if not matched_keywords:
+            rendered_blocks = []
+            aggregated_matches: set[str] = set()
+            for label, text in note_blocks:
+                highlighted, matched_keywords = _highlight_keywords(text)
+                aggregated_matches.update(matched_keywords)
+                rendered_blocks.append(
+                    {
+                        "label": label,
+                        "highlighted": highlighted,
+                        "raw": text,
+                    }
+                )
+
+            if not aggregated_matches:
                 continue
 
             stats["legs_flagged"] += 1
@@ -506,6 +584,21 @@ def _build_sensitive_notes_rows(
             )
             route = f"{dep_ap or '?'} → {arr_ap or '?'}"
 
+            if len(rendered_blocks) == 1 and rendered_blocks[0]["label"] == "Leg notes":
+                notes_display = rendered_blocks[0]["highlighted"]
+                raw_notes = rendered_blocks[0]["raw"]
+            else:
+                sections = []
+                raw_sections = []
+                for block in rendered_blocks:
+                    label_html = html.escape(block["label"])
+                    sections.append(
+                        f"<div><strong>{label_html}</strong><br/>{block['highlighted']}</div>"
+                    )
+                    raw_sections.append(f"{block['label']}: {block['raw']}")
+                notes_display = "<br/><br/>".join(sections)
+                raw_notes = "\n\n---\n\n".join(raw_sections)
+
             display_rows.append(
                 {
                     "_sort_key": sort_key or departure_label,
@@ -513,9 +606,9 @@ def _build_sensitive_notes_rows(
                     "Tail": tail,
                     "Booking Identifier": booking_identifier,
                     "Route": route,
-                    "Matched Keywords": ", ".join(matched_keywords),
-                    "Notes": highlighted,
-                    "_notes_raw": note_text,
+                    "Matched Keywords": ", ".join(sorted(aggregated_matches)),
+                    "Notes": notes_display,
+                    "_notes_raw": raw_notes,
                 }
             )
     finally:
