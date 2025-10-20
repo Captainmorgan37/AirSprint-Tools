@@ -414,6 +414,114 @@ def normalize_fl3xx_payload(payload: Any) -> Tuple[List[Dict[str, Any]], Dict[st
                 if isinstance(departure, Mapping):
                     dep_tz = _extract_first(departure, "timezone", "timeZone")
 
+            arr_time = _extract_first(
+                leg,
+                "arrivalTimeUtc",
+                "arrival_time_utc",
+                "arrivalTime",
+                "arrival_time",
+                "arrivalUtc",
+                "arrivalUTC",
+                "arrivalOnBlockUtc",
+                "arrivalOnBlock",
+                "arrivalActualUtc",
+                "arrivalScheduledUtc",
+                "arrivalActualTime",
+                "arrivalScheduledTime",
+                "arrivalActual",
+                "arrivalScheduled",
+                "scheduledIn",
+                "actualIn",
+                "onBlockTimeUtc",
+                "onBlockUtc",
+                "onBlockTime",
+                "blockOnTimeUtc",
+                "blockOnUtc",
+                "blockOnTime",
+                "blockOnEstUTC",
+                "blockOnEstUtc",
+                "blockOnEstimatedUTC",
+                "blockOnEstimatedUtc",
+                "blockOnEstimateUTC",
+                "blockOnEstimateUtc",
+            )
+            if not arr_time and isinstance(leg.get("arrival"), Mapping):
+                arr_time = _extract_first(
+                    leg["arrival"],
+                    "actualUtc",
+                    "scheduledUtc",
+                    "actualTime",
+                    "scheduledTime",
+                    "actual",
+                    "scheduled",
+                )
+            if not arr_time and isinstance(leg.get("times"), Mapping):
+                times = leg["times"]
+                if isinstance(times.get("arrival"), Mapping):
+                    arr_time = _extract_first(
+                        times["arrival"],
+                        "actualUtc",
+                        "scheduledUtc",
+                        "actualTime",
+                        "scheduledTime",
+                        "actual",
+                        "scheduled",
+                    )
+                if arr_time is None:
+                    arr_time = _extract_first(
+                        times,
+                        "arrival",
+                        "arrivalUtc",
+                        "arrivalActual",
+                        "arrivalScheduled",
+                        "arrivalActualUtc",
+                        "arrivalScheduledUtc",
+                    )
+            if not arr_time and isinstance(flight_tail, dict):
+                arr_time = _extract_first(
+                    flight_tail,
+                    "arrivalTimeUtc",
+                    "arrival_time_utc",
+                    "arrivalTime",
+                    "arrival_time",
+                    "arrivalUtc",
+                    "arrivalUTC",
+                    "arrivalOnBlockUtc",
+                    "arrivalOnBlock",
+                    "arrivalActualUtc",
+                    "arrivalScheduledUtc",
+                    "arrivalActualTime",
+                    "arrivalScheduledTime",
+                    "arrivalActual",
+                    "arrivalScheduled",
+                    "scheduledIn",
+                    "actualIn",
+                    "onBlockTimeUtc",
+                    "onBlockUtc",
+                    "onBlockTime",
+                    "blockOnTimeUtc",
+                    "blockOnUtc",
+                    "blockOnTime",
+                    "blockOnEstUTC",
+                    "blockOnEstUtc",
+                    "blockOnEstimatedUTC",
+                    "blockOnEstimatedUtc",
+                    "blockOnEstimateUTC",
+                    "blockOnEstimateUtc",
+                )
+                if (
+                    arr_time is None
+                    and isinstance(flight_tail.get("arrival"), Mapping)
+                ):
+                    arr_time = _extract_first(
+                        flight_tail["arrival"],
+                        "actualUtc",
+                        "scheduledUtc",
+                        "actualTime",
+                        "scheduledTime",
+                        "actual",
+                        "scheduled",
+                    )
             def _coerce_name(container: Mapping[str, Any], *keys: str) -> Optional[str]:
                 value = _extract_first(container, *keys)
                 if value is None:
@@ -748,6 +856,8 @@ def normalize_fl3xx_payload(payload: Any) -> Tuple[List[Dict[str, Any]], Dict[st
                     "dep_tz": dep_tz,
                 }
             )
+            if arr_time:
+                normalized_leg.setdefault("arrival_time", arr_time)
             if dep_airport:
                 normalized_leg.setdefault("departure_airport", str(dep_airport))
             if arr_airport:
