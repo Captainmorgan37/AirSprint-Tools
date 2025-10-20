@@ -71,7 +71,7 @@ def _coerce_bool(value: Any) -> bool:
     return bool(value)
 
 
-def _build_fl3xx_config(token: str) -> Fl3xxApiConfig:
+def _build_fl3xx_config(token: Optional[str] = None) -> Fl3xxApiConfig:
     secrets_section = st.secrets.get("fl3xx_api", {})
 
     base_url = (
@@ -116,7 +116,7 @@ def _build_fl3xx_config(token: str) -> Fl3xxApiConfig:
 
     config_kwargs = {
         "base_url": base_url,
-        "api_token": token or secrets_section.get("api_token"),
+        "api_token": token or secrets_section.get("api_token") or os.getenv("FL3XX_API_TOKEN"),
         "auth_header": auth_header,
         "auth_header_name": auth_header_name,
         "api_token_scheme": api_token_scheme,
@@ -418,12 +418,12 @@ def _iter_date_chunks(start: date, end: date, chunk_days: int) -> Iterable[Tuple
 
 
 @st.cache_data(show_spinner=True, ttl=180)
-def fetch_fl3xx_dataframe(token: str, start: date, end: date) -> Tuple[pd.DataFrame, dict]:
+def fetch_fl3xx_dataframe(start: date, end: date, token: Optional[str] = None) -> Tuple[pd.DataFrame, dict]:
     config = _build_fl3xx_config(token)
 
     if not (config.api_token or config.auth_header):
         raise RuntimeError(
-            "No FL3XX credentials configured. Provide a token or set secrets in Streamlit."
+            "No FL3XX credentials configured. Update Streamlit secrets or environment variables."
         )
 
     if end < start:
@@ -572,18 +572,33 @@ if isinstance(date_selection, (tuple, list)) and len(date_selection) == 2:
 else:
     fl3xx_from = fl3xx_to = date_selection
 
-token_default = st.secrets.get("fl3xx_api", {}).get("api_token", "")
-api_token_input = st.sidebar.text_input(
-    "FL3XX API token", value=token_default or "", type="password"
-)
+secrets_section = st.secrets.get("fl3xx_api", {})
+env_token = os.getenv("FL3XX_API_TOKEN")
+env_auth_header = os.getenv("FL3XX_AUTH_HEADER_VALUE")
 
-fetch_clicked = st.sidebar.button("Fetch flights from FL3XX")
+has_token = bool(secrets_section.get("api_token") or env_token)
+has_auth_header = bool(secrets_section.get("auth_header") or env_auth_header)
+
+credentials_configured = has_token or has_auth_header
+
+if credentials_configured:
+    st.sidebar.info("Using configured Streamlit secrets for FL3XX API access.")
+else:
+    st.sidebar.error(
+        "No FL3XX API credentials found. Configure the fl3xx_api section in Streamlit secrets."
+    )
+
+fetch_clicked = st.sidebar.button(
+    "Fetch flights from FL3XX",
+    disabled=not credentials_configured,
+)
 
 if fetch_clicked:
     try:
         with st.spinner("Fetching flights from FL3XX..."):
             api_df, api_meta = fetch_fl3xx_dataframe(
-                api_token_input or "", fl3xx_from, fl3xx_to
+                fl3xx_from,
+                fl3xx_to,
             )
     except Exception as exc:
         st.sidebar.error(f"FL3XX fetch failed: {exc}")
