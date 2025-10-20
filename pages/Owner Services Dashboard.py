@@ -19,6 +19,20 @@ from owner_services import (
 )
 
 
+ROW_STATE_STYLES: Dict[str, Dict[str, str]] = {
+    "complete": {
+        "background": "rgba(129, 199, 132, 0.45)",
+        "border": "#2e7d32",
+        "text": "#0b2e13",
+    },
+    "attention": {
+        "background": "rgba(255, 213, 79, 0.40)",
+        "border": "#f9a825",
+        "text": "#3b2f04",
+    },
+}
+
+
 st.set_page_config(page_title="Owner Services Dashboard", layout="wide")
 st.title("🧾 Owner Catering & Transport Dashboard")
 
@@ -135,6 +149,26 @@ def _extract_booking_identifier(leg: Mapping[str, Any]) -> Optional[str]:
     return None
 
 
+def _extract_pax_number(leg: Mapping[str, Any]) -> Optional[int]:
+    pax_keys = (
+        "paxNumber",
+        "pax_count",
+        "pax",
+        "passengerCount",
+        "passengers",
+        "passenger_count",
+    )
+    for key in pax_keys:
+        value = leg.get(key)
+        if value in (None, ""):
+            continue
+        try:
+            return int(float(str(value)))
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 def _build_display_row(
     leg: Mapping[str, Any],
     summary: OwnerServicesSummary,
@@ -157,6 +191,7 @@ def _build_display_row(
         leg.get("arrival_airport") or leg.get("arrivalAirport")
     )
     route = f"{dep_ap or '?'} → {arr_ap or '?'}"
+    pax_number = _extract_pax_number(leg)
 
     owner = leg.get("accountName") or leg.get("account") or ""
     owner_text = str(owner) if owner not in (None, "") else "—"
@@ -181,6 +216,7 @@ def _build_display_row(
         "Tail": tail,
         "Booking Identifier": booking_identifier or "—",
         "Route": route,
+        "Pax": pax_number if pax_number is not None else "—",
         "Owner": owner_text,
         "Owner Services Status": status_label,
         "Departure Catering": (
@@ -417,6 +453,7 @@ def _render_results() -> None:
             "Tail",
             "Booking Identifier",
             "Route",
+            "Pax",
             "Owner",
             "Owner Services Status",
             "Departure Catering",
@@ -431,14 +468,26 @@ def _render_results() -> None:
         if has_state_column:
             def _apply_row_highlight(row: pd.Series) -> List[str]:
                 state = state_series.loc[row.name]
-                if state == "complete":
-                    color = "#d4edda"
-                elif state == "attention":
-                    color = "#fff3cd"
+                styles = ROW_STATE_STYLES.get(str(state))
+                if not isinstance(styles, Mapping):
+                    return [""] * len(row)
+
+                css_parts: List[str] = []
+                background = styles.get("background")
+                border = styles.get("border")
+                text_color = styles.get("text")
+                if background:
+                    css_parts.append(f"background-color: {background}")
+                if border:
+                    css_parts.append(f"border-left: 4px solid {border}")
+                if text_color:
+                    css_parts.append(f"color: {text_color}")
                 else:
-                    color = ""
-                style = f"background-color: {color}" if color else ""
-                return [style] * len(row)
+                    css_parts.append("color: inherit")
+
+                css_parts.append("font-weight: 600")
+                css = "; ".join(css_parts)
+                return [css] * len(row)
 
             styler = df_display.style.apply(_apply_row_highlight, axis=1)
             st.dataframe(styler, use_container_width=True)
