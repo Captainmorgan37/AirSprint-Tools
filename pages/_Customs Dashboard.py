@@ -82,6 +82,8 @@ _DAY_KEYS = (
 
 CUSTOMS_RULES_PATH = Path(__file__).resolve().parent.parent / "customs_rules.csv"
 
+_SESSION_STATE_KEY = "customs_dashboard_cached_data"
+
 
 st.set_page_config(page_title="Customs Dashboard", layout="wide")
 st.title("🛃 Customs Dashboard")
@@ -744,176 +746,193 @@ if not customs_rules_df.empty:
 
 fetch_button = st.button("Load customs legs", type="primary")
 
-if not fetch_button:
-    st.info("Select parameters and click **Load customs legs** to fetch customs flights.")
-    st.stop()
+current_params = {"start_date": start_date.isoformat(), "additional_days": additional_days}
 
-with st.spinner("Fetching FL3XX flights..."):
-    try:
-        config = build_fl3xx_api_config(_sanitize_settings(fl3xx_cfg))
-    except FlightDataError as exc:
-        st.error(str(exc))
+cached_state = st.session_state.get(_SESSION_STATE_KEY)
+
+result_df: pd.DataFrame
+errors: List[str] = []
+
+if fetch_button:
+    with st.spinner("Fetching FL3XX flights..."):
+        try:
+            config = build_fl3xx_api_config(_sanitize_settings(fl3xx_cfg))
+        except FlightDataError as exc:
+            st.error(str(exc))
+            st.stop()
+        except Exception as exc:  # pragma: no cover - defensive
+            st.error(f"Error preparing FL3XX API configuration: {exc}")
+            st.stop()
+
+        try:
+            legs_df, metadata, _ = fetch_legs_dataframe(
+                config,
+                from_date=start_date,
+                to_date=end_date_exclusive,
+                departure_window=None,
+                fetch_crew=False,
+            )
+        except Exception as exc:
+            st.error(f"Error fetching data from FL3XX API: {exc}")
+            st.stop()
+
+    if legs_df.empty:
+        st.success("No flights returned for the selected window.")
         st.stop()
-    except Exception as exc:  # pragma: no cover - defensive
-        st.error(f"Error preparing FL3XX API configuration: {exc}")
-        st.stop()
 
-    try:
-        legs_df, metadata, _ = fetch_legs_dataframe(
-            config,
-            from_date=start_date,
-            to_date=end_date_exclusive,
-            departure_window=None,
-            fetch_crew=False,
-        )
-    except Exception as exc:
-        st.error(f"Error fetching data from FL3XX API: {exc}")
-        st.stop()
-
-if legs_df.empty:
-    st.success("No flights returned for the selected window.")
-    st.stop()
-
-missing_tz_airports = metadata.get("missing_dep_tz_airports", [])
-tz_lookup_used = metadata.get("timezone_lookup_used", False)
-if missing_tz_airports:
-    sample = ", ".join(missing_tz_airports)
-    if len(sample) > 200:
-        sample = sample[:197] + "..."
-    message = (
-        "Added timezone from airport lookup where possible. Update `%s` to cover: %s"
-        % (AIRPORT_TZ_FILENAME, sample)
-    )
-    if tz_lookup_used:
-        st.info(message)
-    else:
-        st.warning(
-            "Unable to infer departure timezones automatically because `%s` was not found. "
-            "Sample airports without tz: %s"
+    missing_tz_airports = metadata.get("missing_dep_tz_airports", [])
+    tz_lookup_used = metadata.get("timezone_lookup_used", False)
+    if missing_tz_airports:
+        sample = ", ".join(missing_tz_airports)
+        if len(sample) > 200:
+            sample = sample[:197] + "..."
+        message = (
+            "Added timezone from airport lookup where possible. Update `%s` to cover: %s"
             % (AIRPORT_TZ_FILENAME, sample)
         )
-
-lookup = _airport_lookup_cache()
-
-
-def _is_customs_row(row: Mapping[str, Any]) -> bool:
-    try:
-        return is_customs_leg(row, lookup)
-    except Exception:
-        return False
-
-
-customs_mask = legs_df.apply(lambda r: _is_customs_row(r.to_dict()), axis=1)
-customs_df = legs_df.loc[customs_mask].copy()
-
-
-def _is_us_arrival(row: Mapping[str, Any]) -> bool:
-    country = _arrival_country_from_row(row, lookup)
-    return country == "US"
-
-
-us_arrival_mask = customs_df.apply(lambda r: _is_us_arrival(r.to_dict()), axis=1)
-customs_df = customs_df.loc[us_arrival_mask].copy()
-
-if customs_df.empty:
-    st.success("No US customs arrivals found in the selected window.")
-    st.stop()
-
-customs_df["dep_time"] = customs_df["dep_time"].astype(str)
-customs_df = customs_df.sort_values("dep_time").reset_index(drop=True)
-
-migration_cache: Dict[Any, Optional[Dict[str, Any]]] = {}
-errors: List[str] = []
-rows: List[Dict[str, Any]] = []
-
-for _, leg in customs_df.iterrows():
-    row = leg.to_dict()
-    tail = str(row.get("tail") or "")
-    dep_airport = _detect_airport_value(row, DEPARTURE_AIRPORT_COLUMNS)
-    arr_airport = _detect_airport_value(row, ARRIVAL_AIRPORT_COLUMNS)
-    dep_utc, dep_local = _format_local_time(row)
-
-    rule = rules_lookup.get(arr_airport.upper()) if arr_airport else None
-    lead_time_arrival = ""
-    hours_summary = ""
-    after_hours = ""
-    contacts = ""
-    if isinstance(rule, Mapping):
-        lead_time_arrival = str(rule.get("lead_time_arrival_hours") or "").strip()
-        hours_summary = _format_hours_summary(rule)
-        after_hours_bool = _normalize_bool(rule.get("after_hours_available"))
-        if after_hours_bool is None and "after_hours_available" in rule:
-            after_hours = str(rule.get("after_hours_available") or "").strip()
-        elif after_hours_bool is not None:
-            after_hours = "Yes" if after_hours_bool else "No"
-        contacts = str(rule.get("contacts") or "").strip()
-
-    flight_id = (
-        row.get("flightId")
-        or row.get("flight_id")
-        or row.get("flightID")
-        or row.get("id")
-        or row.get("flight")
-    )
-
-    migration_payload: Optional[Dict[str, Any]] = None
-    if flight_id:
-        if flight_id not in migration_cache:
-            try:
-                migration_cache[flight_id] = fetch_flight_migration(config, flight_id)
-            except Exception as exc:  # pragma: no cover - defensive
-                errors.append(f"Flight {flight_id}: {exc}")
-                migration_cache[flight_id] = None
-        migration_payload = migration_cache.get(flight_id)
-    else:
-        errors.append(f"Missing flight ID for tail {tail} departing {dep_utc}.")
-
-    arr_status, arr_by, arr_notes, _arr_docs, arr_doc_names = _extract_migration_fields(
-        migration_payload, "arrivalMigration"
-    )
-
-    clearance_note = ""
-    if clearance_requirements and arr_airport:
-        clearance_note = clearance_requirements.get(arr_airport.upper(), "")
-    if not clearance_note and isinstance(rule, Mapping):
-        clearance_note = str(rule.get("notes") or "").strip()
-    if clearance_note:
-        arr_notes = arr_notes.strip()
-        if arr_notes:
-            arr_notes = f"{arr_notes} | {clearance_note}"
+        if tz_lookup_used:
+            st.info(message)
         else:
-            arr_notes = clearance_note
+            st.warning(
+                "Unable to infer departure timezones automatically because `%s` was not found. "
+                "Sample airports without tz: %s"
+                % (AIRPORT_TZ_FILENAME, sample)
+            )
 
-    clearance_start_dt, clearance_end_dt, clearance_goal, clearance_timing = _compute_clearance_window(
-        row, dep_airport, arr_airport, lookup, rule, arr_status
-    )
-    clearance_start_mt = _format_in_timezone(clearance_start_dt, MOUNTAIN_TIMEZONE)
-    clearance_end_mt = _format_in_timezone(clearance_end_dt, MOUNTAIN_TIMEZONE)
+    lookup = _airport_lookup_cache()
 
-    rows.append(
-        {
-            "Tail": tail,
-            "Departure": dep_airport,
-            "Arrival": arr_airport,
-            "Departure Local": dep_local,
-            "Arrival Status": arr_status,
-            "Arrival By": arr_by,
-            "Arrival Notes": arr_notes,
-            "Arrival Doc Names": arr_doc_names,
-            "Clearance Target Start (MT)": clearance_start_mt,
-            "Clearance Target End (MT)": clearance_end_mt,
-            "Clearance Goal": clearance_goal,
-            "Clearance Timing": clearance_timing,
-            "Rule Lead Time Arrival (hrs)": lead_time_arrival,
-            "Rule Operating Hours": hours_summary,
-            "Rule After Hours Available": after_hours,
-            "Rule Contacts": contacts,
-            "_clearance_start_dt": clearance_start_dt,
-            "_clearance_end_dt": clearance_end_dt,
-        }
-    )
+    def _is_customs_row(row: Mapping[str, Any]) -> bool:
+        try:
+            return is_customs_leg(row, lookup)
+        except Exception:
+            return False
 
-result_df = pd.DataFrame(rows)
+    customs_mask = legs_df.apply(lambda r: _is_customs_row(r.to_dict()), axis=1)
+    customs_df = legs_df.loc[customs_mask].copy()
+
+    def _is_us_arrival(row: Mapping[str, Any]) -> bool:
+        country = _arrival_country_from_row(row, lookup)
+        return country == "US"
+
+    us_arrival_mask = customs_df.apply(lambda r: _is_us_arrival(r.to_dict()), axis=1)
+    customs_df = customs_df.loc[us_arrival_mask].copy()
+
+    if customs_df.empty:
+        st.success("No US customs arrivals found in the selected window.")
+        st.stop()
+
+    customs_df["dep_time"] = customs_df["dep_time"].astype(str)
+    customs_df = customs_df.sort_values("dep_time").reset_index(drop=True)
+
+    migration_cache: Dict[Any, Optional[Dict[str, Any]]] = {}
+    rows: List[Dict[str, Any]] = []
+
+    for _, leg in customs_df.iterrows():
+        row = leg.to_dict()
+        tail = str(row.get("tail") or "")
+        dep_airport = _detect_airport_value(row, DEPARTURE_AIRPORT_COLUMNS)
+        arr_airport = _detect_airport_value(row, ARRIVAL_AIRPORT_COLUMNS)
+        dep_utc, dep_local = _format_local_time(row)
+
+        rule = rules_lookup.get(arr_airport.upper()) if arr_airport else None
+        lead_time_arrival = ""
+        hours_summary = ""
+        after_hours = ""
+        contacts = ""
+        if isinstance(rule, Mapping):
+            lead_time_arrival = str(rule.get("lead_time_arrival_hours") or "").strip()
+            hours_summary = _format_hours_summary(rule)
+            after_hours_bool = _normalize_bool(rule.get("after_hours_available"))
+            if after_hours_bool is None and "after_hours_available" in rule:
+                after_hours = str(rule.get("after_hours_available") or "").strip()
+            elif after_hours_bool is not None:
+                after_hours = "Yes" if after_hours_bool else "No"
+            contacts = str(rule.get("contacts") or "").strip()
+
+        flight_id = (
+            row.get("flightId")
+            or row.get("flight_id")
+            or row.get("flightID")
+            or row.get("id")
+            or row.get("flight")
+        )
+
+        migration_payload: Optional[Dict[str, Any]] = None
+        if flight_id:
+            if flight_id not in migration_cache:
+                try:
+                    migration_cache[flight_id] = fetch_flight_migration(config, flight_id)
+                except Exception as exc:  # pragma: no cover - defensive
+                    errors.append(f"Flight {flight_id}: {exc}")
+                    migration_cache[flight_id] = None
+            migration_payload = migration_cache.get(flight_id)
+        else:
+            errors.append(f"Missing flight ID for tail {tail} departing {dep_utc}.")
+
+        arr_status, arr_by, arr_notes, _arr_docs, arr_doc_names = _extract_migration_fields(
+            migration_payload, "arrivalMigration"
+        )
+
+        clearance_note = ""
+        if clearance_requirements and arr_airport:
+            clearance_note = clearance_requirements.get(arr_airport.upper(), "")
+        if not clearance_note and isinstance(rule, Mapping):
+            clearance_note = str(rule.get("notes") or "").strip()
+        if clearance_note:
+            arr_notes = arr_notes.strip()
+            if arr_notes:
+                arr_notes = f"{arr_notes} | {clearance_note}"
+            else:
+                arr_notes = clearance_note
+
+        clearance_start_dt, clearance_end_dt, clearance_goal, clearance_timing = _compute_clearance_window(
+            row, dep_airport, arr_airport, lookup, rule, arr_status
+        )
+        clearance_start_mt = _format_in_timezone(clearance_start_dt, MOUNTAIN_TIMEZONE)
+        clearance_end_mt = _format_in_timezone(clearance_end_dt, MOUNTAIN_TIMEZONE)
+
+        rows.append(
+            {
+                "Tail": tail,
+                "Departure": dep_airport,
+                "Arrival": arr_airport,
+                "Departure Local": dep_local,
+                "Arrival Status": arr_status,
+                "Arrival By": arr_by,
+                "Arrival Notes": arr_notes,
+                "Arrival Doc Names": arr_doc_names,
+                "Clearance Target Start (MT)": clearance_start_mt,
+                "Clearance Target End (MT)": clearance_end_mt,
+                "Clearance Goal": clearance_goal,
+                "Clearance Timing": clearance_timing,
+                "Rule Lead Time Arrival (hrs)": lead_time_arrival,
+                "Rule Operating Hours": hours_summary,
+                "Rule After Hours Available": after_hours,
+                "Rule Contacts": contacts,
+                "_clearance_start_dt": clearance_start_dt,
+                "_clearance_end_dt": clearance_end_dt,
+            }
+        )
+
+    result_df = pd.DataFrame(rows)
+    st.session_state[_SESSION_STATE_KEY] = {
+        "params": current_params,
+        "result_df": result_df.copy(),
+        "errors": list(errors),
+    }
+else:
+    if (
+        isinstance(cached_state, Mapping)
+        and cached_state.get("params") == current_params
+        and isinstance(cached_state.get("result_df"), pd.DataFrame)
+    ):
+        result_df = cached_state["result_df"].copy()
+        errors = list(cached_state.get("errors", []))
+    else:
+        st.info(
+            "Select parameters and click **Load customs legs** to fetch customs flights."
+        )
+        st.stop()
 
 if not result_df.empty:
     now_mt = datetime.now(MOUNTAIN_TIMEZONE)
