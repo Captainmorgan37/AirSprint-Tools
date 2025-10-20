@@ -115,12 +115,16 @@ def _build_display_row(
 
     if not services_available:
         status_label = "Services unavailable"
+        row_state = "attention"
     elif summary.needs_attention:
         status_label = "Needs attention"
+        row_state = "attention"
     elif summary.has_owner_services:
         status_label = "Complete"
+        row_state = "complete"
     else:
         status_label = "No owner services"
+        row_state = "attention"
 
     return {
         "_sort_key": sort_key or departure_label,
@@ -151,6 +155,7 @@ def _build_display_row(
             if services_available
             else "—"
         ),
+        "_row_state": row_state,
     }
 
 
@@ -371,10 +376,30 @@ def _render_results() -> None:
             "Departure Transport",
             "Arrival Transport",
         ]
-        df = df[[col for col in column_order if col in df.columns]]
-        st.dataframe(df, use_container_width=True)
+        has_state_column = "_row_state" in df.columns
+        state_series = df["_row_state"] if has_state_column else None
+        df_display = df[[col for col in column_order if col in df.columns]]
 
-        csv_bytes = df.to_csv(index=False).encode("utf-8")
+        if has_state_column:
+            def _apply_row_highlight(row: pd.Series) -> List[str]:
+                state = state_series.loc[row.name]
+                if state == "complete":
+                    color = "#d4edda"
+                elif state == "attention":
+                    color = "#fff3cd"
+                else:
+                    color = ""
+                style = f"background-color: {color}" if color else ""
+                return [style] * len(row)
+
+            styler = df_display.style.apply(_apply_row_highlight, axis=1)
+            st.dataframe(styler, use_container_width=True)
+        else:
+            st.dataframe(df_display, use_container_width=True)
+
+        csv_bytes = (
+            df.drop(columns=["_row_state"], errors="ignore").to_csv(index=False).encode("utf-8")
+        )
         st.download_button(
             "Download results as CSV",
             data=csv_bytes,
