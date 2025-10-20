@@ -215,9 +215,13 @@ def _build_dashboard_rows(
             if summary.needs_attention:
                 stats["legs_needing_attention"] += 1
 
-            display_rows.append(
-                _build_display_row(leg, summary, services_available=services_available)
+            row = _build_display_row(
+                leg, summary, services_available=services_available
             )
+            if row.get("Owner Services Status") == "No owner services":
+                continue
+
+            display_rows.append(row)
     finally:
         session.close()
 
