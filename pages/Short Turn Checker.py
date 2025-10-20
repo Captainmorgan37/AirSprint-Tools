@@ -1177,7 +1177,7 @@ if not legs_df.empty:
             summary_df = regular_short_df.copy()
             summary_df["__turn_ts"] = summary_df.apply(_extract_turn_timestamp, axis=1)
             summary_df["__turn_date_label"] = summary_df["__turn_ts"].apply(
-                lambda ts: ts.strftime("%Y-%m-%d") if ts is not None else "Unknown date"
+                lambda ts: ts.strftime("%d%b%y").upper() if ts is not None else "Unknown date"
             )
             summary_df = summary_df.sort_values(
                 ["__turn_ts", "tail", "station", "arr_leg_id", "dep_leg_id"],
