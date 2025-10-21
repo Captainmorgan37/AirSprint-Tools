@@ -172,6 +172,9 @@ def _render_report_output(report: MorningReportResult):
     if report.code in _PREFERRED_FORMAT_CODES:
         st.caption("Copy-and-paste friendly summary block:")
     st.code(report.formatted_output(), language="text")
+    confirmation_note = report.metadata.get("runway_confirmation_note")
+    if confirmation_note:
+        st.info(confirmation_note)
     if report.code in _PREFERRED_FORMAT_CODES and report.has_matches:
         st.caption("Scroll down for detailed rows if you need additional context.")
     if report.warnings:

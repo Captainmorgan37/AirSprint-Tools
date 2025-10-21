@@ -319,6 +319,34 @@ def _build_cj3_line(row: Mapping[str, Any]) -> str:
     return "\n".join([base_line, *alert_lines])
 
 
+def _build_runway_confirmation_note(
+    rows: Iterable[Mapping[str, Any]]
+) -> Optional[str]:
+    has_rows = False
+    threshold_value: Optional[int] = None
+
+    for row in rows:
+        has_rows = True
+        runway_alerts = row.get("runway_alerts") or []
+        if runway_alerts:
+            return None
+
+        threshold_ft = row.get("runway_alert_threshold_ft")
+        if not isinstance(threshold_ft, (int, float)):
+            return None
+
+        threshold_int = int(threshold_ft)
+        if threshold_value is None:
+            threshold_value = threshold_int
+        elif threshold_value != threshold_int:
+            threshold_value = max(threshold_value, threshold_int)
+
+    if not has_rows or threshold_value is None:
+        return None
+
+    return f"All runways confirmed as {threshold_value:,}' or longer"
+
+
 def _normalize_airport_ident(value: Any) -> Optional[str]:
     text = _normalize_str(value)
     if not text:
@@ -959,17 +987,23 @@ def _build_cj3_owners_on_cj2_report(
             except AttributeError:  # pragma: no cover - defensive cleanup
                 pass
 
+    metadata: Dict[str, Any] = {
+        "match_count": len(matches),
+        "flagged_candidates": total_flagged,
+        "inspected_legs": inspected,
+    }
+
+    confirmation_note = _build_runway_confirmation_note(matches)
+    if confirmation_note:
+        metadata["runway_confirmation_note"] = confirmation_note
+
     return MorningReportResult(
         code="16.1.6",
         title="CJ3 Owners on CJ2 Report",
         header_label="CJ3 Owners on CJ2",
         rows=matches,
         warnings=warnings,
-        metadata={
-            "match_count": len(matches),
-            "flagged_candidates": total_flagged,
-            "inspected_legs": inspected,
-        },
+        metadata=metadata,
     )
 
 
