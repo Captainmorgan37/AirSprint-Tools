@@ -6,7 +6,7 @@ import requests
 import streamlit as st
 
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from fl3xx_api import (
     Fl3xxApiConfig,
@@ -64,6 +64,7 @@ _SENSITIVE_KEYWORDS: tuple[str, ...] = (
     "rifles",
     "emergency",
     "operation",
+    "perrier",
     "funeral",
     "dog",
     "dogs",
@@ -413,17 +414,60 @@ def _extract_leg_notes(payload: Any) -> Optional[str]:
     return None
 
 
+def _coerce_note_text(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _iter_note_mappings(value: Any) -> List[Mapping[str, Any]]:
+    mappings: List[Mapping[str, Any]] = []
+    if isinstance(value, Mapping):
+        mappings.append(value)
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        for item in value:
+            if isinstance(item, Mapping):
+                mappings.append(item)
+            else:
+                text = _coerce_note_text(item)
+                if text:
+                    mappings.append({"note": text})
+    else:
+        text = _coerce_note_text(value)
+        if text:
+            mappings.append({"note": text})
+    return mappings
+
+
 def _extract_service_notes(payload: Any) -> List[tuple[str, str]]:
-    summary = OwnerServicesSummary.from_payload(payload)
     notes: List[tuple[str, str]] = []
     seen: set[tuple[str, str]] = set()
 
-    for entry in summary.all_entries():
-        if not entry.notes:
+    if not isinstance(payload, Mapping):
+        return notes
+
+    raw_notes = payload.get("notes")
+    for item in _iter_note_mappings(raw_notes):
+        text: Optional[str] = None
+        for key in ("note", "notes", "text", "details", "description", "content"):
+            text = _coerce_note_text(item.get(key))
+            if text:
+                break
+
+        if not text:
             continue
-        description = (entry.description or "").strip()
-        label = f"Owner service – {description}" if description else "Owner service"
-        candidate = (label, entry.notes)
+
+        label_text: Optional[str] = None
+        for key in ("type", "title", "subject", "category", "label", "name"):
+            label_text = _coerce_note_text(item.get(key))
+            if label_text:
+                break
+
+        label = (
+            f"Owner service note – {label_text}" if label_text else "Owner service note"
+        )
+        candidate = (label, text)
         if candidate in seen:
             continue
         seen.add(candidate)

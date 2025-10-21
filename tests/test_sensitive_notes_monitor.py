@@ -26,3 +26,38 @@ def test_highlight_keywords_marks_sensitive_terms():
 
     assert matches == ["PERRIER"]
     assert "<mark>Perrier</mark>" in highlighted
+
+
+def test_extract_service_notes_uses_api_notes_section_only():
+    module = _load_dashboard_module()
+
+    payload = {
+        "notes": [
+            {"type": "General", "note": "Check passports before departure"},
+            {"note": "Pets travelling – confirm documentation"},
+            {"type": "General", "note": "Check passports before departure"},
+        ],
+        "catering": [
+            {
+                "status": "OK",
+                "serviceFor": "Pax",
+                "details": "Wraps",
+                "notes": "No nuts",
+            }
+        ],
+        "departureGroundTransportation": [
+            {
+                "status": "CONFIRMED",
+                "type": "SUV",
+                "person": {"firstName": "Jamie", "lastName": "Lee", "pilot": False},
+                "notes": "Driver will wait",
+            }
+        ],
+    }
+
+    extracted = module._extract_service_notes(payload)
+
+    assert extracted == [
+        ("Owner service note – General", "Check passports before departure"),
+        ("Owner service note", "Pets travelling – confirm documentation"),
+    ]
