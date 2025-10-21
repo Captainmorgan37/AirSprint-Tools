@@ -278,6 +278,16 @@ def _build_cj3_line(row: Mapping[str, Any]) -> str:
     threshold_ft = row.get("runway_alert_threshold_ft")
     runway_alerts = row.get("runway_alerts") or []
     if not runway_alerts:
+        confirmation_line: Optional[str] = None
+        if isinstance(threshold_ft, (int, float)):
+            threshold_int = int(threshold_ft)
+            confirmation_line = (
+                f"    All runways confirmed as {threshold_int:,}' or longer"
+            )
+
+        if confirmation_line:
+            return "\n".join([base_line, confirmation_line])
+
         return base_line
 
     alert_lines: List[str] = []
