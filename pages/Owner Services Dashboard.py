@@ -4,6 +4,7 @@ import pandas as pd
 import requests
 import streamlit as st
 
+from functools import lru_cache
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
@@ -56,7 +57,7 @@ _NOTES_TO_KEY = "owner_services_sensitive_to"
 _NOTES_RESULTS_KEY = "owner_services_sensitive_results"
 _NOTES_ERROR_KEY = "owner_services_sensitive_error"
 
-_SENSITIVE_KEYWORDS: tuple[str, ...] = (
+_DEFAULT_SENSITIVE_KEYWORDS: tuple[str, ...] = (
     "gun",
     "guns",
     "rifle",
@@ -75,10 +76,9 @@ _SENSITIVE_KEYWORDS: tuple[str, ...] = (
     "turbulence",
 )
 
-_KEYWORD_PATTERN = re.compile(
-    r"\b(" + "|".join(re.escape(term) for term in _SENSITIVE_KEYWORDS) + r")\b",
-    re.IGNORECASE,
-)
+_SENSITIVE_TERMS_STATE_KEY = "owner_services_sensitive_terms"
+_SENSITIVE_ADD_INPUT_KEY = "owner_services_sensitive_add_term"
+_SENSITIVE_REMOVE_SELECT_KEY = "owner_services_sensitive_remove_terms"
 
 
 _ACCOUNT_KEYS: tuple[str, ...] = (
@@ -114,6 +114,93 @@ def _initialise_sensitive_state() -> None:
         )
         st.session_state[_NOTES_FROM_KEY] = default_from
         st.session_state[_NOTES_TO_KEY] = default_to_exclusive - timedelta(days=1)
+
+    _ensure_sensitive_keywords_state()
+
+
+def _normalise_keyword(term: Any) -> Optional[str]:
+    if term in (None, ""):
+        return None
+    text = str(term).strip().lower()
+    return text or None
+
+
+def _ensure_sensitive_keywords_state() -> List[str]:
+    stored = st.session_state.get(_SENSITIVE_TERMS_STATE_KEY)
+    if not isinstance(stored, list):
+        stored = list(_DEFAULT_SENSITIVE_KEYWORDS)
+    cleaned: List[str] = []
+    seen: set[str] = set()
+    for term in stored:
+        normalised = _normalise_keyword(term)
+        if not normalised or normalised in seen:
+            continue
+        cleaned.append(normalised)
+        seen.add(normalised)
+    if cleaned != stored:
+        st.session_state[_SENSITIVE_TERMS_STATE_KEY] = cleaned
+    else:
+        st.session_state.setdefault(_SENSITIVE_TERMS_STATE_KEY, cleaned)
+    return cleaned
+
+
+def _get_sensitive_keywords() -> tuple[str, ...]:
+    keywords = _ensure_sensitive_keywords_state()
+    return tuple(keywords)
+
+
+@lru_cache(maxsize=32)
+def _compile_keyword_pattern(keywords: tuple[str, ...]) -> re.Pattern[str]:
+    if not keywords:
+        return re.compile(r"$^")
+    return re.compile(
+        r"\b(" + "|".join(re.escape(term) for term in keywords) + r")\b",
+        re.IGNORECASE,
+    )
+
+
+def _get_keyword_pattern() -> re.Pattern[str]:
+    keywords = _get_sensitive_keywords()
+    return _compile_keyword_pattern(keywords)
+
+
+def _add_sensitive_keyword(term: str) -> bool:
+    normalised = _normalise_keyword(term)
+    if not normalised:
+        st.warning("Enter a keyword before adding it to the monitor.")
+        return False
+
+    keywords = list(_get_sensitive_keywords())
+    if normalised in keywords:
+        st.info(f"`{normalised}` is already being monitored.")
+        return False
+
+    keywords.append(normalised)
+    st.session_state[_SENSITIVE_TERMS_STATE_KEY] = keywords
+    _compile_keyword_pattern.cache_clear()
+    st.success(f"Added `{normalised}` to the monitored keyword list.")
+    return True
+
+
+def _remove_sensitive_keywords(terms: Sequence[str]) -> bool:
+    removal_targets = {
+        value for value in (_normalise_keyword(term) for term in terms) if value
+    }
+    if not removal_targets:
+        st.warning("Select at least one keyword to remove.")
+        return False
+
+    keywords = list(_get_sensitive_keywords())
+    new_keywords = [term for term in keywords if term not in removal_targets]
+    if len(new_keywords) == len(keywords):
+        st.info("The selected keywords are not currently monitored.")
+        return False
+
+    st.session_state[_SENSITIVE_TERMS_STATE_KEY] = new_keywords
+    _compile_keyword_pattern.cache_clear()
+    removed_display = ", ".join(f"`{term}`" for term in sorted(removal_targets))
+    st.success(f"Stopped monitoring {removed_display}.")
+    return True
 
 
 def _get_selected_dates() -> tuple[date, date]:
@@ -506,7 +593,8 @@ def _extract_service_notes(payload: Any) -> List[tuple[str, str]]:
 
 def _highlight_keywords(note_text: str) -> tuple[str, List[str]]:
     normalized = note_text.replace("\r\n", "\n").replace("\r", "\n")
-    matches = sorted({match.group(0).lower() for match in _KEYWORD_PATTERN.finditer(normalized)})
+    pattern = _get_keyword_pattern()
+    matches = sorted({match.group(0).lower() for match in pattern.finditer(normalized)})
     return normalized, [match.upper() for match in matches]
 
 
@@ -1111,6 +1199,46 @@ def _render_sensitive_notes_table(rows: List[Mapping[str, Any]]) -> None:
     st.dataframe(styler, use_container_width=True)
 
 
+def _render_sensitive_keyword_manager() -> None:
+    st.markdown("---")
+    st.markdown("#### Monitored sensitive keywords")
+
+    keywords = list(_get_sensitive_keywords())
+    if keywords:
+        st.caption(
+            "The Sensitive Notes Monitor currently scans leg notes for these terms."
+        )
+        st.write(" ".join(f"`{term}`" for term in keywords))
+    else:
+        st.info(
+            "No keywords are currently configured. Add a term below to begin monitoring "
+            "for sensitive notes."
+        )
+
+    with st.form("owner_services_sensitive_add_form", clear_on_submit=True):
+        new_keyword = st.text_input(
+            "Add keyword to monitor",
+            key=_SENSITIVE_ADD_INPUT_KEY,
+            placeholder="e.g. firearms",
+        )
+        add_submitted = st.form_submit_button("Add keyword")
+        if add_submitted:
+            _add_sensitive_keyword(new_keyword)
+
+    with st.form("owner_services_sensitive_remove_form"):
+        current_keywords = list(_get_sensitive_keywords())
+        remove_selection = st.multiselect(
+            "Select keywords to stop monitoring",
+            options=current_keywords,
+            format_func=lambda term: term.upper(),
+            key=_SENSITIVE_REMOVE_SELECT_KEY,
+        )
+        remove_submitted = st.form_submit_button("Remove selected keywords")
+        if remove_submitted:
+            if _remove_sensitive_keywords(remove_selection):
+                st.session_state[_SENSITIVE_REMOVE_SELECT_KEY] = []
+
+
 def _render_sensitive_notes_tab(api_settings: Optional[Mapping[str, Any]]) -> None:
     st.markdown(
         """
@@ -1166,6 +1294,7 @@ def _render_sensitive_notes_tab(api_settings: Optional[Mapping[str, Any]]) -> No
             )
 
     _render_sensitive_notes_results()
+    _render_sensitive_keyword_manager()
 
 
 def main() -> None:
