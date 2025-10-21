@@ -1076,6 +1076,8 @@ def _render_sensitive_notes_table(rows: List[Mapping[str, Any]]) -> None:
     for column in df_display.columns:
         df_display[column] = df_display[column].map(_stringify)
 
+    html_columns = [column for column in ("Notes",) if column in df_display.columns]
+
     styler = (
         df_display.style.hide(axis="index")
         .set_table_styles(
@@ -1095,6 +1097,9 @@ def _render_sensitive_notes_table(rows: List[Mapping[str, Any]]) -> None:
             ]
         )
     )
+
+    if html_columns:
+        styler = styler.format(escape=None, subset=(slice(None), html_columns))
 
     st.dataframe(styler, use_container_width=True)
 
