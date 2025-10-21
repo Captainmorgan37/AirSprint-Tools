@@ -64,6 +64,8 @@ _DEFAULT_SENSITIVE_KEYWORDS: tuple[str, ...] = (
     "guns",
     "rifle",
     "rifles",
+    "firearms",
+    "hunting",
     "emergency",
     "operation",
     "funeral",
@@ -76,6 +78,12 @@ _DEFAULT_SENSITIVE_KEYWORDS: tuple[str, ...] = (
     "esta",    
     "visa",
     "turbulence",
+    "waiver",
+    "first flight",
+    "wifi",
+    "priority",
+    "first",
+    "cruise",
 )
 
 _SENSITIVE_TERMS_STATE_KEY = "owner_services_sensitive_terms"
