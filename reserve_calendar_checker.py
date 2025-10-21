@@ -252,8 +252,6 @@ def _build_result_row(
     flight_id = _extract_flight_identifier(row) or ""
     workflow = _extract_workflow_label(row) or ""
     has_as_available = _workflow_has_as_available(workflow)
-    mountain_dt = _parse_mountain_datetime(row.get("dep_time"))
-    departure_label = mountain_dt.strftime("%Y-%m-%d %H:%M %Z") if mountain_dt else ""
 
     tail = _first_nonempty((
         row.get("tail"),
@@ -263,21 +261,21 @@ def _build_result_row(
         row.get("aircraftRegistration"),
     )) or ""
 
-    booking_reference = _first_nonempty((
+    booking_identifier = _first_nonempty((
+        row.get("bookingIdentifier"),
+        row.get("booking_identifier"),
         row.get("bookingReference"),
         row.get("bookingCode"),
         row.get("bookingId"),
-    )) or ""
+    )) or flight_id
 
     return {
-        "target_date": target_date.isoformat(),
-        "flight_id": flight_id,
+        "Date": target_date.isoformat(),
+        "Flight ID": booking_identifier,
         "tail": tail,
-        "booking_reference": booking_reference,
-        "route": _format_route(row),
-        "departure_time_mountain": departure_label,
+        "Route": _format_route(row),
         "workflow": workflow,
-        "planning_note": note,
+        "Planning Notes": note,
         "club_detected": True,
         "workflow_has_as_available": has_as_available,
         "status": (

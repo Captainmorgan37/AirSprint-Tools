@@ -37,6 +37,7 @@ def test_evaluate_flights_for_date_flags_missing_as_available():
         "departure_airport": "CYYZ",
         "arrival_airport": "CYUL",
         "workflowCustomName": "Reserve Club",
+        "bookingIdentifier": "BK-1",
     }
 
     def stub_fetch_planning(config, flight_id, session=None):
@@ -52,7 +53,8 @@ def test_evaluate_flights_for_date_flags_missing_as_available():
 
     assert len(result.rows) == 1
     entry = result.rows[0]
-    assert entry["planning_note"] == "Club member request"
+    assert entry["Planning Notes"] == "Club member request"
+    assert entry["Flight ID"] == "BK-1"
     assert entry["status"].startswith("⚠️")
     assert result.diagnostics["club_matches"] == 1
     assert result.diagnostics["missing_as_available"] == 1
@@ -66,6 +68,7 @@ def test_evaluate_flights_for_date_skips_non_club_notes():
         "departure_airport": "CYYZ",
         "arrival_airport": "CYUL",
         "workflowCustomName": "Reserve Club",
+        "bookingIdentifier": "BK-2",
     }
 
     def stub_fetch_planning(config, flight_id, session=None):
@@ -92,6 +95,7 @@ def test_run_reserve_day_check_fetches_flagged_rows(monkeypatch):
             "departure_airport": "CYYZ",
             "arrival_airport": "CYUL",
             "workflowCustomName": "Reserve Club",
+            "bookingIdentifier": "BK-3",
         }
     ]
 
@@ -115,6 +119,7 @@ def test_run_reserve_day_check_fetches_flagged_rows(monkeypatch):
     assert len(result.dates) == 1
     date_result = result.dates[0]
     assert len(date_result.rows) == 1
-    assert date_result.rows[0]["planning_note"] == "Club rotation"
+    assert date_result.rows[0]["Planning Notes"] == "Club rotation"
+    assert date_result.rows[0]["Flight ID"] == "BK-3"
     assert date_result.diagnostics["club_matches"] == 1
     assert date_result.diagnostics["targeted_flights"] == 1
