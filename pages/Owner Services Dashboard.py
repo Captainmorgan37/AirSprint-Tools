@@ -1,4 +1,3 @@
-import html
 import re
 
 import pandas as pd
@@ -505,23 +504,9 @@ def _extract_service_notes(payload: Any) -> List[tuple[str, str]]:
 
 
 def _highlight_keywords(note_text: str) -> tuple[str, List[str]]:
-    matches: List[str] = []
-    parts: List[str] = []
-    last_index = 0
-    for match in _KEYWORD_PATTERN.finditer(note_text):
-        start, end = match.span()
-        if start > last_index:
-            parts.append(html.escape(note_text[last_index:start]))
-        matched_text = match.group(0)
-        matches.append(matched_text.lower())
-        parts.append(f"<mark>{html.escape(matched_text)}</mark>")
-        last_index = end
-    if last_index < len(note_text):
-        parts.append(html.escape(note_text[last_index:]))
-
-    highlighted = "".join(parts).replace("\n", "<br/>") if parts else html.escape(note_text).replace("\n", "<br/>")
-    unique_matches = sorted({match for match in matches})
-    return highlighted, [match.upper() for match in unique_matches]
+    normalized = note_text.replace("\r\n", "\n").replace("\r", "\n")
+    matches = sorted({match.group(0).lower() for match in _KEYWORD_PATTERN.finditer(normalized)})
+    return normalized, [match.upper() for match in matches]
 
 
 def _build_sensitive_notes_rows(
@@ -626,12 +611,12 @@ def _build_sensitive_notes_rows(
             rendered_blocks = []
             aggregated_matches: set[str] = set()
             for label, text in note_blocks:
-                highlighted, matched_keywords = _highlight_keywords(text)
+                rendered_text, matched_keywords = _highlight_keywords(text)
                 aggregated_matches.update(matched_keywords)
                 rendered_blocks.append(
                     {
                         "label": label,
-                        "highlighted": highlighted,
+                        "highlighted": rendered_text,
                         "raw": text,
                     }
                 )
@@ -663,12 +648,9 @@ def _build_sensitive_notes_rows(
                 sections = []
                 raw_sections = []
                 for block in rendered_blocks:
-                    label_html = html.escape(block["label"])
-                    sections.append(
-                        f"<div><strong>{label_html}</strong><br/>{block['highlighted']}</div>"
-                    )
+                    sections.append(f"{block['label']}:\n{block['highlighted']}")
                     raw_sections.append(f"{block['label']}: {block['raw']}")
-                notes_display = "<br/><br/>".join(sections)
+                notes_display = "\n\n".join(sections)
                 raw_notes = "\n\n---\n\n".join(raw_sections)
 
             display_rows.append(
@@ -1109,8 +1091,6 @@ def _render_sensitive_notes_table(rows: List[Mapping[str, Any]]) -> None:
     for column in df_display.columns:
         df_display[column] = df_display[column].map(_stringify)
 
-    html_columns = [column for column in ("Notes",) if column in df_display.columns]
-
     styler = (
         df_display.style.hide(axis="index")
         .set_table_styles(
@@ -1121,18 +1101,11 @@ def _render_sensitive_notes_table(rows: List[Mapping[str, Any]]) -> None:
                 },
                 {
                     "selector": "td",
-                    "props": "text-align: left; vertical-align: top;",
-                },
-                {
-                    "selector": "mark",
-                    "props": "background-color: #ffecb3; padding: 0 0.2em;",
+                    "props": "text-align: left; vertical-align: top; white-space: pre-wrap; word-break: break-word;",
                 },
             ]
         )
     )
-
-    if html_columns:
-        styler = styler.format(escape=None, subset=(slice(None), html_columns))
 
     st.dataframe(styler, use_container_width=True)
 
