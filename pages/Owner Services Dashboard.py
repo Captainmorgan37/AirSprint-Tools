@@ -1,3 +1,4 @@
+import json
 import re
 
 import pandas as pd
@@ -6,6 +7,7 @@ import streamlit as st
 
 from functools import lru_cache
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from fl3xx_api import (
@@ -79,6 +81,10 @@ _DEFAULT_SENSITIVE_KEYWORDS: tuple[str, ...] = (
 _SENSITIVE_TERMS_STATE_KEY = "owner_services_sensitive_terms"
 _SENSITIVE_ADD_INPUT_KEY = "owner_services_sensitive_add_term"
 _SENSITIVE_REMOVE_SELECT_KEY = "owner_services_sensitive_remove_terms"
+_SENSITIVE_KEYWORDS_FILE = Path(__file__).resolve().parent / (
+    "owner_services_sensitive_keywords.json"
+)
+_SENSITIVE_WARNINGS_KEY = "owner_services_sensitive_keyword_warnings"
 
 
 _ACCOUNT_KEYS: tuple[str, ...] = (
@@ -125,20 +131,86 @@ def _normalise_keyword(term: Any) -> Optional[str]:
     return text or None
 
 
-def _ensure_sensitive_keywords_state() -> List[str]:
-    stored = st.session_state.get(_SENSITIVE_TERMS_STATE_KEY)
-    if not isinstance(stored, list):
-        stored = list(_DEFAULT_SENSITIVE_KEYWORDS)
+def _warn_once(message: str) -> None:
+    shown = st.session_state.get(_SENSITIVE_WARNINGS_KEY)
+    if not isinstance(shown, list):
+        shown = []
+    if message in shown:
+        return
+    st.warning(message)
+    shown.append(message)
+    st.session_state[_SENSITIVE_WARNINGS_KEY] = shown
+
+
+def _clean_keywords(keywords: Sequence[Any]) -> tuple[List[str], bool]:
     cleaned: List[str] = []
     seen: set[str] = set()
-    for term in stored:
+    changed = False
+    for term in keywords:
         normalised = _normalise_keyword(term)
-        if not normalised or normalised in seen:
+        if not normalised:
+            if term not in (None, ""):
+                changed = True
             continue
+        if normalised in seen:
+            changed = True
+            continue
+        if not isinstance(term, str) or term != normalised:
+            changed = True
         cleaned.append(normalised)
         seen.add(normalised)
-    if cleaned != stored:
+    return cleaned, changed
+
+
+def _load_persisted_keywords() -> tuple[Optional[List[str]], bool]:
+    try:
+        with _SENSITIVE_KEYWORDS_FILE.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except FileNotFoundError:
+        return None, False
+    except Exception as exc:
+        _warn_once(f"Failed to read saved sensitive keywords: {exc}")
+        return None, True
+
+    if isinstance(payload, list):
+        cleaned, _ = _clean_keywords(payload)
+        return cleaned, True
+
+    _warn_once(
+        "Saved sensitive keyword list is invalid; using the default keywords instead."
+    )
+    return None, True
+
+
+def _persist_keywords(keywords: Sequence[str]) -> bool:
+    cleaned, _ = _clean_keywords(list(keywords))
+    try:
+        _SENSITIVE_KEYWORDS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with _SENSITIVE_KEYWORDS_FILE.open("w", encoding="utf-8") as handle:
+            json.dump(cleaned, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+    except Exception as exc:
+        st.error(f"Failed to save monitored keywords: {exc}")
+        return False
+    return True
+
+
+def _ensure_sensitive_keywords_state() -> List[str]:
+    stored = st.session_state.get(_SENSITIVE_TERMS_STATE_KEY)
+    loaded_from_file = False
+    if not isinstance(stored, list):
+        persisted, loaded_from_file = _load_persisted_keywords()
+        if persisted is not None:
+            stored = persisted
+        else:
+            stored = list(_DEFAULT_SENSITIVE_KEYWORDS)
+
+    cleaned, changed = _clean_keywords(stored)
+
+    if changed:
         st.session_state[_SENSITIVE_TERMS_STATE_KEY] = cleaned
+        if loaded_from_file or _SENSITIVE_KEYWORDS_FILE.exists():
+            _persist_keywords(cleaned)
     else:
         st.session_state.setdefault(_SENSITIVE_TERMS_STATE_KEY, cleaned)
     return cleaned
@@ -175,8 +247,11 @@ def _add_sensitive_keyword(term: str) -> bool:
         st.info(f"`{normalised}` is already being monitored.")
         return False
 
-    keywords.append(normalised)
-    st.session_state[_SENSITIVE_TERMS_STATE_KEY] = keywords
+    updated_keywords = [*keywords, normalised]
+    if not _persist_keywords(updated_keywords):
+        return False
+
+    st.session_state[_SENSITIVE_TERMS_STATE_KEY] = updated_keywords
     _compile_keyword_pattern.cache_clear()
     st.success(f"Added `{normalised}` to the monitored keyword list.")
     return True
@@ -194,6 +269,9 @@ def _remove_sensitive_keywords(terms: Sequence[str]) -> bool:
     new_keywords = [term for term in keywords if term not in removal_targets]
     if len(new_keywords) == len(keywords):
         st.info("The selected keywords are not currently monitored.")
+        return False
+
+    if not _persist_keywords(new_keywords):
         return False
 
     st.session_state[_SENSITIVE_TERMS_STATE_KEY] = new_keywords
@@ -1206,13 +1284,14 @@ def _render_sensitive_keyword_manager() -> None:
     keywords = list(_get_sensitive_keywords())
     if keywords:
         st.caption(
-            "The Sensitive Notes Monitor currently scans leg notes for these terms."
+            "The Sensitive Notes Monitor currently scans leg notes for these terms. "
+            "Updates made here are saved for future sessions."
         )
         st.write(" ".join(f"`{term}`" for term in keywords))
     else:
         st.info(
             "No keywords are currently configured. Add a term below to begin monitoring "
-            "for sensitive notes."
+            "for sensitive notes. Updates are saved for future sessions."
         )
 
     with st.form("owner_services_sensitive_add_form", clear_on_submit=True):
