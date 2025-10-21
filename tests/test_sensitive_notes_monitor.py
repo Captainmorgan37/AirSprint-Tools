@@ -21,11 +21,11 @@ def _load_dashboard_module():
 def test_highlight_keywords_marks_sensitive_terms():
     module = _load_dashboard_module()
 
-    note_text = "1 x Perrier can or bottle per guest at room temperature"
+    note_text = "Ensure visa paperwork is secured prior to departure"
     highlighted, matches = module._highlight_keywords(note_text)
 
-    assert matches == ["PERRIER"]
-    assert "<mark>Perrier</mark>" in highlighted
+    assert matches == ["VISA"]
+    assert "<mark>visa</mark>" in highlighted
 
 
 def test_extract_service_notes_uses_api_notes_section_only():

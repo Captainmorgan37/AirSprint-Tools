@@ -1050,74 +1050,53 @@ def _render_sensitive_notes_results() -> None:
 
 
 def _render_sensitive_notes_table(rows: List[Mapping[str, Any]]) -> None:
-    table_styles = """
-    <style>
-    .sensitive-notes-table table {
-        width: 100%;
-        border-collapse: collapse;
-    }
-    .sensitive-notes-table th,
-    .sensitive-notes-table td {
-        border: 1px solid rgba(49, 51, 63, 0.2);
-        padding: 0.5rem;
-        text-align: left;
-        vertical-align: top;
-        font-size: 0.95rem;
-    }
-    .sensitive-notes-table th {
-        background-color: rgba(0, 0, 0, 0.05);
-    }
-    .sensitive-notes-table mark {
-        background-color: #ffecb3;
-        padding: 0 0.2em;
-    }
-    </style>
-    """
+    df = pd.DataFrame(rows)
 
-    header_html = """
-    <div class="sensitive-notes-table">
-      <table>
-        <thead>
-          <tr>
-            <th>Departure (UTC)</th>
-            <th>Tail</th>
-            <th>Booking Identifier</th>
-            <th>Route</th>
-            <th>Matched Keywords</th>
-            <th>Notes</th>
-          </tr>
-        </thead>
-        <tbody>
-    """
+    column_order = [
+        "Departure (UTC)",
+        "Tail",
+        "Booking Identifier",
+        "Route",
+        "Matched Keywords",
+        "Notes",
+    ]
+    present_columns = [column for column in column_order if column in df.columns]
+    if not present_columns:
+        return
 
-    row_html_parts: List[str] = []
-    for row in rows:
-        departure = html.escape(str(row.get("Departure (UTC)", "")))
-        tail = html.escape(str(row.get("Tail", "")))
-        booking = html.escape(str(row.get("Booking Identifier", "")))
-        route = html.escape(str(row.get("Route", "")))
-        keywords = html.escape(str(row.get("Matched Keywords", "")))
-        notes_html = str(row.get("Notes", ""))
+    df_display = df[present_columns].copy()
 
-        row_html_parts.append(
-            "          <tr>"
-            f"<td>{departure}</td>"
-            f"<td>{tail}</td>"
-            f"<td>{booking}</td>"
-            f"<td>{route}</td>"
-            f"<td>{keywords}</td>"
-            f"<td>{notes_html}</td>"
-            "</tr>"
+    def _stringify(value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value
+        return str(value)
+
+    for column in df_display.columns:
+        df_display[column] = df_display[column].map(_stringify)
+
+    styler = (
+        df_display.style.hide(axis="index")
+        .set_table_styles(
+            [
+                {
+                    "selector": "th",
+                    "props": "text-align: left; font-weight: 600;",
+                },
+                {
+                    "selector": "td",
+                    "props": "text-align: left; vertical-align: top;",
+                },
+                {
+                    "selector": "mark",
+                    "props": "background-color: #ffecb3; padding: 0 0.2em;",
+                },
+            ]
         )
-
-    table_html = (
-        table_styles
-        + header_html
-        + "\n".join(row_html_parts)
-        + "\n        </tbody>\n      </table>\n    </div>"
     )
 
-    st.markdown(table_html, unsafe_allow_html=True)
+    st.dataframe(styler, use_container_width=True)
 
 
 def _render_sensitive_notes_tab(api_settings: Optional[Mapping[str, Any]]) -> None:
