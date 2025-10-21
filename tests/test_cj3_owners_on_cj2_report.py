@@ -285,3 +285,50 @@ def test_includes_runway_alerts_below_threshold():
         }
     ]
     assert entry["runway_alert_threshold_ft"] == 4900
+
+
+def test_sets_runway_confirmation_note_when_all_runways_clear():
+    dep = dt.datetime(2024, 9, 2, 9, 45)
+    row = _leg(
+        account="Owner Runway Clear",
+        tail="C-GCJ2",
+        dep=dep,
+        leg_id="L6",
+        quote_id="Q6",
+        flight_id="F600",
+        booking_identifier="B600",
+    )
+    row["airportFrom"] = "CYVR"
+    row["airportTo"] = "CYEG"
+
+    payload_map = {
+        "Q6": [
+            {
+                "planningNotes": "Owner requesting CJ3",
+                "pax": 2,
+                "blockTime": 120,
+                "departureDateUTC": iso(dep),
+            }
+        ]
+    }
+
+    def _runway_lookup(code):
+        lookup = {
+            "CYVR": 11500,
+            "CYEG": 11000,
+        }
+        if code:
+            return lookup.get(code.upper())
+        return None
+
+    result = _build_cj3_owners_on_cj2_report(
+        [row],
+        Fl3xxApiConfig(),
+        fetch_leg_details_fn=_stub_fetch(payload_map),
+        runway_lookup_fn=_runway_lookup,
+    )
+
+    assert result.rows
+    entry = result.rows[0]
+    assert entry["runway_alerts"] == []
+    assert result.metadata["runway_confirmation_note"] == "All runways confirmed as 4,900' or longer"
