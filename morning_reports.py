@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import csv
 import inspect
 import re
 from collections.abc import Iterable as IterableABC
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple
 
 import requests
@@ -263,7 +265,7 @@ def _build_cj3_line(row: Mapping[str, Any]) -> str:
     block_display = (
         f"{block_display} FLIGHT TIME" if block_display and block_display != "Unknown" else "Unknown FLIGHT TIME"
     )
-    return " - ".join(
+    base_line = " - ".join(
         [
             tail,
             str(booking).strip() or "Unknown Booking",
@@ -272,6 +274,130 @@ def _build_cj3_line(row: Mapping[str, Any]) -> str:
             block_display,
         ]
     )
+
+    runway_alerts = row.get("runway_alerts") or []
+    if not runway_alerts:
+        return base_line
+
+    threshold_ft = row.get("runway_alert_threshold_ft")
+    alert_lines: List[str] = []
+
+    for alert in runway_alerts:
+        role = _normalize_str(alert.get("role")) or "Airport"
+        airport_display = (
+            _normalize_str(alert.get("airport"))
+            or _normalize_str(alert.get("airport_raw"))
+            or "Unknown Airport"
+        )
+        length_value = alert.get("max_runway_length_ft")
+        if isinstance(length_value, (int, float)):
+            length_int = int(length_value)
+            length_display = f"{length_int:,} FT"
+        else:
+            length_display = "Unknown length"
+
+        if isinstance(threshold_ft, (int, float)):
+            threshold_int = int(threshold_ft)
+            alert_lines.append(
+                f"    ALERT: {role} {airport_display} max runway {length_display} (< {threshold_int:,} FT)"
+            )
+        else:
+            alert_lines.append(
+                f"    ALERT: {role} {airport_display} max runway {length_display}"
+            )
+
+    return "\n".join([base_line, *alert_lines])
+
+
+def _normalize_airport_ident(value: Any) -> Optional[str]:
+    text = _normalize_str(value)
+    if not text:
+        return None
+    text = text.upper()
+    for token in re.split(r"[^A-Z0-9]+", text):
+        if len(token) >= 3:
+            return token
+    return None
+
+
+def _load_runway_length_cache() -> Dict[str, int]:
+    global _RUNWAY_LENGTH_CACHE
+    if _RUNWAY_LENGTH_CACHE is not None:
+        return _RUNWAY_LENGTH_CACHE
+
+    cache: Dict[str, int] = {}
+    try:
+        with _RUNWAY_DATA_PATH.open(newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            for row in reader:
+                ident = _normalize_airport_ident(row.get("airport_ident"))
+                if not ident:
+                    continue
+
+                length_text = _normalize_str(row.get("length_ft"))
+                if not length_text:
+                    continue
+                try:
+                    length_value = int(float(length_text))
+                except (TypeError, ValueError):
+                    continue
+                if length_value <= 0:
+                    continue
+
+                current = cache.get(ident)
+                if current is None or length_value > current:
+                    cache[ident] = length_value
+
+                if len(ident) == 4 and ident[0] in {"C", "K"}:
+                    alias = ident[1:]
+                    if len(alias) >= 3:
+                        alias_current = cache.get(alias)
+                        if alias_current is None or length_value > alias_current:
+                            cache[alias] = length_value
+    except FileNotFoundError:
+        cache = {}
+
+    _RUNWAY_LENGTH_CACHE = cache
+    return cache
+
+
+def _lookup_max_runway_length(airport: Optional[str]) -> Optional[int]:
+    ident = _normalize_airport_ident(airport)
+    if not ident:
+        return None
+    cache = _load_runway_length_cache()
+    length = cache.get(ident)
+    return int(length) if length is not None else None
+
+
+def _build_runway_alerts(
+    departure_airport: Optional[str],
+    arrival_airport: Optional[str],
+    *,
+    lookup_fn: Callable[[Optional[str]], Optional[int]],
+    threshold_ft: int,
+) -> List[Dict[str, Any]]:
+    alerts: List[Dict[str, Any]] = []
+    for role, airport in (("Departure", departure_airport), ("Arrival", arrival_airport)):
+        normalized = _normalize_airport_ident(airport)
+        length = lookup_fn(airport)
+        if length is None:
+            continue
+        try:
+            length_int = int(length)
+        except (TypeError, ValueError):
+            continue
+        if length_int >= threshold_ft:
+            continue
+        alerts.append(
+            {
+                "role": role,
+                "airport": normalized or (_normalize_str(airport) or "Unknown"),
+                "airport_raw": airport,
+                "max_runway_length_ft": length_int,
+            }
+        )
+    return alerts
 
 
 def _build_priority_line(row: Mapping[str, Any]) -> str:
@@ -309,6 +435,11 @@ _EXPECTED_EMPTY_LEG_ACCOUNT = "AIRSPRINT INC."
 _OCS_ACCOUNT_NAME = "AIRSPRINT INC."
 
 _LEGACY_AIRCRAFT_CATEGORIES = {"E550", "E545"}
+
+_RUNWAY_ALERT_THRESHOLD_FT = 4900
+
+_RUNWAY_DATA_PATH = Path(__file__).with_name("runways.csv")
+_RUNWAY_LENGTH_CACHE: Optional[Dict[str, int]] = None
 
 _PRIORITY_CHECKIN_THRESHOLD_MINUTES = 90
 
@@ -633,6 +764,8 @@ def _build_cj3_owners_on_cj2_report(
     config: Fl3xxApiConfig,
     *,
     fetch_leg_details_fn: Callable[[Fl3xxApiConfig, Any], Any] = fetch_leg_details,
+    runway_lookup_fn: Optional[Callable[[Optional[str]], Optional[int]]] = None,
+    runway_threshold_ft: int = _RUNWAY_ALERT_THRESHOLD_FT,
 ) -> MorningReportResult:
     matches: List[Dict[str, Any]] = []
     warnings: List[str] = []
@@ -641,6 +774,8 @@ def _build_cj3_owners_on_cj2_report(
 
     total_flagged = 0
     inspected = 0
+
+    lookup_fn = runway_lookup_fn or _lookup_max_runway_length
 
     try:
         for row in _sort_rows(rows):
@@ -754,6 +889,23 @@ def _build_cj3_owners_on_cj2_report(
             pax_display = str(pax_count) if pax_count is not None else "Unknown"
             block_display = _format_block_minutes(block_minutes)
 
+            dep_airport_raw = _extract_airport(row, True)
+            arr_airport_raw = _extract_airport(row, False)
+            if not dep_airport_raw and detail:
+                dep_airport_raw = _extract_airport(detail, True)
+            if not arr_airport_raw and detail:
+                arr_airport_raw = _extract_airport(detail, False)
+
+            dep_airport = _normalize_airport_ident(dep_airport_raw)
+            arr_airport = _normalize_airport_ident(arr_airport_raw)
+
+            runway_alerts = _build_runway_alerts(
+                dep_airport_raw,
+                arr_airport_raw,
+                lookup_fn=lookup_fn,
+                threshold_ft=runway_threshold_ft,
+            )
+
             line = "-".join(
                 [
                     date_component,
@@ -782,6 +934,12 @@ def _build_cj3_owners_on_cj2_report(
                     "threshold_status": threshold_status,
                     "threshold_breached": violation,
                     "threshold_reasons": violation_reasons,
+                    "departure_airport": dep_airport,
+                    "departure_airport_raw": dep_airport_raw,
+                    "arrival_airport": arr_airport,
+                    "arrival_airport_raw": arr_airport_raw,
+                    "runway_alerts": runway_alerts,
+                    "runway_alert_threshold_ft": runway_threshold_ft,
                 }
             )
     finally:
