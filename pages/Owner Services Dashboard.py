@@ -77,7 +77,7 @@ _SENSITIVE_KEYWORDS: tuple[str, ...] = (
 )
 
 _KEYWORD_PATTERN = re.compile(
-    r"\\b(" + "|".join(re.escape(term) for term in _SENSITIVE_KEYWORDS) + r")\\b",
+    r"\b(" + "|".join(re.escape(term) for term in _SENSITIVE_KEYWORDS) + r")\b",
     re.IGNORECASE,
 )
 
