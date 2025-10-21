@@ -81,6 +81,19 @@ _KEYWORD_PATTERN = re.compile(
 )
 
 
+_ACCOUNT_KEYS: tuple[str, ...] = (
+    "accountName",
+    "account",
+    "account_name",
+    "owner",
+    "ownerName",
+    "customer",
+    "customerName",
+    "client",
+    "clientName",
+)
+
+
 def _initialise_state() -> None:
     st.session_state.setdefault(_RESULTS_KEY, None)
     st.session_state.setdefault(_ERROR_KEY, None)
@@ -157,6 +170,22 @@ def _extract_airport_code(value: Any) -> Optional[str]:
             if text:
                 return text
     return None
+
+
+def _extract_account_label(row: Mapping[str, Any]) -> str:
+    for key in _ACCOUNT_KEYS:
+        value = row.get(key)
+        if value in (None, ""):
+            continue
+        if isinstance(value, Mapping):
+            nested_value = value.get("name") or value.get("accountName") or value.get("account")
+            if nested_value in (None, ""):
+                continue
+            value = nested_value
+        text = str(value).strip()
+        if text:
+            return text
+    return "—"
 
 
 def _coerce_text(value: Any) -> Optional[str]:
@@ -625,6 +654,7 @@ def _build_sensitive_notes_rows(
                 leg.get("arrival_airport") or leg.get("arrivalAirport")
             )
             route = f"{dep_ap or '?'} → {arr_ap or '?'}"
+            account_label = _extract_account_label(leg)
 
             if len(rendered_blocks) == 1 and rendered_blocks[0]["label"] == "Leg notes":
                 notes_display = rendered_blocks[0]["highlighted"]
@@ -647,6 +677,7 @@ def _build_sensitive_notes_rows(
                     "Departure (UTC)": departure_label,
                     "Tail": tail,
                     "Booking Identifier": booking_identifier,
+                    "Account Name": account_label,
                     "Route": route,
                     "Matched Keywords": ", ".join(sorted(aggregated_matches)),
                     "Notes": notes_display,
@@ -1030,6 +1061,7 @@ def _render_sensitive_notes_results() -> None:
                     "Departure (UTC)": row.get("Departure (UTC)", ""),
                     "Tail": row.get("Tail", ""),
                     "Booking Identifier": row.get("Booking Identifier", ""),
+                    "Account Name": row.get("Account Name", ""),
                     "Route": row.get("Route", ""),
                     "Matched Keywords": row.get("Matched Keywords", ""),
                     "Notes": row.get("_notes_raw", ""),
@@ -1056,6 +1088,7 @@ def _render_sensitive_notes_table(rows: List[Mapping[str, Any]]) -> None:
         "Departure (UTC)",
         "Tail",
         "Booking Identifier",
+        "Account Name",
         "Route",
         "Matched Keywords",
         "Notes",
