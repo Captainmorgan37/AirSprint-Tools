@@ -25,7 +25,8 @@ def test_highlight_keywords_marks_sensitive_terms():
     highlighted, matches = module._highlight_keywords(note_text)
 
     assert matches == ["VISA"]
-    assert "<mark>visa</mark>" in highlighted
+    assert "<mark>" not in highlighted
+    assert highlighted == note_text
 
 
 def test_extract_service_notes_uses_api_notes_section_only():
