@@ -64,7 +64,6 @@ _SENSITIVE_KEYWORDS: tuple[str, ...] = (
     "rifles",
     "emergency",
     "operation",
-    "perrier",
     "funeral",
     "dog",
     "dogs",
