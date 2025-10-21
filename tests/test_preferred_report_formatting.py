@@ -160,6 +160,36 @@ def test_cj3_on_cj2_preferred_block_includes_runway_alerts():
     assert result.formatted_output() == expected
 
 
+def test_cj3_on_cj2_preferred_block_omits_runway_confirmation_notice():
+    rows = [
+        {
+            "date": "2025-10-17",
+            "tail": "CFASP",
+            "booking_identifier": "HEGEU",
+            "account_name": "Michael Culbert and Heather Culbert",
+            "pax_count": 1,
+            "block_time_display": "2:23",
+            "runway_alerts": [],
+            "runway_alert_threshold_ft": 4900,
+        }
+    ]
+
+    result = MorningReportResult(
+        code="16.1.6",
+        title="CJ3 Owners on CJ2 Report",
+        header_label="CJ3 Owners on CJ2",
+        rows=rows,
+    )
+
+    expected = (
+        "CJ3 CLIENTS ON CJ2: (based on the CJ3 Owners on CJ2 Report)\n\n"
+        "17OCT25\n\n"
+        "CFASP - HEGEU - Michael Culbert and Heather Culbert - 1 PAX - 2:23 FLIGHT TIME"
+    )
+
+    assert result.formatted_output() == expected
+
+
 def test_priority_status_preferred_block_formatting():
     rows = [
         {
