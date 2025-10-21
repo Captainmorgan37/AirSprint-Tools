@@ -96,11 +96,30 @@ def _format_upgraded_flights_block(report: MorningReportResult) -> str:
 
 
 def _format_cj3_on_cj2_block(report: MorningReportResult) -> str:
-    return _render_preferred_block(
+    block = _render_preferred_block(
         report.rows,
         header=f"CJ3 CLIENTS ON CJ2: (based on the {report.title})",
         line_builder=_build_cj3_line,
     )
+
+    confirmation_note = _normalize_str(
+        (report.metadata or {}).get("runway_confirmation_note")
+    )
+    if not confirmation_note:
+        return block
+
+    filtered_lines: List[str] = []
+    for line in block.split("\n"):
+        if _normalize_str(line) == confirmation_note:
+            if filtered_lines and filtered_lines[-1] == "":
+                filtered_lines.pop()
+            continue
+        filtered_lines.append(line)
+
+    while filtered_lines and filtered_lines[-1] == "":
+        filtered_lines.pop()
+
+    return "\n".join(filtered_lines)
 
 
 def _format_priority_status_block(report: MorningReportResult) -> str:
