@@ -228,3 +228,60 @@ def test_missing_quote_id_generates_warning():
     assert result.rows == []
     assert result.metadata["match_count"] == 0
     assert any("missing quote" in warning.lower() for warning in result.warnings)
+
+
+def test_includes_runway_alerts_below_threshold():
+    dep = dt.datetime(2024, 9, 1, 14, 30)
+    row = _leg(
+        account="Owner Runway",
+        tail="C-GCJ2",
+        dep=dep,
+        leg_id="L5",
+        quote_id="Q5",
+        flight_id="F500",
+        booking_identifier="B500",
+    )
+    row["airportFrom"] = "CYBW"
+    row["airportTo"] = "CYYC"
+
+    payload_map = {
+        "Q5": [
+            {
+                "planningNotes": "Owner requesting CJ3",
+                "pax": 4,
+                "blockTime": 170,
+                "departureDateUTC": iso(dep),
+            }
+        ]
+    }
+
+    def _runway_lookup(code):
+        lookup = {
+            "CYBW": 4880,
+            "CYYC": 12500,
+        }
+        if code:
+            return lookup.get(code.upper())
+        return None
+
+    result = _build_cj3_owners_on_cj2_report(
+        [row],
+        Fl3xxApiConfig(),
+        fetch_leg_details_fn=_stub_fetch(payload_map),
+        runway_lookup_fn=_runway_lookup,
+    )
+
+    assert result.rows
+    entry = result.rows[0]
+    assert entry["departure_airport"] == "CYBW"
+    assert entry["arrival_airport"] == "CYYC"
+    alerts = entry["runway_alerts"]
+    assert alerts == [
+        {
+            "role": "Departure",
+            "airport": "CYBW",
+            "airport_raw": "CYBW",
+            "max_runway_length_ft": 4880,
+        }
+    ]
+    assert entry["runway_alert_threshold_ft"] == 4900
