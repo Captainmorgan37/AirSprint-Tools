@@ -1,3 +1,5 @@
+from Home import password_gate
+password_gate()
 from __future__ import annotations
 
 import re
@@ -10,7 +12,6 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 import pandas as pd
 import streamlit as st
 
-from auth import require_login
 
 from flight_leg_utils import (
     AIRPORT_TZ_FILENAME,
@@ -30,7 +31,6 @@ from jeppesen_itp_utils import (
 
 
 st.set_page_config(page_title="Jeppesen ITP Required Flight Check", layout="wide")
-require_login()
 st.title("🛫 Jeppesen ITP Required Flight Check")
 
 st.write(
