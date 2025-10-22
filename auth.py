@@ -27,6 +27,7 @@ _DEFAULT_SIGNATURE_KEY = "airsprint_tools_signature"
 _DEFAULT_COOKIE_EXPIRY_DAYS = 14
 
 _USING_DEFAULT_CREDENTIALS = False
+_AUTHENTICATOR_SESSION_KEY = "_authenticator"
 
 
 def _load_auth_settings() -> Tuple[Dict[str, Dict[str, Dict[str, str]]], str, str, int]:
