@@ -349,18 +349,47 @@ def _rule_hours_for_weekday(rule: Optional[Mapping[str, Any]], weekday: int) -> 
     return _parse_hours_value(value_str)
 
 
-def _previous_operating_window(
-    event_local: datetime,
+def _find_operating_window_before(
+    reference_local: datetime,
     rule: Optional[Mapping[str, Any]],
+    *,
+    allow_same_day: bool,
 ) -> Tuple[date, time, time]:
+    reference_date = reference_local.date()
+    reference_time = reference_local.time()
+
     if isinstance(rule, Mapping):
-        for offset in range(1, 8):
-            candidate_date = event_local.date() - timedelta(days=offset)
+        start_offset = 0 if allow_same_day else 1
+        for offset in range(start_offset, 8):
+            candidate_date = reference_date - timedelta(days=offset)
             hours = _rule_hours_for_weekday(rule, candidate_date.weekday())
-            if hours:
-                start_time, end_time = hours
-                return candidate_date, start_time, end_time
-    target_date = _previous_business_day(event_local.date())
+            if not hours:
+                continue
+            start_time, end_time = hours
+            if offset == 0:
+                if reference_time < start_time:
+                    continue
+                if reference_time < end_time:
+                    end_time = reference_time
+            if end_time <= start_time:
+                end_time = start_time
+            return candidate_date, start_time, end_time
+
+    if allow_same_day:
+        fallback_date = reference_date
+        fallback_start = DEFAULT_BUSINESS_DAY_START
+        fallback_end = DEFAULT_BUSINESS_DAY_END
+        if fallback_date.weekday() >= 5 or reference_time < fallback_start:
+            fallback_date = _previous_business_day(reference_date)
+        else:
+            fallback_end = min(reference_time, fallback_end)
+            if fallback_end <= fallback_start:
+                fallback_end = fallback_start
+            return fallback_date, fallback_start, fallback_end
+
+        return fallback_date, fallback_start, fallback_end
+
+    target_date = _previous_business_day(reference_date)
     return target_date, DEFAULT_BUSINESS_DAY_START, DEFAULT_BUSINESS_DAY_END
 
 
@@ -408,32 +437,85 @@ def _compute_clearance_window(
     else:
         event_local = _to_local(event_dt, None)
 
-    target_date, window_start_time, window_end_time = _previous_operating_window(
+    tzinfo = event_local.tzinfo or ZoneInfo("UTC")
+    lead_hours: Optional[float] = None
+    lead_deadline_local: Optional[datetime] = None
+    if isinstance(rule, Mapping):
+        lead_hours = _parse_lead_time_hours(rule.get("lead_time_arrival_hours"))
+        if lead_hours and lead_hours > 0:
+            lead_deadline_candidate = event_local - timedelta(hours=lead_hours)
+            if lead_deadline_candidate.tzinfo is None:
+                lead_deadline_candidate = lead_deadline_candidate.replace(tzinfo=tzinfo)
+            try:
+                lead_deadline_local = lead_deadline_candidate.astimezone(tzinfo)
+            except Exception:
+                lead_deadline_local = lead_deadline_candidate
+
+    target_date, window_start_time, window_end_time = _find_operating_window_before(
         event_local,
         rule,
+        allow_same_day=False,
     )
-
-    tzinfo = event_local.tzinfo or ZoneInfo("UTC")
-
     start_local = datetime.combine(target_date, window_start_time, tzinfo=tzinfo)
     end_local = datetime.combine(target_date, window_end_time, tzinfo=tzinfo)
-
-    goal_summary = (
-        f"Prior operating window: {start_local.strftime('%b %d')} "
-        f"{window_start_time.strftime('%H:%M')}-{window_end_time.strftime('%H:%M')} local."
-    )
-
     timing_label = "Prior Day"
+    deadline_port_closed = False
+
+    if isinstance(lead_deadline_local, datetime):
+        if lead_deadline_local < start_local:
+            target_date, window_start_time, window_end_time = _find_operating_window_before(
+                lead_deadline_local,
+                rule,
+                allow_same_day=True,
+            )
+            start_local = datetime.combine(target_date, window_start_time, tzinfo=tzinfo)
+            end_local = datetime.combine(target_date, window_end_time, tzinfo=tzinfo)
+            if end_local > lead_deadline_local:
+                end_local = lead_deadline_local
+            timing_label = "Lead Time"
+            deadline_port_closed = start_local.date() != lead_deadline_local.date()
+        elif lead_deadline_local < end_local:
+            end_local = lead_deadline_local
+
+    goal_summary_parts: List[str] = []
+    if timing_label == "Lead Time":
+        if lead_hours:
+            goal_summary_parts.append(
+                f"Lead time requirement {lead_hours:g}h prior to arrival "
+                f"(deadline {lead_deadline_local.strftime('%Y-%m-%d %H:%M %Z')})."
+            )
+        goal_summary_parts.append(
+            "Last port window before deadline: "
+            f"{start_local.strftime('%Y-%m-%d %H:%M %Z')}"
+            " → "
+            f"{end_local.strftime('%Y-%m-%d %H:%M %Z')}."
+        )
+        if deadline_port_closed:
+            goal_summary_parts.append(
+                "Port unavailable at deadline; window pulled from previous operating day."
+            )
+    else:
+        goal_summary_parts.append(
+            "Prior operating window: "
+            f"{start_local.strftime('%Y-%m-%d %H:%M %Z')}"
+            " → "
+            f"{end_local.strftime('%Y-%m-%d %H:%M %Z')}."
+        )
+        if isinstance(lead_deadline_local, datetime) and lead_hours:
+            goal_summary_parts.append(
+                "Lead time "
+                f"({lead_hours:g}h) deadline {lead_deadline_local.strftime('%Y-%m-%d %H:%M %Z')}."
+            )
+
+    goal_summary = " ".join(goal_summary_parts)
 
     normalized_status = (arrival_status or "").strip().upper()
     if normalized_status != "OK" and isinstance(end_local, datetime):
         now_local = datetime.now(end_local.tzinfo or ZoneInfo("UTC"))
         if now_local > end_local:
-            lead_hours: Optional[float] = None
             same_day_hours: Optional[Tuple[time, time]] = None
             rule_same_day_hours: Optional[Tuple[time, time]] = None
             if isinstance(rule, Mapping):
-                lead_hours = _parse_lead_time_hours(rule.get("lead_time_arrival_hours"))
                 rule_same_day_hours = _rule_hours_for_weekday(
                     rule, event_local.weekday()
                 )
@@ -453,13 +535,6 @@ def _compute_clearance_window(
                 event_local.date(), same_day_end_time, tzinfo=tzinfo
             )
 
-            lead_deadline: Optional[datetime] = None
-            if lead_hours is not None:
-                lead_deadline = event_local - timedelta(hours=lead_hours)
-
-            if isinstance(lead_deadline, datetime):
-                lead_deadline = lead_deadline.astimezone(tzinfo)
-
             departure_dt = _extract_departure_dt(row)
             departure_local: Optional[datetime] = None
             if isinstance(departure_dt, datetime):
@@ -471,8 +546,8 @@ def _compute_clearance_window(
                     departure_local = departure_dt
 
             fallback_end_local = same_day_end_local
-            if isinstance(lead_deadline, datetime):
-                fallback_end_local = min(fallback_end_local, lead_deadline)
+            if isinstance(lead_deadline_local, datetime):
+                fallback_end_local = min(fallback_end_local, lead_deadline_local)
             if isinstance(departure_local, datetime):
                 fallback_end_local = min(fallback_end_local, departure_local)
 
@@ -495,11 +570,11 @@ def _compute_clearance_window(
 
             summary_parts = ["Prior day clearance window missed.", port_window_desc]
 
-            if isinstance(lead_deadline, datetime):
+            if isinstance(lead_deadline_local, datetime):
                 lead_hours_text = f"{lead_hours:g}" if lead_hours is not None else ""
                 summary_parts.append(
                     "Lead time"
-                    f" ({lead_hours_text}h) deadline {lead_deadline.strftime('%H:%M %Z')}."
+                    f" ({lead_hours_text}h) deadline {lead_deadline_local.strftime('%H:%M %Z')}."
                 )
 
             if isinstance(departure_local, datetime):
