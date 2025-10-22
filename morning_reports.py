@@ -881,7 +881,7 @@ def _build_cj3_owners_on_cj2_report(
                     detail_cache[quote_id] = payload
 
             payload = detail_cache.get(quote_id)
-            detail = _select_leg_detail(payload)
+            detail = _select_leg_detail(payload, row)
             note_text = _extract_planning_note(detail)
 
             if not note_text:
@@ -1400,7 +1400,7 @@ def _build_upgrade_workflow_validation_report(
                 else:
                     detail_cache[booking_reference] = payload
 
-            detail = _select_leg_detail(detail_cache.get(booking_reference))
+            detail = _select_leg_detail(detail_cache.get(booking_reference), row)
             planning_note = _extract_planning_note(detail)
             request_label = _planning_note_cj_request_label(planning_note)
 
@@ -1537,7 +1537,7 @@ def _build_upgrade_flights_report(
                         if payload is not None:
                             details_fetched += 1
 
-                detail = _select_leg_detail(detail_cache.get(quote_id))
+                detail = _select_leg_detail(detail_cache.get(quote_id), row)
 
                 if detail:
                     if booking_reference is None:
@@ -2497,14 +2497,98 @@ def _extract_quote_identifier(row: Mapping[str, Any]) -> Optional[str]:
     return None
 
 
-def _select_leg_detail(payload: Any) -> Optional[Mapping[str, Any]]:
+def _extract_basic_flight_identifier(row: Mapping[str, Any]) -> Optional[str]:
+    for key in (
+        "flightIdentifier",
+        "flight_identifier",
+        "flightId",
+        "flight_id",
+        "flightID",
+        "flightid",
+    ):
+        value = _normalize_str(row.get(key))
+        if value:
+            return value
+    return None
+
+
+def _select_leg_detail(
+    payload: Any, row: Optional[Mapping[str, Any]] = None
+) -> Optional[Mapping[str, Any]]:
+    candidates: List[Mapping[str, Any]] = []
     if isinstance(payload, Mapping):
-        return payload
-    if isinstance(payload, IterableABC) and not isinstance(payload, (str, bytes, bytearray)):
+        candidates.append(payload)
+    elif isinstance(payload, IterableABC) and not isinstance(payload, (str, bytes, bytearray)):
         for item in payload:
             if isinstance(item, Mapping):
-                return item
-    return None
+                candidates.append(item)
+
+    if not candidates:
+        return None
+
+    if row is None:
+        return candidates[0]
+
+    row_leg_id = _extract_leg_id(row)
+    row_flight_id = _extract_basic_flight_identifier(row)
+    row_dep_dt = _extract_departure_dt(row)
+    row_dep_airport = _normalize_airport_ident(_extract_airport(row, True))
+    row_arr_airport = _normalize_airport_ident(_extract_airport(row, False))
+
+    def _to_utc(dt_value: Optional[datetime]) -> Optional[datetime]:
+        if dt_value is None:
+            return None
+        if dt_value.tzinfo is None:
+            return dt_value.replace(tzinfo=timezone.utc)
+        return dt_value.astimezone(timezone.utc)
+
+    row_dep_dt_utc = _to_utc(row_dep_dt)
+
+    if row_leg_id:
+        for detail in candidates:
+            detail_leg_id = _extract_leg_id(detail)
+            if detail_leg_id and detail_leg_id == row_leg_id:
+                return detail
+
+    if row_flight_id:
+        for detail in candidates:
+            detail_flight_id = _extract_basic_flight_identifier(detail)
+            if detail_flight_id and detail_flight_id == row_flight_id:
+                return detail
+
+    best_detail: Optional[Mapping[str, Any]] = None
+    best_score = -1
+
+    for detail in candidates:
+        score = 0
+
+        detail_dep_dt = _extract_detail_departure_dt(detail) or _extract_departure_dt(detail)
+        detail_dep_dt_utc = _to_utc(detail_dep_dt)
+        if row_dep_dt_utc and detail_dep_dt_utc:
+            delta = abs((detail_dep_dt_utc - row_dep_dt_utc).total_seconds())
+            if delta <= 300:
+                score += 3
+            elif delta <= 3600:
+                score += 1
+
+        if row_dep_airport:
+            detail_dep_airport = _normalize_airport_ident(_extract_airport(detail, True))
+            if detail_dep_airport and detail_dep_airport == row_dep_airport:
+                score += 1
+
+        if row_arr_airport:
+            detail_arr_airport = _normalize_airport_ident(_extract_airport(detail, False))
+            if detail_arr_airport and detail_arr_airport == row_arr_airport:
+                score += 1
+
+        if score > best_score:
+            best_detail = detail
+            best_score = score
+
+    if best_detail is not None and best_score > 0:
+        return best_detail
+
+    return candidates[0]
 
 
 def _extract_planning_note(detail: Optional[Mapping[str, Any]]) -> Optional[str]:
