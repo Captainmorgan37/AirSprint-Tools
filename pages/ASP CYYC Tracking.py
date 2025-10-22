@@ -9,8 +9,6 @@ import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 from zoneinfo_compat import ZoneInfo
 
-from auth import require_login
-
 # ----------------------------
 # Config
 # ----------------------------
