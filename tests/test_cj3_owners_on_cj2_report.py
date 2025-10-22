@@ -287,6 +287,58 @@ def test_includes_runway_alerts_below_threshold():
     assert entry["runway_alert_threshold_ft"] == 4900
 
 
+def test_uses_matching_leg_detail_for_multi_leg_quotes():
+    first_dep = dt.datetime(2024, 10, 1, 15, 30)
+    second_dep = dt.datetime(2024, 10, 1, 20, 30)
+
+    row = _leg(
+        account="Owner Multi", 
+        tail="C-GCJ2",
+        dep=second_dep,
+        leg_id="LEG-2",
+        quote_id="Q-MULTI",
+        flight_id="FLIGHT-2",
+        booking_identifier="B-MULTI",
+    )
+    row["airportFrom"] = "CYYZ"
+    row["airportTo"] = "CYUL"
+
+    payload_map = {
+        "Q-MULTI": [
+            {
+                "legId": "LEG-1",
+                "flightId": "FLIGHT-1",
+                "planningNotes": "Owner requesting CJ3 upgrade",
+                "pax": 3,
+                "blockTime": 195,
+                "departureDateUTC": iso(first_dep),
+                "airportFrom": "KFXE",
+                "airportTo": "CYYZ",
+            },
+            {
+                "legId": "LEG-2",
+                "flightId": "FLIGHT-2",
+                "planningNotes": "",
+                "pax": 3,
+                "blockTime": 95,
+                "departureDateUTC": iso(second_dep),
+                "airportFrom": "CYYZ",
+                "airportTo": "CYUL",
+            },
+        ]
+    }
+
+    result = _build_cj3_owners_on_cj2_report(
+        [row],
+        Fl3xxApiConfig(),
+        fetch_leg_details_fn=_stub_fetch(payload_map),
+    )
+
+    assert result.rows == []
+    assert result.metadata["match_count"] == 0
+    assert result.metadata["inspected_legs"] == 1
+
+
 def test_sets_runway_confirmation_note_when_all_runways_clear():
     dep = dt.datetime(2024, 9, 2, 9, 45)
     row = _leg(
