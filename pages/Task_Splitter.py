@@ -606,53 +606,69 @@ def assign_preference_weighted(
             break
 
         step_direction = -1 if over_idx > under_idx else 1
-        target_idx = over_idx + step_direction
-        if target_idx < 0 or target_idx >= len(labels):
-            break
-
-        over_label = labels[over_idx]
-        target_label = labels[target_idx]
-        over_target_total = workload_targets[over_label]
-        target_target_total = workload_targets[target_label]
-        current_over_error = abs(totals_by_index[over_idx] - over_target_total)
-        current_target_error = abs(totals_by_index[target_idx] - target_target_total)
+        candidate_indices = range(
+            over_idx + step_direction,
+            under_idx + step_direction,
+            step_direction,
+        )
 
         best_pkg: Optional[TailPackage] = None
-        best_score: Optional[Tuple[float, float, float, float]] = None
+        best_target: Optional[int] = None
+        best_score: Optional[Tuple[float, float, float, float, float]] = None
 
-        for pkg in buckets_by_index[over_idx]:
-            work = _workload(pkg)
-            new_over_total = totals_by_index[over_idx] - work
-            new_target_total = totals_by_index[target_idx] + work
-            new_over_error = abs(new_over_total - over_target_total)
-            new_target_error = abs(new_target_total - target_target_total)
-            delta_error = (new_over_error + new_target_error) - (
-                current_over_error + current_target_error
+        over_label = labels[over_idx]
+        over_target_total = workload_targets[over_label]
+        current_over_error = abs(totals_by_index[over_idx] - over_target_total)
+
+        for target_idx in candidate_indices:
+            if target_idx < 0 or target_idx >= len(labels):
+                continue
+            target_label = labels[target_idx]
+            target_target_total = workload_targets[target_label]
+            current_target_error = abs(
+                totals_by_index[target_idx] - target_target_total
             )
-            pref_distance = abs(target_idx - preferred_index.get(pkg.tail, over_idx))
-            tz_penalty = abs(pkg_offsets.get(pkg.tail, tz_targets[target_idx]) - tz_targets[target_idx])
-            score = (delta_error, float(pref_distance), tz_penalty, work)
-            if best_score is None or score < best_score:
-                best_score = score
-                best_pkg = pkg
 
-        if not best_pkg or best_score is None:
+            for pkg in buckets_by_index[over_idx]:
+                work = _workload(pkg)
+                new_over_total = totals_by_index[over_idx] - work
+                new_target_total = totals_by_index[target_idx] + work
+                new_over_error = abs(new_over_total - over_target_total)
+                new_target_error = abs(new_target_total - target_target_total)
+                delta_error = (new_over_error + new_target_error) - (
+                    current_over_error + current_target_error
+                )
+                pref_distance = abs(
+                    target_idx - preferred_index.get(pkg.tail, over_idx)
+                )
+                tz_penalty = abs(
+                    pkg_offsets.get(pkg.tail, tz_targets[target_idx])
+                    - tz_targets[target_idx]
+                )
+                distance_from_over = abs(target_idx - over_idx)
+                score = (
+                    delta_error,
+                    float(pref_distance),
+                    float(distance_from_over),
+                    tz_penalty,
+                    work,
+                )
+                if best_score is None or score < best_score:
+                    best_score = score
+                    best_pkg = pkg
+                    best_target = target_idx
+
+        if not best_pkg or best_score is None or best_target is None:
             break
 
         delta_error = best_score[0]
         pref_distance = int(best_score[1])
+        target_idx = best_target
         if delta_error > 0 and pref_distance > 1:
             # Moving this package would both worsen balance and ignore the
             # timezone preference; stop balancing.
             break
         if delta_error > 0 and pref_distance >= 1:
-            # Try to find another option in the opposite direction if possible.
-            alternative_idx = over_idx - step_direction
-            if 0 <= alternative_idx < len(labels) and alternative_idx != target_idx:
-                target_idx = alternative_idx
-                # Restart loop to evaluate different direction.
-                iterations -= 1
-                continue
             break
 
         # Apply the move.
