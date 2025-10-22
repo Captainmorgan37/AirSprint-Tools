@@ -1,3 +1,9 @@
+import streamlit_authenticator as stauth
+import streamlit as st
+st.write("streamlit-authenticator version:", stauth.__version__)
+st.stop()
+
+
 import streamlit as st
 
 from auth import require_login
