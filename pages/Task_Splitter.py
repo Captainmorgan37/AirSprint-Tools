@@ -884,13 +884,17 @@ for i in range(int(num_people)):
     )
     label_value = lbl or f"Shift {i+1}"
     labels.append(label_value)
-    half_toggle = st.sidebar.checkbox(
-        f"{label_value}: half workload",
-        value=False,
-        key=f"half_workload_{i}",
-        help="Reduce this role's workload target to half of a standard shift.",
+    workload_percent = st.sidebar.slider(
+        f"{label_value}: workload %",
+        min_value=10,
+        max_value=100,
+        value=100,
+        step=10,
+        format="%d%%",
+        key=f"workload_pct_{i}",
+        help="Adjust this role's workload target as a percentage of a standard shift.",
     )
-    label_workloads.append(0.5 if half_toggle else 1.0)
+    label_workloads.append(workload_percent / 100.0)
 
 # Date selection (default = two days ahead in local Mountain time)
 selected_date = st.sidebar.date_input("Target date", value=_default_target_date())
