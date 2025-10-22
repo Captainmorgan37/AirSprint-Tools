@@ -27,6 +27,7 @@ _DEFAULT_SIGNATURE_KEY = "airsprint_tools_signature"
 _DEFAULT_COOKIE_EXPIRY_DAYS = 14
 
 _USING_DEFAULT_CREDENTIALS = False
+_AUTHENTICATOR_SESSION_KEY = "_authenticator"
 
 
 def _load_auth_settings() -> Tuple[Dict[str, Dict[str, Dict[str, str]]], str, str, int]:
@@ -59,17 +60,19 @@ def _load_auth_settings() -> Tuple[Dict[str, Dict[str, Dict[str, str]]], str, st
     return credentials, cookie_name, signature_key, cookie_expiry_days
 
 
-@st.cache_resource(show_spinner=False)
 def get_authenticator() -> stauth.Authenticate:
-    """Create and cache the authenticator instance."""
+    """Return the authenticator instance stored in session state."""
 
-    credentials, cookie_name, signature_key, cookie_expiry_days = _load_auth_settings()
-    return stauth.Authenticate(
-        credentials,
-        cookie_name,
-        signature_key,
-        cookie_expiry_days=cookie_expiry_days,
-    )
+    if _AUTHENTICATOR_SESSION_KEY not in st.session_state:
+        credentials, cookie_name, signature_key, cookie_expiry_days = _load_auth_settings()
+        st.session_state[_AUTHENTICATOR_SESSION_KEY] = stauth.Authenticate(
+            credentials,
+            cookie_name,
+            signature_key,
+            cookie_expiry_days=cookie_expiry_days,
+        )
+
+    return st.session_state[_AUTHENTICATOR_SESSION_KEY]
 
 
 def require_login() -> Tuple[str, str]:
