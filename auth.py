@@ -1,14 +1,13 @@
 """Authentication helpers for the AirSprint Streamlit app."""
 
 from __future__ import annotations
-
 from typing import Dict, Tuple
-
 import streamlit as st
 import streamlit_authenticator as stauth
 
-# Default credentials are meant for local development only. Update or override
-# them by providing an ``auth`` section in ``.streamlit/secrets.toml``.
+# ---------------------------------------------------------------------
+# Default credentials (for local testing only)
+# ---------------------------------------------------------------------
 _DEFAULT_CREDENTIALS: Dict[str, Dict[str, Dict[str, str]]] = {
     "usernames": {
         "admin": {
@@ -23,69 +22,81 @@ _DEFAULT_CREDENTIALS: Dict[str, Dict[str, Dict[str, str]]] = {
 }
 
 _DEFAULT_COOKIE_NAME = "airsprint_tools_auth"
-_DEFAULT_SIGNATURE_KEY = "airsprint_tools_signature"
+_DEFAULT_COOKIE_KEY = "airsprint_tools_signature"
 _DEFAULT_COOKIE_EXPIRY_DAYS = 14
 
 _USING_DEFAULT_CREDENTIALS = False
 _AUTHENTICATOR_SESSION_KEY = "_authenticator"
 
 
+# ---------------------------------------------------------------------
+# Load configuration from Streamlit secrets (Cloud or local)
+# ---------------------------------------------------------------------
 def _load_auth_settings() -> Tuple[Dict[str, Dict[str, Dict[str, str]]], str, str, int]:
     """Load authenticator settings from Streamlit secrets if available."""
 
-    secrets = st.secrets.get("auth", {}) if hasattr(st, "secrets") else {}
+    if not hasattr(st, "secrets"):
+        raise RuntimeError("Streamlit secrets not found. Configure secrets.toml or Streamlit Cloud secrets.")
 
+    secrets = st.secrets
     global _USING_DEFAULT_CREDENTIALS
 
-    credentials = secrets.get("credentials") or _DEFAULT_CREDENTIALS
-    cookie_name = secrets.get("cookie_name", _DEFAULT_COOKIE_NAME)
-    signature_key = secrets.get("signature_key", _DEFAULT_SIGNATURE_KEY)
+    # ✅ Support both [auth.credentials] and [credentials] layouts
+    auth_section = secrets.get("auth", {})
+    credentials = (
+        auth_section.get("credentials")
+        or secrets.get("credentials")
+        or _DEFAULT_CREDENTIALS
+    )
 
-    expiry = secrets.get("cookie_expiry_days", _DEFAULT_COOKIE_EXPIRY_DAYS)
+    cookie_name = auth_section.get("cookie_name", _DEFAULT_COOKIE_NAME)
+    cookie_key = auth_section.get("cookie_key", _DEFAULT_COOKIE_KEY)
+    expiry = auth_section.get("cookie_expiry_days", _DEFAULT_COOKIE_EXPIRY_DAYS)
+
     try:
         cookie_expiry_days = int(expiry)
     except (TypeError, ValueError):
         cookie_expiry_days = _DEFAULT_COOKIE_EXPIRY_DAYS
 
-    # streamlit-authenticator expects a ``usernames`` key. Raise a helpful error
-    # if the provided configuration is missing or malformed.
     if not isinstance(credentials, dict) or "usernames" not in credentials:
         raise ValueError(
             "Authentication credentials must include a 'usernames' mapping. "
-            "Check your auth configuration in secrets."
+            "Check your [auth] or [credentials] configuration in Streamlit Cloud secrets."
         )
 
     _USING_DEFAULT_CREDENTIALS = credentials is _DEFAULT_CREDENTIALS
+    return credentials, cookie_name, cookie_key, cookie_expiry_days
 
-    return credentials, cookie_name, signature_key, cookie_expiry_days
 
-
+# ---------------------------------------------------------------------
+# Return or create authenticator instance (stored in session)
+# ---------------------------------------------------------------------
 def get_authenticator() -> stauth.Authenticate:
     """Return the authenticator instance stored in session state."""
-
     if _AUTHENTICATOR_SESSION_KEY not in st.session_state:
-        credentials, cookie_name, signature_key, cookie_expiry_days = _load_auth_settings()
+        credentials, cookie_name, cookie_key, cookie_expiry_days = _load_auth_settings()
         st.session_state[_AUTHENTICATOR_SESSION_KEY] = stauth.Authenticate(
             credentials,
             cookie_name,
-            signature_key,
+            cookie_key,
             cookie_expiry_days=cookie_expiry_days,
         )
-
     return st.session_state[_AUTHENTICATOR_SESSION_KEY]
 
 
+# ---------------------------------------------------------------------
+# Require login before continuing
+# ---------------------------------------------------------------------
 def require_login() -> Tuple[str, str]:
     """Ensure the current user is authenticated before continuing."""
-
     authenticator = get_authenticator()
+
     try:
         name, authentication_status, username = authenticator.login(
             form_name="Login", location="main"
         )
     except TypeError:
-        # Fallback for older versions of ``streamlit-authenticator`` that expect
-        # positional arguments only.
+        # Fallback for older versions of streamlit-authenticator
         name, authentication_status, username = authenticator.login("Login", "main")
 
     if authentication_status:
@@ -93,15 +104,19 @@ def require_login() -> Tuple[str, str]:
             st.session_state["name"] = name
         if username:
             st.session_state["username"] = username
+
         display_name = st.session_state.get("name") or name or username or ""
         authenticator.logout("Logout", "sidebar")
+
         if display_name:
             st.sidebar.write(f"Signed in as **{display_name}**")
+
         if _USING_DEFAULT_CREDENTIALS:
             st.sidebar.warning(
-                "Default credentials are active. Update the auth configuration in "
-                "`.streamlit/secrets.toml` to restrict access."
+                "⚠️ Default credentials are active. Update the auth configuration in "
+                "Streamlit Cloud secrets to restrict access."
             )
+
         return st.session_state.get("name", name or ""), st.session_state.get(
             "username", username or ""
         )
@@ -112,3 +127,4 @@ def require_login() -> Tuple[str, str]:
         st.info("Please log in to continue.")
 
     st.stop()
+
