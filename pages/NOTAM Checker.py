@@ -1,3 +1,5 @@
+from Home import password_gate
+password_gate()
 import streamlit as st
 import pandas as pd
 import requests
@@ -7,7 +9,6 @@ import html
 from datetime import datetime, timedelta, date
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Union
 
-from auth import require_login
 
 from fl3xx_client import fetch_flights, compute_fetch_dates
 from flight_leg_utils import (
@@ -32,7 +33,6 @@ CATEGORY_COLORS = {
 }
 
 st.set_page_config(page_title="CFPS/FAA NOTAM Viewer", layout="wide")
-require_login()
 st.title("CFPS & FAA NOTAM Viewer")
 
 # ----- RUNWAYS DATA -----
