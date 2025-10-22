@@ -60,16 +60,25 @@ standard_baggage = {
 # ============================================================
 # Helper Functions
 # ============================================================
-def fits_through_door(box_dims, door):
-    l, w, h = box_dims
-    for dims in itertools.permutations([l, w, h]):
+def fits_through_door(box_dims, door, flex=1.0):
+    dims_flex = apply_flex(box_dims, flex)
+    for dims in itertools.permutations(dims_flex):
         bw, bh = dims[0], dims[1]
         diag = math.hypot(bw, bh)
-        if "width_min" in door:  # CJ style door
-            if (bw <= door["width_max"] and bh <= door["height"]) or diag <= door["diag"]:
+        if "width_min" in door:  # CJ style door with narrowest span
+            width_ok_min = bw <= door["width_min"]
+            width_ok_max = bw <= door["width_max"]
+            height_ok = bh <= door["height"]
+            if width_ok_min and height_ok:
+                return True
+            if width_ok_min and width_ok_max and diag <= door["diag"]:
                 return True
         else:  # Legacy style door (single width)
-            if (bw <= door["width"] and bh <= door["height"]) or diag <= door["diag"]:
+            width_ok = bw <= door["width"]
+            height_ok = bh <= door["height"]
+            if width_ok and height_ok:
+                return True
+            if width_ok and diag <= door["diag"]:
                 return True
     return False
 
@@ -95,12 +104,22 @@ def fits_in_space(box_dims, space_dims):
 
 def fits_inside(box_dims, interior, container_type, flex=1.0):
     """Check if a single box can fit somewhere in the empty hold (not a packing check)."""
-    l, w, h = apply_flex(box_dims, flex)
-    for dims in itertools.permutations([l, w, h]):
+    dims_flex = apply_flex(box_dims, flex)
+    for dims in itertools.permutations(dims_flex):
         bl, bw, bh = dims
         if container_type == "CJ":
             if bh <= interior["height"] and bl <= interior["depth"] and bw <= interior["width"]:
-                return True
+                r = interior["restricted"]
+                main_depth = max(0.0, interior["depth"] - r["depth"])
+                main_width = max(0.0, interior["width"] - r["width"])
+                fits_outside_restricted = (
+                    bl > r["depth"]
+                    or bw > r["width"]
+                    or bl <= main_depth
+                    or bw <= main_width
+                )
+                if fits_outside_restricted:
+                    return True
         elif container_type == "Legacy":
             if bl <= interior["depth"] and bh <= interior["height"]:
                 if bw <= min(
@@ -126,7 +145,7 @@ def cargo_volume(interior, container_type):
 # ============================================================
 # Greedy 3D Packing (with CJ Tunnel specialization)
 # ============================================================
-def greedy_3d_packing(baggage_list, container_type, interior, force_tunnel_for_long=True):
+def greedy_3d_packing(baggage_list, container_type, interior, force_tunnel_for_long=True, long_threshold=50):
     """
     Returns (success: bool, placements: list[dict]).
     Each placement: {Item, Type, Dims: (x,y,z) oriented, Position: (x0,y0,z0), Section: "Tunnel"/"Main"}
@@ -165,7 +184,7 @@ def greedy_3d_packing(baggage_list, container_type, interior, force_tunnel_for_l
 
         # ---------- CJ Tunnel specialization for long items ----------
         if container_type == "CJ" and (not placed):
-            is_long = max(dims_flex) >= 50  # heuristic
+            is_long = max(dims_flex) >= long_threshold  # heuristic threshold can vary
             if is_long and force_tunnel_for_long:
                 # Force orientation: x=thickness, y=length, z=height
                 length = max(dims_flex)
@@ -285,15 +304,58 @@ def multi_strategy_packing(baggage_list, container_type, interior):
         "Smallest First": sorted(baggage_list, key=lambda x: bag_volume(x["Dims"]))
     }
 
+    if container_type == "CJ":
+        def is_long(item):
+            return max(item["Dims"]) >= 50
+
+        tunnel_priority = sorted(
+            baggage_list,
+            key=lambda x: (
+                not is_long(x),
+                -bag_volume(x["Dims"])
+            )
+        )
+        strategies["Tunnel Priority Ordering"] = tunnel_priority
+
+    if container_type == "CJ":
+        variant_settings = [
+            {"force_tunnel_for_long": True, "long_threshold": 50, "label": "Tunnel priority ≥50\""},
+            {"force_tunnel_for_long": True, "long_threshold": 60, "label": "Tunnel priority ≥60\""},
+            {"force_tunnel_for_long": False, "long_threshold": 50, "label": "Tunnel optional"},
+        ]
+    else:
+        variant_settings = [
+            {"force_tunnel_for_long": True, "long_threshold": 50, "label": None}
+        ]
+
     best_result = {"success": False, "placements": [], "strategy": None, "fit_count": 0}
 
     for name, bags in strategies.items():
-        success, placements = greedy_3d_packing(bags, container_type, interior)
-        if success:
-            return {"success": True, "placements": placements, "strategy": name, "fit_count": len(placements)}
-        else:
+        for variant in variant_settings:
+            success, placements = greedy_3d_packing(
+                bags,
+                container_type,
+                interior,
+                force_tunnel_for_long=variant["force_tunnel_for_long"],
+                long_threshold=variant["long_threshold"]
+            )
+            strategy_label = name
+            if container_type == "CJ" and variant["label"]:
+                strategy_label = f"{name} / {variant['label']}"
+            if success:
+                return {
+                    "success": True,
+                    "placements": placements,
+                    "strategy": strategy_label,
+                    "fit_count": len(placements)
+                }
             if len(placements) > best_result["fit_count"]:
-                best_result = {"success": False, "placements": placements, "strategy": name, "fit_count": len(placements)}
+                best_result = {
+                    "success": False,
+                    "placements": placements,
+                    "strategy": strategy_label,
+                    "fit_count": len(placements)
+                }
 
     return best_result
 
@@ -478,7 +540,7 @@ if st.session_state["baggage_list"]:
         results = []
         for i, item in enumerate(st.session_state["baggage_list"], 1):
             box_dims = item["Dims"]
-            door_fit = fits_through_door(box_dims, container["door"])
+            door_fit = fits_through_door(box_dims, container["door"], item.get("Flex", 1.0))
             interior_fit = fits_inside(box_dims, container["interior"], container_choice, item.get("Flex", 1.0))
             status = "✅ Fits" if door_fit and interior_fit else "❌ Door Fail" if not door_fit else "❌ Interior Fail"
             results.append({"Type": item["Type"], "Dims": box_dims, "Result": status})
