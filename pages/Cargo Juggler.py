@@ -538,11 +538,14 @@ if st.session_state["baggage_list"]:
     if st.button("Check Fit / Pack"):
         # Per-item simple fit
         results = []
+        door_fail_items = []
         for i, item in enumerate(st.session_state["baggage_list"], 1):
             box_dims = item["Dims"]
             door_fit = fits_through_door(box_dims, container["door"], item.get("Flex", 1.0))
             interior_fit = fits_inside(box_dims, container["interior"], container_choice, item.get("Flex", 1.0))
             status = "✅ Fits" if door_fit and interior_fit else "❌ Door Fail" if not door_fit else "❌ Interior Fail"
+            if not door_fit:
+                door_fail_items.append(i)
             results.append({"Type": item["Type"], "Dims": box_dims, "Result": status})
 
         results_df = pd.DataFrame(results).reset_index(drop=True)
@@ -550,6 +553,18 @@ if st.session_state["baggage_list"]:
         results_df.index.name = "Item"
         st.write("### Fit Results")
         st.table(results_df)
+
+        if door_fail_items:
+            fail_descriptions = [
+                f"{idx} ({results[idx-1]['Type']})" for idx in door_fail_items
+            ]
+            fail_summary = ", ".join(fail_descriptions)
+            st.error(
+                "🚫 Door fit failed. Remove the following item(s) before finishing calculations: "
+                f"{fail_summary}."
+            )
+            st.info("Door failures must be resolved before packing calculations can continue.")
+            st.stop()
 
         # Packing multi-strategy
         result = multi_strategy_packing(
