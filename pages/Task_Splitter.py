@@ -64,7 +64,9 @@ class TailPackage:
 # ----------------------------
 # Helpers
 # ----------------------------
-_CUSTOMS_WORKLOAD_MULTIPLIER = 1.5
+_TAIL_BASE_WORKLOAD = 0.5
+_BASE_LEG_WORKLOAD = 1.0
+_CUSTOMS_LEG_BONUS = 0.25
 
 def _to_local(dt: datetime, tz_name: str | None) -> datetime:
     if tz_name:
@@ -428,9 +430,11 @@ def build_tail_packages(df: pd.DataFrame, target_date: date) -> Tuple[List[TailP
             legs_rows = all_rows
         first_dt = first_local_for_tail(pd.DataFrame(legs_rows))
         customs_count = sum(1 for leg in legs_rows if leg.get("is_customs_leg"))
-        workload = 0.0
+        workload = _TAIL_BASE_WORKLOAD
         for leg in legs_rows:
-            workload += _CUSTOMS_WORKLOAD_MULTIPLIER if leg.get("is_customs_leg") else 1.0
+            workload += _BASE_LEG_WORKLOAD
+            if leg.get("is_customs_leg"):
+                workload += _CUSTOMS_LEG_BONUS
         packages.append(
             TailPackage(
                 tail=str(tail),
