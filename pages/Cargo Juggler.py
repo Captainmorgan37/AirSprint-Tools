@@ -5,10 +5,13 @@ import itertools
 import math
 import plotly.graph_objects as go
 
+from auth import require_login
+
 # ============================================================
 # Config / Title
 # ============================================================
 st.set_page_config(page_title="Aircraft Cargo Fit Checker", layout="wide")
+require_login()
 st.title("Aircraft Cargo Fit Checker")
 
 st.markdown(

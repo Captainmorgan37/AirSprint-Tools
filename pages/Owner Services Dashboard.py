@@ -10,6 +10,8 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
+from auth import require_login
+
 from fl3xx_api import (
     Fl3xxApiConfig,
     compute_fetch_dates,
@@ -45,6 +47,7 @@ ROW_STATE_STYLES: Dict[str, Dict[str, str]] = {
 
 
 st.set_page_config(page_title="Owner Services Dashboard", layout="wide")
+require_login()
 st.title("🧾 Owner Catering & Transport Dashboard")
 
 

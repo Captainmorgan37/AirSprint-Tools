@@ -14,6 +14,8 @@ from zoneinfo_compat import ZoneInfo
 import streamlit as st
 from pandas.api.types import is_scalar
 
+from auth import require_login
+
 from docx import Document
 from docx.enum.section import WD_ORIENTATION
 from docx.enum.table import WD_TABLE_ALIGNMENT, WD_ALIGN_VERTICAL
@@ -36,6 +38,7 @@ from flight_leg_utils import (
 # App Config
 # ----------------------------
 st.set_page_config(page_title="Night-Shift Tail Splitter", layout="wide")
+require_login()
 st.title("🛫 Night-Shift Tail Splitter")
 
 st.caption(

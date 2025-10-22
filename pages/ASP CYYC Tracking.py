@@ -6,10 +6,13 @@ import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 from zoneinfo_compat import ZoneInfo
 
+from auth import require_login
+
 # ----------------------------
 # Config
 # ----------------------------
 st.set_page_config(page_title="Aircraft Presence (McCall/Palmer)", layout="wide")
+require_login()
 st.title("✈️ Aircraft Presence — McCall & Palmer")
 
 

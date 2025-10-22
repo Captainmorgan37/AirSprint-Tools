@@ -2,11 +2,14 @@ import streamlit as st
 from datetime import date, datetime, timedelta, timezone
 from typing import Mapping, Optional
 
+from auth import require_login
+
 from fl3xx_api import compute_fetch_dates
 from morning_reports import MorningReportResult, MorningReportRun, run_morning_reports
 
 
 st.set_page_config(page_title="FBO Disconnect Report", layout="wide")
+require_login()
 st.title("🛫 FBO Disconnect Report")
 
 

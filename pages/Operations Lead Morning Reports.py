@@ -3,6 +3,8 @@ import streamlit as st
 from datetime import date, datetime, timedelta, timezone
 from typing import Iterable, List, Mapping, Optional, Sequence, Tuple
 
+from auth import require_login
+
 from fl3xx_api import compute_fetch_dates
 from morning_reports import MorningReportResult, MorningReportRun, run_morning_reports
 
@@ -66,6 +68,7 @@ def _build_expected_reports(
 
 
 st.set_page_config(page_title="Operations Lead Morning Reports", layout="wide")
+require_login()
 st.title("📋 Operations Lead Morning Reports")
 
 

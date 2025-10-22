@@ -1,6 +1,9 @@
 # Core framework
 streamlit>=1.36.0
 
+# Authentication
+streamlit-authenticator>=0.3.3
+
 # Data handling
 pandas>=2.0.0
 numpy>=1.25.0
