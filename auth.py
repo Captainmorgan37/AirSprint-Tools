@@ -59,9 +59,8 @@ def _load_auth_settings() -> Tuple[Dict[str, Dict[str, Dict[str, str]]], str, st
     return credentials, cookie_name, signature_key, cookie_expiry_days
 
 
-@st.cache_resource(show_spinner=False)
 def get_authenticator() -> stauth.Authenticate:
-    """Create and cache the authenticator instance."""
+    """Create and return a fresh authenticator instance."""
 
     credentials, cookie_name, signature_key, cookie_expiry_days = _load_auth_settings()
     return stauth.Authenticate(
