@@ -1,6 +1,27 @@
 import streamlit as st
 
-from auth import require_login
+# --- Basic single-password login gate ---
+def password_gate():
+    """Simple access restriction with a single shared password."""
+    correct_password = st.secrets.get("app_password")
+    if "authenticated" not in st.session_state:
+        st.session_state.authenticated = False
+
+    if not st.session_state.authenticated:
+        st.title("🔐 AirSprint Tools Access")
+        pw = st.text_input("Enter password", type="password")
+        if st.button("Unlock"):
+            if pw == correct_password:
+                st.session_state.authenticated = True
+                st.experimental_rerun()
+            else:
+                st.error("Incorrect password")
+        st.stop()
+
+password_gate()
+
+
+import streamlit as st
 
 st.set_page_config(page_title="AirSprint Ops Tools", layout="wide")
 
