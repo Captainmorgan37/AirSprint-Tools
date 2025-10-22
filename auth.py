@@ -61,18 +61,15 @@ def _load_auth_settings() -> Tuple[Dict[str, Dict[str, Dict[str, str]]], str, st
 
 
 def get_authenticator() -> stauth.Authenticate:
-    """Return the authenticator instance stored in session state."""
+    """Create and return a fresh authenticator instance."""
 
-    if _AUTHENTICATOR_SESSION_KEY not in st.session_state:
-        credentials, cookie_name, signature_key, cookie_expiry_days = _load_auth_settings()
-        st.session_state[_AUTHENTICATOR_SESSION_KEY] = stauth.Authenticate(
-            credentials,
-            cookie_name,
-            signature_key,
-            cookie_expiry_days=cookie_expiry_days,
-        )
-
-    return st.session_state[_AUTHENTICATOR_SESSION_KEY]
+    credentials, cookie_name, signature_key, cookie_expiry_days = _load_auth_settings()
+    return stauth.Authenticate(
+        credentials,
+        cookie_name,
+        signature_key,
+        cookie_expiry_days=cookie_expiry_days,
+    )
 
 
 def require_login() -> Tuple[str, str]:
