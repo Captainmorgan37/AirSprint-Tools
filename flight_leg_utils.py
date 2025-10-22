@@ -735,6 +735,30 @@ def normalize_fl3xx_payload(payload: Any) -> Tuple[List[Dict[str, Any]], Dict[st
                     "airport",
                 )
 
+            booking_identifier = _extract_first(
+                leg,
+                "bookingIdentifier",
+                "booking_identifier",
+                "bookingidentifier",
+            )
+            if booking_identifier is None and isinstance(flight_tail, dict):
+                booking_identifier = _extract_first(
+                    flight_tail,
+                    "bookingIdentifier",
+                    "booking_identifier",
+                    "bookingidentifier",
+                )
+
+            if isinstance(booking_identifier, Mapping):
+                booking_identifier = _extract_first(
+                    booking_identifier,
+                    "identifier",
+                    "code",
+                    "reference",
+                    "number",
+                    "id",
+                )
+
             booking_id = _extract_first(
                 leg,
                 "bookingReference",
@@ -874,14 +898,17 @@ def normalize_fl3xx_payload(payload: Any) -> Tuple[List[Dict[str, Any]], Dict[st
                 normalized_leg.setdefault("assignedAircraftType", str(assigned_aircraft_type))
             if owner_class:
                 normalized_leg.setdefault("ownerClass", str(owner_class))
+            if booking_identifier:
+                normalized_leg.setdefault("bookingIdentifier", str(booking_identifier))
             if booking_id:
                 normalized_leg.setdefault("bookingId", str(booking_id))
             if booking_code:
                 normalized_leg.setdefault("bookingCode", str(booking_code))
-            if booking_id or booking_code:
+            booking_reference_candidate = booking_code or booking_id or booking_identifier
+            if booking_reference_candidate:
                 normalized_leg.setdefault(
                     "bookingReference",
-                    str(booking_code or booking_id),
+                    str(booking_reference_candidate),
                 )
             if account_name:
                 normalized_leg.setdefault("accountName", str(account_name))
