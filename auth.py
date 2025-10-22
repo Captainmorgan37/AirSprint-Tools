@@ -1,8 +1,8 @@
-✅ auth.py (drop-in ready)
-"""Authentication helpers for the AirSprint Streamlit app."""
-
 from __future__ import annotations
+
+from collections.abc import Mapping
 from typing import Dict, Tuple
+
 import streamlit as st
 import streamlit_authenticator as stauth
 
