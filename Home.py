@@ -14,6 +14,7 @@ def password_gate():
         if st.button("Unlock"):
             if pw == correct_password:
                 st.session_state.authenticated = True
+                st.stop()
                 st.experimental_rerun()
             else:
                 st.error("Incorrect password")
