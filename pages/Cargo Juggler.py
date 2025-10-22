@@ -226,7 +226,11 @@ def greedy_3d_packing(baggage_list, container_type, interior, force_tunnel_for_l
         for attempt in range(3):  # 0: extend row; 1: new row; 2: new layer
             oriented = fits_in_space(
                 dims_flex,
-                (max(0.0, cargo_L - x_cursor), cargo_W, max(0.0, cargo_H - z_cursor))
+                (
+                    max(0.0, cargo_L - x_cursor),
+                    max(0.0, cargo_W - y_cursor),
+                    max(0.0, cargo_H - z_cursor)
+                )
             )
             if oriented:
                 l, w, h = oriented
