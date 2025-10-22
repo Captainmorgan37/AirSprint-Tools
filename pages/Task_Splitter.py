@@ -514,9 +514,9 @@ def assign_preference_weighted(
     baseline_target = total_workload / total_weight if total_weight else 0.0
     workload_targets = {lab: baseline_target * weights[lab] for lab in labels}
 
-    # Use a tighter tolerance so we aggressively balance the workload while still
-    # respecting the east↔west preference ordering.
-    tolerance = max(0.25, round(baseline_target * 0.15, 2)) if baseline_target else 0.25
+    # Use a tighter tolerance (10% of the even-share workload) so we aggressively
+    # balance the workload while still respecting the east↔west preference ordering.
+    tolerance = max(0.25, round(baseline_target * 0.10, 2)) if baseline_target else 0.25
 
     if len(labels) == 1:
         tz_targets = [max_off]
