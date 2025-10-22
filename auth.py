@@ -1,10 +1,7 @@
-from __future__ import annotations
-
-from collections.abc import Mapping
-from typing import Dict, Tuple
-
 import streamlit as st
 import streamlit_authenticator as stauth
+from typing import Dict, Tuple
+
 
 # --- keep your imports and top constants as-is ---
 
