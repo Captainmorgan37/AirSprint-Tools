@@ -23,7 +23,7 @@ This tool normalizes both formats and compares them against Fl3xx with airport-s
 """)
 
 # ---------------- Config ----------------
-WINDOWS_MIN = {"CYYC": 30, "CYVR": 30, "CYYZ": 60, "CYUL": 15}
+WINDOWS_MIN = {"CYYC": 30, "CYVR": 30, "CYYZ": 30, "CYUL": 15}
 FL3XX_FETCH_CHUNK_DAYS = 5
 MONTHS = {m: i for i, m in enumerate(
     ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"], 1)}
@@ -325,14 +325,38 @@ def _normalise_fl3xx_rows(rows: Sequence[Mapping[str, Any]]) -> pd.DataFrame:
         booking = _first_non_empty(
             row,
             (
+                "bookingIdentifier",
+                "bookingidentifier",
+                "booking_identifier",
                 "bookingCode",
+                "booking_code",
                 "bookingReference",
+                "bookingRef",
+                "booking_reference",
+                "bookingReferenceNumber",
                 "bookingNumber",
+                "booking_number",
                 "bookingId",
-                "booking",
+                "bookingID",
+                "booking_id",
                 "salesOrderNumber",
             ),
         )
+        if not booking:
+            booking_value = row.get("booking")
+            if isinstance(booking_value, Mapping):
+                booking = _first_non_empty(
+                    booking_value,
+                    (
+                        "identifier",
+                        "code",
+                        "reference",
+                        "number",
+                        "id",
+                    ),
+                )
+            else:
+                booking = _normalize_str(booking_value)
         from_icao = _extract_airport(
             row,
             (

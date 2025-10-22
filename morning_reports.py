@@ -105,12 +105,18 @@ def _format_cj3_on_cj2_block(report: MorningReportResult) -> str:
     confirmation_note = _normalize_str(
         (report.metadata or {}).get("runway_confirmation_note")
     )
-    if not confirmation_note:
-        return block
+
+    def _is_confirmation_line(text: Optional[str]) -> bool:
+        normalized = _normalize_str(text)
+        if not normalized:
+            return False
+        if confirmation_note and normalized == confirmation_note:
+            return True
+        return normalized.lower().startswith("all runways confirmed as ")
 
     filtered_lines: List[str] = []
     for line in block.split("\n"):
-        if _normalize_str(line) == confirmation_note:
+        if _is_confirmation_line(line):
             if filtered_lines and filtered_lines[-1] == "":
                 filtered_lines.pop()
             continue
@@ -297,16 +303,6 @@ def _build_cj3_line(row: Mapping[str, Any]) -> str:
     threshold_ft = row.get("runway_alert_threshold_ft")
     runway_alerts = row.get("runway_alerts") or []
     if not runway_alerts:
-        confirmation_line: Optional[str] = None
-        if isinstance(threshold_ft, (int, float)):
-            threshold_int = int(threshold_ft)
-            confirmation_line = (
-                f"    All runways confirmed as {threshold_int:,}' or longer"
-            )
-
-        if confirmation_line:
-            return "\n".join([base_line, confirmation_line])
-
         return base_line
 
     alert_lines: List[str] = []
