@@ -1,3 +1,6 @@
+from Home import password_gate
+password_gate()
+
 import imaplib
 import email
 from datetime import datetime, timedelta
@@ -12,7 +15,6 @@ from auth import require_login
 # Config
 # ----------------------------
 st.set_page_config(page_title="Aircraft Presence (McCall/Palmer)", layout="wide")
-require_login()
 st.title("✈️ Aircraft Presence — McCall & Palmer")
 
 
