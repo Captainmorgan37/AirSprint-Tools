@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, date, time, timezone
 from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
+from collections import Counter, defaultdict
 from collections.abc import Mapping
 from typing import List, Dict, Any, Tuple, Optional, Set, Sequence
 
@@ -252,6 +253,36 @@ def _default_shift_labels(count: int) -> List[str]:
     if count in presets:
         return list(presets[count])
     return [f"Shift {i+1}" for i in range(count)]
+
+
+def _alphabetical_suffix(index: int) -> str:
+    if index < 0:
+        return ""
+    letters: List[str] = []
+    while True:
+        index, remainder = divmod(index, 26)
+        letters.append(chr(ord("A") + remainder))
+        if index == 0:
+            break
+        index -= 1
+    return "".join(reversed(letters))
+
+
+def _disambiguate_labels(labels: Sequence[str]) -> List[str]:
+    normalized = [label or "Shift" for label in labels]
+    counts = Counter(normalized)
+    occurrences: defaultdict[str, int] = defaultdict(int)
+    result: List[str] = []
+    for base, original in zip(normalized, labels):
+        total = counts[base]
+        if total <= 1:
+            result.append(original or base)
+            continue
+        occurrence = occurrences[base]
+        occurrences[base] += 1
+        suffix = _alphabetical_suffix(occurrence)
+        result.append(f"{base}{suffix}")
+    return result
 
 
 
@@ -637,7 +668,10 @@ def assign_preference_weighted(
     return result
 
 
-def buckets_to_df(buckets: Dict[str, List[TailPackage]]) -> pd.DataFrame:
+def buckets_to_df(
+    buckets: Dict[str, List[TailPackage]],
+    label_order: Optional[Sequence[str]] = None,
+) -> pd.DataFrame:
     rows = []
     for label, pkgs in buckets.items():
         for pkg in sorted(pkgs, key=lambda p: (p.first_local_dt, p.tail)):
@@ -653,15 +687,34 @@ def buckets_to_df(buckets: Dict[str, List[TailPackage]]) -> pd.DataFrame:
             })
     df = pd.DataFrame(rows)
     if not df.empty:
-        df = df.sort_values(["Shift", "First Local Dep", "Tail"]).reset_index(drop=True)
+        categories: Optional[List[str]] = None
+        if label_order:
+            seen = list(pd.unique(df["Shift"]))
+            ordered = [lab for lab in label_order if lab in seen]
+            extras = [lab for lab in seen if lab not in ordered]
+            categories = ordered + extras
+        if categories:
+            df["Shift"] = pd.Categorical(
+                df["Shift"], categories=categories, ordered=True
+            )
+            df = df.sort_values(["Shift", "First Local Dep", "Tail"]).reset_index(
+                drop=True
+            )
+            df["Shift"] = df["Shift"].astype(str)
+        else:
+            df = df.sort_values(["Shift", "First Local Dep", "Tail"]).reset_index(
+                drop=True
+            )
     return df
 
 
-def summarize(df: pd.DataFrame) -> pd.DataFrame:
+def summarize(
+    df: pd.DataFrame, label_order: Optional[Sequence[str]] = None
+) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame()
     agg = (
-        df.groupby("Shift")
+        df.groupby("Shift", sort=False)
         .agg(
             Tails=("Tail", "count"),
             Legs=("Legs", "sum"),
@@ -670,6 +723,17 @@ def summarize(df: pd.DataFrame) -> pd.DataFrame:
         )
         .reset_index()
     ).rename(columns={"Customs": "Customs Legs"})
+    if label_order:
+        seen = list(pd.unique(agg["Shift"]))
+        ordered = [lab for lab in label_order if lab in seen]
+        extras = [lab for lab in seen if lab not in ordered]
+        categories = ordered + extras
+        if categories:
+            agg["Shift"] = pd.Categorical(
+                agg["Shift"], categories=categories, ordered=True
+            )
+            agg = agg.sort_values("Shift").reset_index(drop=True)
+            agg["Shift"] = agg["Shift"].astype(str)
     agg["Workload"] = agg["Workload"].round(2)
     # Add spread metrics
     total_workload = agg["Workload"].sum()
@@ -882,7 +946,9 @@ for i in range(int(num_people)):
         value=default_labels[i] if i < len(default_labels) else f"Shift {i+1}",
         key=f"label_{i}",
     )
-    label_value = lbl or f"Shift {i+1}"
+    label_value = (lbl or "").strip()
+    if not label_value:
+        label_value = f"Shift {i+1}"
     labels.append(label_value)
     workload_percent = st.sidebar.slider(
         f"{label_value}: workload %",
@@ -895,6 +961,11 @@ for i in range(int(num_people)):
         help="Adjust this role's workload target as a percentage of a standard shift.",
     )
     label_workloads.append(workload_percent / 100.0)
+
+raw_labels = list(labels)
+labels = _disambiguate_labels(labels)
+if labels != raw_labels:
+    st.sidebar.caption("Duplicate shift names were suffixed automatically for clarity.")
 
 # Date selection (default = two days ahead in local Mountain time)
 selected_date = st.sidebar.date_input("Target date", value=_default_target_date())
@@ -972,7 +1043,7 @@ if st.session_state.get("_run"):
     for i, lab in enumerate(labels):
         with tabs[i]:
             pkgs = buckets.get(lab, [])
-            df = buckets_to_df({lab: pkgs})
+            df = buckets_to_df({lab: pkgs}, label_order=[lab])
             if df.empty:
                 st.write("No tails assigned.")
             else:
@@ -995,7 +1066,7 @@ if st.session_state.get("_run"):
                     st.metric("Priority tails", priority_total)
 
     # Combined view
-    combined_df = buckets_to_df(buckets)
+    combined_df = buckets_to_df(buckets, label_order=labels)
 
     if priority_tails:
         detail_list = [
@@ -1008,7 +1079,7 @@ if st.session_state.get("_run"):
 
     # Summary
     st.subheader("Summary")
-    summary_df = summarize(combined_df)
+    summary_df = summarize(combined_df, label_order=labels)
     st.dataframe(summary_df, use_container_width=True, hide_index=True)
 
     # Downloads
