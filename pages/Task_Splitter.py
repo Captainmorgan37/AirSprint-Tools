@@ -491,6 +491,7 @@ def assign_preference_weighted(
 
     offsets = [_offset_hours(pkg.first_local_dt) for pkg in packages]
     min_off, max_off = min(offsets), max(offsets)
+    span = max_off - min_off
 
     def _workload(pkg: TailPackage) -> float:
         return pkg.workload if pkg.workload else float(pkg.legs)
@@ -513,76 +514,123 @@ def assign_preference_weighted(
     baseline_target = total_workload / total_weight if total_weight else 0.0
     workload_targets = {lab: baseline_target * weights[lab] for lab in labels}
 
-    # Keep a small tolerance so we still respect the east↔west preference, but
-    # not at the expense of an even split.
-    tolerance = max(0.5, round(baseline_target * 0.25, 2)) if baseline_target else 0.5
+    # Use a tighter tolerance so we aggressively balance the workload while still
+    # respecting the east↔west preference ordering.
+    tolerance = max(0.25, round(baseline_target * 0.15, 2)) if baseline_target else 0.25
+
     if len(labels) == 1:
         tz_targets = [max_off]
-    elif max_off == min_off:
+    elif span == 0:
         tz_targets = [max_off for _ in labels]
     else:
-        step = (max_off - min_off) / (len(labels) - 1)
+        step = span / (len(labels) - 1)
         tz_targets = [max_off - step * idx for idx in range(len(labels))]
 
-    buckets: Dict[str, List[TailPackage]] = {lab: [] for lab in labels}
-    totals = {lab: 0.0 for lab in labels}
-
-    def _normalized_total(lab: str, value: Optional[float] = None) -> float:
-        raw = totals[lab] if value is None else value
-        weight = weights.get(lab, 1.0)
-        if weight <= 0:
-            return raw
-        return raw / weight
-
-    span = max_off - min_off
-    center = min_off + span / 2 if span else min_off
+    # Stage 1: assign each package to the shift that best matches its timezone
+    # preference. We start by grouping everything strictly east→early and
+    # west→late before considering workload balancing.
+    buckets_by_index: List[List[TailPackage]] = [[] for _ in labels]
+    totals_by_index: List[float] = [0.0 for _ in labels]
+    preferred_index: Dict[str, int] = {}
+    pkg_offsets: Dict[str, float] = {}
 
     for pkg in sorted(packages, key=lambda p: p.first_local_dt):
         pkg_offset = _offset_hours(pkg.first_local_dt)
-        min_norm_total = min(_normalized_total(lab) for lab in labels)
-        eligible_labels = [
-            lab for lab in labels if _normalized_total(lab) <= min_norm_total + tolerance
-        ]
-        if not eligible_labels:
-            eligible_labels = labels
+        pkg_offsets[pkg.tail] = pkg_offset
+        if len(labels) == 1 or span == 0:
+            idx = 0
+        else:
+            relative = (max_off - pkg_offset) / span
+            idx = int(round(relative * (len(labels) - 1)))
+            idx = max(0, min(len(labels) - 1, idx))
+        preferred_index[pkg.tail] = idx
+        buckets_by_index[idx].append(pkg)
+        totals_by_index[idx] += _workload(pkg)
 
-        def score(lab: str) -> tuple[float, float, float, int, int]:
-            label_idx = labels.index(lab)
-            target = tz_targets[label_idx]
-            if span:
-                half_span = span / 2 or 1
-                # Increase the penalty for extreme east/west packages so that
-                # far-west departures lean harder toward later shifts (and far-east
-                # toward earlier ones) than mid-range timezones.
-                normalized_extremity = min(abs(pkg_offset - center) / half_span, 2)
-                tz_weight = 1 + normalized_extremity
-                if len(labels) > 1:
-                    normalized_eastness = (pkg_offset - min_off) / span
-                    normalized_label_pref = 1 - (label_idx / (len(labels) - 1))
-                    shift_bias_penalty = (
-                        abs(normalized_eastness - normalized_label_pref)
-                        * (len(labels) - 1)
-                    )
-                else:
-                    shift_bias_penalty = 0.0
-            else:
-                tz_weight = 1.0
-                shift_bias_penalty = 0.0
-            tz_penalty = abs(pkg_offset - target) * tz_weight + shift_bias_penalty
-            projected_total = totals[lab] + _workload(pkg)
-            return (
-                round(abs(projected_total - workload_targets[lab]), 4),
-                round(_normalized_total(lab, projected_total) - min_norm_total, 4),
-                round(tz_penalty, 4),
-                len(buckets[lab]),
-                label_idx,
+    def _totals_delta(idx: int) -> float:
+        label = labels[idx]
+        return totals_by_index[idx] - workload_targets[label]
+
+    max_iterations = len(packages) * max(1, len(labels) - 1) * 4
+    iterations = 0
+
+    # Stage 2: iteratively nudge packages forward/backward to balance workload
+    # without letting them drift far from their preferred shift.
+    while iterations < max_iterations:
+        iterations += 1
+        over_idx = max(range(len(labels)), key=_totals_delta)
+        under_idx = min(range(len(labels)), key=_totals_delta)
+        over_delta = _totals_delta(over_idx)
+        under_delta = _totals_delta(under_idx)
+        if over_delta <= tolerance and abs(under_delta) <= tolerance:
+            break
+        if over_delta <= 0 or under_delta >= 0:
+            break
+
+        step_direction = -1 if over_idx > under_idx else 1
+        target_idx = over_idx + step_direction
+        if target_idx < 0 or target_idx >= len(labels):
+            break
+
+        over_label = labels[over_idx]
+        target_label = labels[target_idx]
+        over_target_total = workload_targets[over_label]
+        target_target_total = workload_targets[target_label]
+        current_over_error = abs(totals_by_index[over_idx] - over_target_total)
+        current_target_error = abs(totals_by_index[target_idx] - target_target_total)
+
+        best_pkg: Optional[TailPackage] = None
+        best_score: Optional[Tuple[float, float, float, float]] = None
+
+        for pkg in buckets_by_index[over_idx]:
+            work = _workload(pkg)
+            new_over_total = totals_by_index[over_idx] - work
+            new_target_total = totals_by_index[target_idx] + work
+            new_over_error = abs(new_over_total - over_target_total)
+            new_target_error = abs(new_target_total - target_target_total)
+            delta_error = (new_over_error + new_target_error) - (
+                current_over_error + current_target_error
             )
+            pref_distance = abs(target_idx - preferred_index.get(pkg.tail, over_idx))
+            tz_penalty = abs(pkg_offsets.get(pkg.tail, tz_targets[target_idx]) - tz_targets[target_idx])
+            score = (delta_error, float(pref_distance), tz_penalty, work)
+            if best_score is None or score < best_score:
+                best_score = score
+                best_pkg = pkg
 
-        label = min(eligible_labels, key=score)
-        buckets[label].append(pkg)
-        totals[label] += _workload(pkg)
+        if not best_pkg or best_score is None:
+            break
 
-    return buckets
+        delta_error = best_score[0]
+        pref_distance = int(best_score[1])
+        if delta_error > 0 and pref_distance > 1:
+            # Moving this package would both worsen balance and ignore the
+            # timezone preference; stop balancing.
+            break
+        if delta_error > 0 and pref_distance >= 1:
+            # Try to find another option in the opposite direction if possible.
+            alternative_idx = over_idx - step_direction
+            if 0 <= alternative_idx < len(labels) and alternative_idx != target_idx:
+                target_idx = alternative_idx
+                # Restart loop to evaluate different direction.
+                iterations -= 1
+                continue
+            break
+
+        # Apply the move.
+        buckets_by_index[over_idx].remove(best_pkg)
+        buckets_by_index[target_idx].append(best_pkg)
+        work = _workload(best_pkg)
+        totals_by_index[over_idx] -= work
+        totals_by_index[target_idx] += work
+
+    result: Dict[str, List[TailPackage]] = {}
+    for idx, label in enumerate(labels):
+        pkgs = sorted(
+            buckets_by_index[idx], key=lambda p: (p.first_local_dt, p.tail)
+        )
+        result[label] = pkgs
+    return result
 
 
 def buckets_to_df(buckets: Dict[str, List[TailPackage]]) -> pd.DataFrame:
