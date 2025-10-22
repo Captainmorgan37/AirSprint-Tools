@@ -99,14 +99,41 @@ def _load_auth_settings() -> Tuple[Dict[str, Dict[str, Dict[str, str]]], str, st
     _USING_DEFAULT_CREDENTIALS = (credentials is _DEFAULT_CREDENTIALS)
     return credentials, cookie_name, cookie_key, cookie_expiry_days
 
+# ---------------------------------------------------------------------
+# Return or create authenticator instance (stored in session)
+# ---------------------------------------------------------------------
+_DEFAULT_COOKIE_NAME = "airsprint_tools_auth"
+_DEFAULT_COOKIE_KEY = "airsprint_tools_signature"
+_DEFAULT_COOKIE_EXPIRY_DAYS = 14
+_DEFAULT_CREDENTIALS = {"usernames": {}}
+_USING_DEFAULT_CREDENTIALS = False
+_AUTHENTICATOR_SESSION_KEY = "_authenticator"
+
+def get_authenticator() -> stauth.Authenticate:
+    """Return the authenticator instance stored in session state."""
+    if _AUTHENTICATOR_SESSION_KEY not in st.session_state:
+        credentials, cookie_name, cookie_key, cookie_expiry_days = _load_auth_settings()
+        st.session_state[_AUTHENTICATOR_SESSION_KEY] = stauth.Authenticate(
+            credentials,
+            cookie_name,
+            cookie_key,
+            cookie_expiry_days=cookie_expiry_days,
+        )
+    return st.session_state[_AUTHENTICATOR_SESSION_KEY]
+
+
+# ---------------------------------------------------------------------
+# Require login before continuing
+# ---------------------------------------------------------------------
 def require_login() -> Tuple[str, str]:
     """Ensure the current user is authenticated before continuing."""
     authenticator = get_authenticator()
-    name, auth_status, username = authenticator.login("Login", "main")
-    if auth_status:
+    name, authentication_status, username = authenticator.login("Login", "main")
+
+    if authentication_status:
         authenticator.logout("Logout", "sidebar")
         return name or "", username or ""
-    elif auth_status is False:
+    elif authentication_status is False:
         st.error("Username or password is incorrect.")
     else:
         st.info("Please log in to continue.")
