@@ -1,6 +1,8 @@
-from Home import password_gate
-password_gate()
 from __future__ import annotations
+
+from Home import password_gate
+
+password_gate()
 
 import re
 from collections.abc import Mapping
