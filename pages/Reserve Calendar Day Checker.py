@@ -1,7 +1,8 @@
+from Home import password_gate
+password_gate()
 import pandas as pd
 import streamlit as st
 
-from auth import require_login
 
 from flight_leg_utils import FlightDataError, build_fl3xx_api_config
 from reserve_calendar_checker import (
@@ -11,7 +12,6 @@ from reserve_calendar_checker import (
 )
 
 st.set_page_config(page_title="Reserve Calendar Day Checker", layout="wide")
-require_login()
 st.title("📆 Reserve Calendar Day Checker")
 
 st.write(
