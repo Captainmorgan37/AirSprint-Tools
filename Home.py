@@ -26,8 +26,6 @@ import streamlit as st
 
 st.set_page_config(page_title="AirSprint Ops Tools", layout="wide")
 
-require_login()
-
 st.title("✈️ AirSprint Operations Tools")
 
 st.write("""
