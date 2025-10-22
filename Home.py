@@ -15,7 +15,7 @@ def password_gate():
             if pw == correct_password:
                 st.session_state.authenticated = True
                 st.stop()
-                st.experimental_rerun()
+                st.rerun()
             else:
                 st.error("Incorrect password")
         st.stop()
