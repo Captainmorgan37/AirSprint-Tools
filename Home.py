@@ -1,6 +1,5 @@
 import streamlit as st
-import reprlib
-st.caption(f"Debug (remove later): secret value = {reprlib.repr(st.secrets.get('app_password'))}")
+
 
 # --- Basic single-password login gate ---
 def password_gate():
