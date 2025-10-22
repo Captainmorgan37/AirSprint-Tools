@@ -128,10 +128,18 @@ def get_authenticator() -> stauth.Authenticate:
 def require_login() -> Tuple[str, str]:
     """Ensure the current user is authenticated before continuing."""
     authenticator = get_authenticator()
-    name, authentication_status, username = authenticator.login("Login", "main")
+
+    # Modern signature: login(form_name, location)
+    try:
+        name, authentication_status, username = authenticator.login(
+            form_name="Login", location="main"
+        )
+    except Exception:
+        # Absolute fallback in case older style is expected
+        name, authentication_status, username = authenticator.login("Login", "main")
 
     if authentication_status:
-        authenticator.logout("Logout", "sidebar")
+        authenticator.logout("Logout", location="sidebar")
         return name or "", username or ""
     elif authentication_status is False:
         st.error("Username or password is incorrect.")
