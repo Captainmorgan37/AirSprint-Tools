@@ -99,6 +99,20 @@ def _load_auth_settings() -> Tuple[Dict[str, Dict[str, Dict[str, str]]], str, st
     _USING_DEFAULT_CREDENTIALS = (credentials is _DEFAULT_CREDENTIALS)
     return credentials, cookie_name, cookie_key, cookie_expiry_days
 
+def require_login() -> Tuple[str, str]:
+    """Ensure the current user is authenticated before continuing."""
+    authenticator = get_authenticator()
+    name, auth_status, username = authenticator.login("Login", "main")
+    if auth_status:
+        authenticator.logout("Logout", "sidebar")
+        return name or "", username or ""
+    elif auth_status is False:
+        st.error("Username or password is incorrect.")
+    else:
+        st.info("Please log in to continue.")
+    st.stop()
+
+
 
 # --- Add this tiny debug helper; call it once at top of Home.py when needed ---
 def show_auth_debug():
