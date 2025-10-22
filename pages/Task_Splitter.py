@@ -65,7 +65,7 @@ class TailPackage:
 # ----------------------------
 # Helpers
 # ----------------------------
-_TAIL_BASE_WORKLOAD = 0.5
+_TAIL_BASE_WORKLOAD = 1.0
 _BASE_LEG_WORKLOAD = 1.0
 _CUSTOMS_LEG_BONUS = 0.25
 
