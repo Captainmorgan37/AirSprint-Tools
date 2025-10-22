@@ -1,7 +1,10 @@
 import streamlit as st
 from datetime import datetime, timedelta, time
 
+from auth import require_login
+
 st.set_page_config(layout="wide")
+require_login()
 
 # Helper functions
 def parse_time(t_str):

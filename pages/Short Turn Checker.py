@@ -6,12 +6,15 @@ from zoneinfo_compat import ZoneInfo
 import pandas as pd
 import streamlit as st
 
+from auth import require_login
+
 from fl3xx_api import Fl3xxApiConfig, fetch_flights, fetch_postflight
 
 # ----------------------------
 # App Config
 # ----------------------------
 st.set_page_config(page_title="Short Turns Highlighter", layout="wide")
+require_login()
 st.title("✈️ Short Turn/Priority Status Viewer")
 
 

@@ -1,6 +1,10 @@
 import streamlit as st
 
+from auth import require_login
+
 st.set_page_config(page_title="AirSprint Ops Tools", layout="wide")
+
+require_login()
 
 st.title("✈️ AirSprint Operations Tools")
 

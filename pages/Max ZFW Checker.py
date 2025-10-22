@@ -1,7 +1,10 @@
 import streamlit as st
 from datetime import date
 
+from auth import require_login
+
 st.set_page_config(page_title="Max ZFW (Pax + Cargo) Checker", layout="centered")
+require_login()
 
 # --------------------------
 # Initialize defaults in session_state

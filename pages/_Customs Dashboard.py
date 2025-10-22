@@ -10,6 +10,8 @@ import pytz
 import streamlit as st
 from zoneinfo_compat import ZoneInfo
 
+from auth import require_login
+
 from flight_leg_utils import (
     AIRPORT_TZ_FILENAME,
     ARRIVAL_AIRPORT_COLUMNS,
@@ -86,6 +88,7 @@ _SESSION_STATE_KEY = "customs_dashboard_cached_data"
 
 
 st.set_page_config(page_title="Customs Dashboard", layout="wide")
+require_login()
 st.title("🛃 Customs Dashboard")
 
 st.caption(
