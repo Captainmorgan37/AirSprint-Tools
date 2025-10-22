@@ -79,7 +79,14 @@ def require_login() -> Tuple[str, str]:
     """Ensure the current user is authenticated before continuing."""
 
     authenticator = get_authenticator()
-    name, authentication_status, username = authenticator.login("Login", "main")
+    try:
+        name, authentication_status, username = authenticator.login(
+            form_name="Login", location="main"
+        )
+    except TypeError:
+        # Fallback for older versions of ``streamlit-authenticator`` that expect
+        # positional arguments only.
+        name, authentication_status, username = authenticator.login("Login", "main")
 
     if authentication_status:
         if name:
