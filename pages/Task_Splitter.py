@@ -19,9 +19,13 @@ from pandas.api.types import is_scalar
 
 from docx import Document
 from docx.enum.section import WD_ORIENTATION
-from docx.enum.table import WD_TABLE_ALIGNMENT, WD_ALIGN_VERTICAL
+from docx.enum.table import (
+    WD_TABLE_ALIGNMENT,
+    WD_ALIGN_VERTICAL,
+    WD_ROW_HEIGHT_RULE,
+)
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.shared import Pt
+from docx.shared import Pt, Inches
 
 from flight_leg_utils import (
     AIRPORT_TZ_FILENAME,
@@ -116,6 +120,16 @@ def _normalize_person_name(value: Any) -> str:
     return text
 
 
+def _condense_person_name(value: str) -> str:
+    text = (value or "").strip()
+    if not text:
+        return ""
+    parts = [part.strip(",") for part in re.split(r"\s+", text) if part.strip(",")]
+    if len(parts) <= 2:
+        return " ".join(parts)
+    return f"{parts[0]} {parts[-1]}"
+
+
 def _member_display_name(member: Mapping[str, Any]) -> str:
     candidates = [
         member.get(key)
@@ -208,7 +222,7 @@ def _crew_names_from_package(pkg: "TailPackage") -> Tuple[str, str]:
                 sic = leg_sic
             if pic and sic:
                 break
-    return pic, sic
+    return _condense_person_name(pic), _condense_person_name(sic)
 
 
 _TAIL_PLACEHOLDER_PREFIXES = ("ADD", "NEW", "TBD", "TEMP", "HOLD", "UNKNOWN", "UNK")
@@ -771,15 +785,40 @@ _DOCX_HEADERS = [
     "SLOT / PPR",
     "FLIGHT PLANS",
     "CREW BRIEF",
-    "CONFIRMATION PIC",
-    "CONFIRMATION SIC",
+    "PIC\nCONF",
+    "SIC\nCONF",
     "CHECK LIST",
     "RELEASE",
     "NOTES",
     "Priority Status",
 ]
 
+_DOCX_COLUMN_WIDTHS = [
+    Inches(0.64),  # TAIL #
+    Inches(0.87),  # CREW PIC
+    Inches(0.87),  # CREW SIC
+    Inches(0.40),  # FUEL
+    Inches(0.64),  # CUSTOMS
+    Inches(0.45),  # SLOT / PPR
+    Inches(0.46),  # FLIGHT PLANS
+    Inches(0.46),  # CREW BRIEF
+    Inches(0.49),  # PIC CONF
+    Inches(0.49),  # SIC CONF
+    Inches(0.46),  # CHECK LIST
+    Inches(0.64),  # RELEASE
+    Inches(1.70),  # NOTES
+    Inches(0.58),  # Priority Status
+]
+
+_DOCX_DATA_ROW_MIN_HEIGHT = Pt(36)
+
 _CHECKMARK = "✓"
+
+_WORD_JOINER = "\u2060"
+_NON_BREAKING_HEADER_OVERRIDES = {
+    "CUSTOMS": _WORD_JOINER.join("CUSTOMS"),
+    "RELEASE": _WORD_JOINER.join("RELEASE"),
+}
 
 
 def _apply_landscape(document: Document) -> None:
@@ -819,6 +858,7 @@ def _add_shift_table(
     table = document.add_table(rows=table_rows, cols=len(_DOCX_HEADERS))
     table.style = "Table Grid"
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    table.autofit = False
 
     # Shift label header row spanning all columns
     top_cell = table.rows[0].cells[0]
@@ -834,18 +874,31 @@ def _add_shift_table(
     header_row = table.rows[1]
     for col_idx, header_text in enumerate(_DOCX_HEADERS):
         header_cell = header_row.cells[col_idx]
-        header_cell.text = header_text
+        display_text = _NON_BREAKING_HEADER_OVERRIDES.get(header_text, header_text)
+        header_cell.text = display_text
         header_cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
-        header_paragraph = header_cell.paragraphs[0]
-        header_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        header_paragraph.runs[0].font.bold = True
+        for paragraph in header_cell.paragraphs:
+            paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            if not paragraph.runs:
+                paragraph.add_run()
+            for run in paragraph.runs:
+                run.font.bold = True
+
+    if len(_DOCX_COLUMN_WIDTHS) == len(_DOCX_HEADERS):
+        for row in table.rows[1:]:
+            for col_idx, width in enumerate(_DOCX_COLUMN_WIDTHS):
+                if col_idx < len(row.cells):
+                    row.cells[col_idx].width = width
 
     # Data rows
     for row_offset, pkg in enumerate(sorted_pkgs):
         row = table.rows[row_offset + 2]
+        row.height_rule = WD_ROW_HEIGHT_RULE.AT_LEAST
+        row.height = _DOCX_DATA_ROW_MIN_HEIGHT
         pic_name, sic_name = _crew_names_from_package(pkg)
         values = [""] * len(_DOCX_HEADERS)
-        values[0] = pkg.tail
+        tail_text = str(pkg.tail or "")
+        values[0] = tail_text.replace("-", "\u2011")
         values[1] = pic_name
         values[2] = sic_name
         detail = priority_details.get(pkg.tail, "")
