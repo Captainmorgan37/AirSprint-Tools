@@ -883,6 +883,12 @@ def _add_shift_table(
                 if col_idx < len(row.cells):
                     row.cells[col_idx].width = width
 
+    if len(_DOCX_COLUMN_WIDTHS) == len(_DOCX_HEADERS):
+        for row in table.rows[1:]:
+            for col_idx, width in enumerate(_DOCX_COLUMN_WIDTHS):
+                if col_idx < len(row.cells):
+                    row.cells[col_idx].width = width
+
     # Data rows
     for row_offset, pkg in enumerate(sorted_pkgs):
         row = table.rows[row_offset + 2]
