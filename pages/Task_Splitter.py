@@ -19,7 +19,11 @@ from pandas.api.types import is_scalar
 
 from docx import Document
 from docx.enum.section import WD_ORIENTATION
-from docx.enum.table import WD_TABLE_ALIGNMENT, WD_ALIGN_VERTICAL
+from docx.enum.table import (
+    WD_TABLE_ALIGNMENT,
+    WD_ALIGN_VERTICAL,
+    WD_ROW_HEIGHT_RULE,
+)
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.shared import Pt, Inches
 
@@ -781,8 +785,8 @@ _DOCX_HEADERS = [
     "SLOT / PPR",
     "FLIGHT PLANS",
     "CREW BRIEF",
-    "PIC CONF",
-    "SIC CONF",
+    "PIC\nCONF",
+    "SIC\nCONF",
     "CHECK LIST",
     "RELEASE",
     "NOTES",
@@ -790,21 +794,23 @@ _DOCX_HEADERS = [
 ]
 
 _DOCX_COLUMN_WIDTHS = [
-    Inches(0.45),  # TAIL #
-    Inches(0.95),  # CREW PIC
-    Inches(0.95),  # CREW SIC
+    Inches(0.52),  # TAIL #
+    Inches(0.90),  # CREW PIC
+    Inches(0.90),  # CREW SIC
     Inches(0.40),  # FUEL
-    Inches(0.45),  # CUSTOMS
-    Inches(0.50),  # SLOT / PPR
-    Inches(0.55),  # FLIGHT PLANS
-    Inches(0.55),  # CREW BRIEF
-    Inches(0.40),  # PIC CONF
-    Inches(0.40),  # SIC CONF
-    Inches(0.50),  # CHECK LIST
-    Inches(0.50),  # RELEASE
-    Inches(1.70),  # NOTES
-    Inches(0.70),  # Priority Status
+    Inches(0.55),  # CUSTOMS
+    Inches(0.48),  # SLOT / PPR
+    Inches(0.48),  # FLIGHT PLANS
+    Inches(0.48),  # CREW BRIEF
+    Inches(0.50),  # PIC CONF
+    Inches(0.50),  # SIC CONF
+    Inches(0.48),  # CHECK LIST
+    Inches(0.53),  # RELEASE
+    Inches(1.75),  # NOTES
+    Inches(0.60),  # Priority Status
 ]
+
+_DOCX_DATA_ROW_MIN_HEIGHT = Pt(36)
 
 _CHECKMARK = "✓"
 
@@ -864,9 +870,18 @@ def _add_shift_table(
         header_cell = header_row.cells[col_idx]
         header_cell.text = header_text
         header_cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
-        header_paragraph = header_cell.paragraphs[0]
-        header_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        header_paragraph.runs[0].font.bold = True
+        for paragraph in header_cell.paragraphs:
+            paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            if not paragraph.runs:
+                paragraph.add_run()
+            for run in paragraph.runs:
+                run.font.bold = True
+
+    if len(_DOCX_COLUMN_WIDTHS) == len(_DOCX_HEADERS):
+        for row in table.rows[1:]:
+            for col_idx, width in enumerate(_DOCX_COLUMN_WIDTHS):
+                if col_idx < len(row.cells):
+                    row.cells[col_idx].width = width
 
     if len(_DOCX_COLUMN_WIDTHS) == len(_DOCX_HEADERS):
         for row in table.rows[1:]:
@@ -877,9 +892,12 @@ def _add_shift_table(
     # Data rows
     for row_offset, pkg in enumerate(sorted_pkgs):
         row = table.rows[row_offset + 2]
+        row.height_rule = WD_ROW_HEIGHT_RULE.AT_LEAST
+        row.height = _DOCX_DATA_ROW_MIN_HEIGHT
         pic_name, sic_name = _crew_names_from_package(pkg)
         values = [""] * len(_DOCX_HEADERS)
-        values[0] = pkg.tail
+        tail_text = str(pkg.tail or "")
+        values[0] = tail_text.replace("-", "\u2011")
         values[1] = pic_name
         values[2] = sic_name
         detail = priority_details.get(pkg.tail, "")
