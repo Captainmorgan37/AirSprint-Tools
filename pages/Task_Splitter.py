@@ -783,7 +783,7 @@ _DOCX_HEADERS = [
     "FUEL",
     "CUSTOMS",
     "SLOT / PPR",
-    "FLIGHT PLANS",
+    "FLT PLANS",
     "CREW BRIEF",
     "PIC\nCONF",
     "SIC\nCONF",
