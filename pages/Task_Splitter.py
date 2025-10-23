@@ -21,7 +21,7 @@ from docx import Document
 from docx.enum.section import WD_ORIENTATION
 from docx.enum.table import WD_TABLE_ALIGNMENT, WD_ALIGN_VERTICAL
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.shared import Pt
+from docx.shared import Pt, Inches
 
 from flight_leg_utils import (
     AIRPORT_TZ_FILENAME,
@@ -116,6 +116,16 @@ def _normalize_person_name(value: Any) -> str:
     return text
 
 
+def _condense_person_name(value: str) -> str:
+    text = (value or "").strip()
+    if not text:
+        return ""
+    parts = [part.strip(",") for part in re.split(r"\s+", text) if part.strip(",")]
+    if len(parts) <= 2:
+        return " ".join(parts)
+    return f"{parts[0]} {parts[-1]}"
+
+
 def _member_display_name(member: Mapping[str, Any]) -> str:
     candidates = [
         member.get(key)
@@ -208,7 +218,7 @@ def _crew_names_from_package(pkg: "TailPackage") -> Tuple[str, str]:
                 sic = leg_sic
             if pic and sic:
                 break
-    return pic, sic
+    return _condense_person_name(pic), _condense_person_name(sic)
 
 
 _TAIL_PLACEHOLDER_PREFIXES = ("ADD", "NEW", "TBD", "TEMP", "HOLD", "UNKNOWN", "UNK")
@@ -771,12 +781,29 @@ _DOCX_HEADERS = [
     "SLOT / PPR",
     "FLIGHT PLANS",
     "CREW BRIEF",
-    "CONFIRMATION PIC",
-    "CONFIRMATION SIC",
+    "PIC CONF",
+    "SIC CONF",
     "CHECK LIST",
     "RELEASE",
     "NOTES",
     "Priority Status",
+]
+
+_DOCX_COLUMN_WIDTHS = [
+    Inches(0.45),  # TAIL #
+    Inches(0.95),  # CREW PIC
+    Inches(0.95),  # CREW SIC
+    Inches(0.40),  # FUEL
+    Inches(0.45),  # CUSTOMS
+    Inches(0.50),  # SLOT / PPR
+    Inches(0.55),  # FLIGHT PLANS
+    Inches(0.55),  # CREW BRIEF
+    Inches(0.40),  # PIC CONF
+    Inches(0.40),  # SIC CONF
+    Inches(0.50),  # CHECK LIST
+    Inches(0.50),  # RELEASE
+    Inches(1.70),  # NOTES
+    Inches(0.70),  # Priority Status
 ]
 
 _CHECKMARK = "✓"
@@ -819,6 +846,7 @@ def _add_shift_table(
     table = document.add_table(rows=table_rows, cols=len(_DOCX_HEADERS))
     table.style = "Table Grid"
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    table.autofit = False
 
     # Shift label header row spanning all columns
     top_cell = table.rows[0].cells[0]
@@ -839,6 +867,12 @@ def _add_shift_table(
         header_paragraph = header_cell.paragraphs[0]
         header_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
         header_paragraph.runs[0].font.bold = True
+
+    if len(_DOCX_COLUMN_WIDTHS) == len(_DOCX_HEADERS):
+        for row in table.rows[1:]:
+            for col_idx, width in enumerate(_DOCX_COLUMN_WIDTHS):
+                if col_idx < len(row.cells):
+                    row.cells[col_idx].width = width
 
     # Data rows
     for row_offset, pkg in enumerate(sorted_pkgs):
