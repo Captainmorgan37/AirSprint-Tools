@@ -12,6 +12,13 @@ import pytz
 import streamlit as st
 from zoneinfo_compat import ZoneInfo
 
+from customs_deadline_utils import (
+    DEFAULT_BUSINESS_DAY_END,
+    DEFAULT_BUSINESS_DAY_START,
+    build_followup_candidates,
+    rule_hours_for_weekday,
+)
+
 
 from flight_leg_utils import (
     AIRPORT_TZ_FILENAME,
@@ -27,8 +34,6 @@ from flight_leg_utils import (
 from fl3xx_api import fetch_flight_migration
 
 
-DEFAULT_BUSINESS_DAY_START = time(hour=9)
-DEFAULT_BUSINESS_DAY_END = time(hour=17)
 MOUNTAIN_TIMEZONE = ZoneInfo("America/Edmonton")
 
 URGENCY_STYLES = {
@@ -72,16 +77,6 @@ URGENCY_SORT_ORDER = {
     "pending": 4,
     "ok": 5,
 }
-
-_DAY_KEYS = (
-    "open_mon",
-    "open_tue",
-    "open_wed",
-    "open_thu",
-    "open_fri",
-    "open_sat",
-    "open_sun",
-)
 
 CUSTOMS_RULES_PATH = Path(__file__).resolve().parent.parent / "customs_rules.csv"
 
@@ -308,47 +303,6 @@ def _extract_departure_dt(row: Mapping[str, Any]) -> Optional[datetime]:
     return None
 
 
-def _parse_hours_value(value: str) -> Optional[Tuple[time, time]]:
-    if not value:
-        return None
-    normalized = value.strip()
-    if not normalized:
-        return None
-    upper = normalized.upper()
-    if upper in {"CLOSED", "CLOSE"}:
-        return None
-    if "24" in upper and "H" in upper:
-        return time(hour=0, minute=0), time(hour=23, minute=59)
-    match = re.search(r"(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})", normalized)
-    if not match:
-        return None
-    try:
-        start_time = datetime.strptime(match.group(1), "%H:%M").time()
-        end_time = datetime.strptime(match.group(2), "%H:%M").time()
-    except ValueError:
-        return None
-    if end_time <= start_time:
-        end_time = time(hour=23, minute=59)
-    return start_time, end_time
-
-
-def _rule_hours_for_weekday(rule: Optional[Mapping[str, Any]], weekday: int) -> Optional[Tuple[time, time]]:
-    if not isinstance(rule, Mapping):
-        return None
-    if weekday < 0 or weekday >= len(_DAY_KEYS):
-        return None
-    key = _DAY_KEYS[weekday]
-    if key not in rule:
-        return None
-    value = rule.get(key)
-    if value is None:
-        return None
-    value_str = str(value).strip()
-    if not value_str or value_str.upper() == "NAN":
-        return None
-    return _parse_hours_value(value_str)
-
-
 def _find_operating_window_before(
     reference_local: datetime,
     rule: Optional[Mapping[str, Any]],
@@ -362,7 +316,7 @@ def _find_operating_window_before(
         start_offset = 0 if allow_same_day else 1
         for offset in range(start_offset, 8):
             candidate_date = reference_date - timedelta(days=offset)
-            hours = _rule_hours_for_weekday(rule, candidate_date.weekday())
+            hours = rule_hours_for_weekday(rule, candidate_date.weekday())
             if not hours:
                 continue
             start_time, end_time = hours
@@ -513,28 +467,6 @@ def _compute_clearance_window(
     if normalized_status != "OK" and isinstance(end_local, datetime):
         now_local = datetime.now(end_local.tzinfo or ZoneInfo("UTC"))
         if now_local > end_local:
-            same_day_hours: Optional[Tuple[time, time]] = None
-            rule_same_day_hours: Optional[Tuple[time, time]] = None
-            if isinstance(rule, Mapping):
-                rule_same_day_hours = _rule_hours_for_weekday(
-                    rule, event_local.weekday()
-                )
-                same_day_hours = rule_same_day_hours
-
-            if same_day_hours is None:
-                same_day_hours = (
-                    DEFAULT_BUSINESS_DAY_START,
-                    DEFAULT_BUSINESS_DAY_END,
-                )
-
-            same_day_start_time, same_day_end_time = same_day_hours
-            same_day_start_local = datetime.combine(
-                event_local.date(), same_day_start_time, tzinfo=tzinfo
-            )
-            same_day_end_local = datetime.combine(
-                event_local.date(), same_day_end_time, tzinfo=tzinfo
-            )
-
             departure_dt = _extract_departure_dt(row)
             departure_local: Optional[datetime] = None
             if isinstance(departure_dt, datetime):
@@ -545,60 +477,26 @@ def _compute_clearance_window(
                 except Exception:
                     departure_local = departure_dt
 
-            fallback_end_local = same_day_end_local
-            if isinstance(lead_deadline_local, datetime):
-                fallback_end_local = min(fallback_end_local, lead_deadline_local)
-            if isinstance(departure_local, datetime):
-                fallback_end_local = min(fallback_end_local, departure_local)
-
-            fallback_start_local = same_day_start_local
-            deadline_before_open = False
-            if fallback_end_local < fallback_start_local:
-                deadline_before_open = True
-                fallback_end_local = fallback_start_local
-
-            port_window_desc = (
-                f"Port hours {same_day_start_time.strftime('%H:%M')}"
-                f"-{same_day_end_time.strftime('%H:%M')} local."
-                if rule_same_day_hours is not None
-                else (
-                    "Default same-day window "
-                    f"{DEFAULT_BUSINESS_DAY_START.strftime('%H:%M')}"
-                    f"-{DEFAULT_BUSINESS_DAY_END.strftime('%H:%M')} local."
-                )
+            fallback_candidates = build_followup_candidates(
+                event_local=event_local,
+                tzinfo=tzinfo,
+                rule=rule,
+                lead_deadline_local=lead_deadline_local,
+                lead_hours=lead_hours,
+                departure_local=departure_local,
             )
 
-            summary_parts = ["Prior day clearance window missed.", port_window_desc]
+            if fallback_candidates:
+                selected = fallback_candidates[-1]
+                for candidate in fallback_candidates:
+                    if now_local <= candidate.end:
+                        selected = candidate
+                        break
 
-            if isinstance(lead_deadline_local, datetime):
-                lead_hours_text = f"{lead_hours:g}" if lead_hours is not None else ""
-                summary_parts.append(
-                    "Lead time"
-                    f" ({lead_hours_text}h) deadline {lead_deadline_local.strftime('%H:%M %Z')}."
-                )
-
-            if isinstance(departure_local, datetime):
-                summary_parts.append(
-                    "Flight departs "
-                    f"{departure_local.strftime('%Y-%m-%d %H:%M %Z')}."
-                )
-
-            if deadline_before_open:
-                summary_parts.append(
-                    "Lead/departure deadline occurs before port opens; action required at opening."
-                )
-
-            summary_parts.append(
-                "Same-day clearance window "
-                f"{fallback_start_local.strftime('%Y-%m-%d %H:%M %Z')}"
-                " → "
-                f"{fallback_end_local.strftime('%Y-%m-%d %H:%M %Z')}."
-            )
-
-            start_local = fallback_start_local
-            end_local = fallback_end_local
-            goal_summary = " ".join(summary_parts)
-            timing_label = "Same Day"
+                start_local = selected.start
+                end_local = selected.end
+                goal_summary = selected.summary
+                timing_label = selected.label
 
     return start_local, end_local, goal_summary, timing_label
 
