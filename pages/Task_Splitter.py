@@ -794,25 +794,31 @@ _DOCX_HEADERS = [
 ]
 
 _DOCX_COLUMN_WIDTHS = [
-    Inches(0.52),  # TAIL #
-    Inches(0.90),  # CREW PIC
-    Inches(0.90),  # CREW SIC
+    Inches(0.64),  # TAIL #
+    Inches(0.87),  # CREW PIC
+    Inches(0.87),  # CREW SIC
     Inches(0.40),  # FUEL
-    Inches(0.55),  # CUSTOMS
-    Inches(0.48),  # SLOT / PPR
-    Inches(0.48),  # FLIGHT PLANS
-    Inches(0.48),  # CREW BRIEF
-    Inches(0.50),  # PIC CONF
-    Inches(0.50),  # SIC CONF
-    Inches(0.48),  # CHECK LIST
-    Inches(0.53),  # RELEASE
-    Inches(1.75),  # NOTES
-    Inches(0.60),  # Priority Status
+    Inches(0.64),  # CUSTOMS
+    Inches(0.45),  # SLOT / PPR
+    Inches(0.46),  # FLIGHT PLANS
+    Inches(0.46),  # CREW BRIEF
+    Inches(0.49),  # PIC CONF
+    Inches(0.49),  # SIC CONF
+    Inches(0.46),  # CHECK LIST
+    Inches(0.64),  # RELEASE
+    Inches(1.70),  # NOTES
+    Inches(0.58),  # Priority Status
 ]
 
 _DOCX_DATA_ROW_MIN_HEIGHT = Pt(36)
 
 _CHECKMARK = "✓"
+
+_WORD_JOINER = "\u2060"
+_NON_BREAKING_HEADER_OVERRIDES = {
+    "CUSTOMS": _WORD_JOINER.join("CUSTOMS"),
+    "RELEASE": _WORD_JOINER.join("RELEASE"),
+}
 
 
 def _apply_landscape(document: Document) -> None:
@@ -868,7 +874,8 @@ def _add_shift_table(
     header_row = table.rows[1]
     for col_idx, header_text in enumerate(_DOCX_HEADERS):
         header_cell = header_row.cells[col_idx]
-        header_cell.text = header_text
+        display_text = _NON_BREAKING_HEADER_OVERRIDES.get(header_text, header_text)
+        header_cell.text = display_text
         header_cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
         for paragraph in header_cell.paragraphs:
             paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -876,12 +883,6 @@ def _add_shift_table(
                 paragraph.add_run()
             for run in paragraph.runs:
                 run.font.bold = True
-
-    if len(_DOCX_COLUMN_WIDTHS) == len(_DOCX_HEADERS):
-        for row in table.rows[1:]:
-            for col_idx, width in enumerate(_DOCX_COLUMN_WIDTHS):
-                if col_idx < len(row.cells):
-                    row.cells[col_idx].width = width
 
     if len(_DOCX_COLUMN_WIDTHS) == len(_DOCX_HEADERS):
         for row in table.rows[1:]:
