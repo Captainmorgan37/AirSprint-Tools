@@ -4,6 +4,7 @@ import streamlit as st
 import pandas as pd
 import requests
 import json
+import itertools
 import re
 import html
 from datetime import datetime, timedelta, date
@@ -1283,16 +1284,45 @@ def deduplicate_notams(notams):
                 grouped[key] = n
     return list(grouped.values())
 
+def _runway_variants(runway_name: str):
+    """Return common textual variants for a runway identifier.
+
+    Many NOTAMs pad single digit runway numbers with a leading zero (``04``), while
+    our runway dataset stores the same runway as ``4``.  To ensure we match either
+    representation we emit every combination with and without leading zeros for the
+    numeric components of the runway name.  Existing alphabetic suffixes (e.g.
+    ``16R``) are preserved.
+    """
+
+    parts = str(runway_name).split('/')
+    part_variants = []
+    for part in parts:
+        normalized = str(part).strip().upper()
+        variants = {normalized}
+        # Add a zero-padded version when the runway number is purely numeric and
+        # shorter than two characters (e.g. ``4`` -> ``04``).
+        if normalized.isdigit() and len(normalized) < 2:
+            variants.add(normalized.zfill(2))
+        part_variants.append(variants)
+
+    variants = set()
+    for combo in itertools.product(*part_variants):
+        variants.add('/'.join(combo))
+    return variants
+
+
 def is_runway_closed(notam_text, runway_name):
     text_upper = notam_text.upper()
-    runway_upper = runway_name.upper()
-    direct_rwy_pattern = rf"RWY\s+{re.escape(runway_upper)}\b.*(?:{'|'.join(KEYWORDS)})"
-    twy_context_pattern = rf"TWY\s+[A-Z0-9]+.*RWY\s+{re.escape(runway_upper)}"
-    if re.search(direct_rwy_pattern, text_upper):
-        if not re.search(twy_context_pattern, text_upper):
-            return True
-        if "AVBL AS TWY" in text_upper:
-            return True
+    runway_variants = _runway_variants(runway_name)
+
+    for runway_upper in runway_variants:
+        direct_rwy_pattern = rf"RWY\s+{re.escape(runway_upper)}\b.*(?:{'|'.join(KEYWORDS)})"
+        twy_context_pattern = rf"TWY\s+[A-Z0-9]+.*RWY\s+{re.escape(runway_upper)}"
+        if re.search(direct_rwy_pattern, text_upper):
+            if not re.search(twy_context_pattern, text_upper):
+                return True
+            if "AVBL AS TWY" in text_upper:
+                return True
     return False
 
 def normalize_surface(surface):
