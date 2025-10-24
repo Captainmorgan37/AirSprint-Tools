@@ -948,11 +948,28 @@ def _label_slug(label: str) -> str:
     return slug or "shift"
 
 
+def _append_workload_note(document: Document, workload_percent: Optional[float]) -> None:
+    if workload_percent is None:
+        return
+
+    pct_value = workload_percent
+    if abs(pct_value - round(pct_value)) < 1e-6:
+        formatted_pct = f"{int(round(pct_value))}%"
+    else:
+        formatted_pct = f"{pct_value:.1f}%"
+
+    paragraph = document.add_paragraph()
+    paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    run = paragraph.add_run(f"Workload target for this sheet: {formatted_pct}")
+    run.font.size = Pt(8)
+
+
 def build_shift_briefing_docs(
     target_date: date,
     labels: List[str],
     buckets: Dict[str, List[TailPackage]],
     priority_details: Dict[str, str],
+    label_workloads: Optional[Sequence[float]] = None,
 ) -> tuple[bytes, Dict[str, bytes]]:
     combined_document = _initialize_briefing_document(target_date)
 
@@ -965,9 +982,16 @@ def build_shift_briefing_docs(
     combined_payload = _document_to_bytes(combined_document)
 
     per_shift_payloads: Dict[str, bytes] = {}
-    for label in labels:
+    for idx, label in enumerate(labels):
         shift_document = _initialize_briefing_document(target_date)
         _add_shift_table(shift_document, label, buckets.get(label, []), priority_details)
+        workload_percent: Optional[float] = None
+        if label_workloads and idx < len(label_workloads):
+            try:
+                workload_percent = float(label_workloads[idx]) * 100.0
+            except (TypeError, ValueError):
+                workload_percent = None
+        _append_workload_note(shift_document, workload_percent)
         per_shift_payloads[label] = _document_to_bytes(shift_document)
 
     return combined_payload, per_shift_payloads
@@ -1156,7 +1180,7 @@ if st.session_state.get("_run"):
 
     # Downloads
     doc_payload, per_shift_docs = build_shift_briefing_docs(
-        selected_date, labels, buckets, priority_details
+        selected_date, labels, buckets, priority_details, label_workloads
     )
     st.download_button(
         label="⬇️ Download daily flight sheet (DOCX)",
