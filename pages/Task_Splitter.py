@@ -655,6 +655,15 @@ def assign_preference_weighted(
                 pref_distance = abs(
                     target_idx - preferred_index.get(pkg.tail, over_idx)
                 )
+                if (
+                    target_idx > preferred_index.get(pkg.tail, over_idx)
+                    and pref_distance > 1
+                ):
+                    # Eastern-preferred packages (low preferred index) should not
+                    # drift multiple shifts later unless the workload savings are
+                    # overwhelming. Skip these moves so the eastern tails stay on
+                    # the earlier shifts when possible.
+                    continue
                 tz_penalty = abs(
                     pkg_offsets.get(pkg.tail, tz_targets[target_idx])
                     - tz_targets[target_idx]
