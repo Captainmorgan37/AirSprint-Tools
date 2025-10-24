@@ -1,4 +1,4 @@
-from Home import password_gate
+from Home import get_secret, password_gate
 password_gate()
 import io
 import re
@@ -597,15 +597,11 @@ def _format_hours_summary(rule: Mapping[str, Any]) -> str:
 st.sidebar.header("Configuration")
 
 fl3xx_cfg: Dict[str, Any] = {}
-try:
-    if "fl3xx_api" in st.secrets:
-        cfg = st.secrets["fl3xx_api"]
-        if isinstance(cfg, Mapping):
-            fl3xx_cfg = {str(k): cfg[k] for k in cfg}
-        elif isinstance(cfg, dict):
-            fl3xx_cfg = dict(cfg)
-except Exception:
-    fl3xx_cfg = {}
+cfg = get_secret("fl3xx_api", {})
+if isinstance(cfg, Mapping):
+    fl3xx_cfg = {str(k): cfg[k] for k in cfg}
+elif isinstance(cfg, dict):
+    fl3xx_cfg = dict(cfg)
 
 has_live_credentials = bool(fl3xx_cfg.get("api_token") or fl3xx_cfg.get("auth_header"))
 if has_live_credentials:

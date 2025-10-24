@@ -1,10 +1,75 @@
+from __future__ import annotations
+
+import time
+from typing import Any
+
 import streamlit as st
 
 
+_SECRET_RETRY_PREFIX = "_secret_retry__"
+_SECRET_RETRY_MAX = 6
+_SECRET_RETRY_DELAY_SECONDS = 0.2
+_MISSING = object()
+
+
+def _secret_retry_key(name: str) -> str:
+    return f"{_SECRET_RETRY_PREFIX}{name}"
+
+
+def _fetch_secret(key: str, *, required: bool, default: Any = _MISSING) -> Any:
+    """Fetch a secret, retrying briefly if the secrets store isn't ready yet."""
+
+    try:
+        if key in st.secrets:
+            value = st.secrets[key]
+            st.session_state.pop(_secret_retry_key(key), None)
+            return value
+    except Exception:
+        # When the Streamlit runtime is still initialising secrets, accessing
+        # ``st.secrets`` can raise or behave like an empty mapping. Treat this
+        # as "not yet available" and retry.
+        pass
+
+    retry_key = _secret_retry_key(key)
+    attempts = int(st.session_state.get(retry_key, 0))
+
+    if attempts < _SECRET_RETRY_MAX:
+        st.session_state[retry_key] = attempts + 1
+        st.info("Preparing secure configuration…")
+        time.sleep(_SECRET_RETRY_DELAY_SECONDS)
+        st.rerun()
+
+    if required:
+        st.error(
+            f"Required secret '{key}' is not configured. Update `.streamlit/secrets.toml` and refresh the app."
+        )
+        st.stop()
+
+    if default is not _MISSING:
+        return default
+
+    return None
+
+
+def require_secret(key: str) -> Any:
+    """Return a secret value, stopping the app if it never becomes available."""
+
+    return _fetch_secret(key, required=True)
+
+
+def get_secret(key: str, default: Any | None = None) -> Any:
+    """Return a secret value if available, otherwise the provided default."""
+
+    sentinel = _MISSING if default is None else default
+    return _fetch_secret(key, required=False, default=sentinel)
+
+
 # --- Basic single-password login gate ---
-def password_gate():
+def password_gate() -> None:
     """Simple access restriction with a single shared password."""
-    correct_password = st.secrets.get("app_password")
+
+    correct_password = require_secret("app_password")
+
     if "authenticated" not in st.session_state:
         st.session_state.authenticated = False
 
@@ -19,10 +84,8 @@ def password_gate():
                 st.error("Incorrect password")
         st.stop()
 
+
 password_gate()
-
-
-import streamlit as st
 
 st.set_page_config(page_title="AirSprint Ops Tools", layout="wide")
 
