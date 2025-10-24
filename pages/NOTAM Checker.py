@@ -17,6 +17,7 @@ from flight_leg_utils import (
     build_fl3xx_api_config,
     normalize_fl3xx_payload,
 )
+from notam_filters import is_taxiway_only_notam
 
 # ----- CONFIG -----
 FAA_CLIENT_ID = st.secrets["FAA_CLIENT_ID"]
@@ -752,6 +753,9 @@ def get_cfps_notams(icao: str):
             if any(hide_kw.lower() in notam_text.lower() for hide_kw in HIDE_KEYWORDS):
                 continue
 
+            if is_taxiway_only_notam(notam_text):
+                continue
+
             effective_start, effective_end, start_dt, end_dt = parse_cfps_times(notam_text)
             sort_key = start_dt if start_dt else datetime.min
 
@@ -816,6 +820,9 @@ def get_faa_notams(icao: str):
             continue
 
         if any(hide_kw.lower() in text_to_use.lower() for hide_kw in HIDE_KEYWORDS):
+            continue
+
+        if is_taxiway_only_notam(text_to_use):
             continue
 
         effective = notam_data.get("effectiveStart", None)
