@@ -164,6 +164,11 @@ def is_easterly_offset(task_splitter_module):
     return task_splitter_module._is_easterly_offset
 
 
+@pytest.fixture
+def is_westerly_offset(task_splitter_module):
+    return task_splitter_module._is_westerly_offset
+
+
 def test_force_easterly_option_moves_work_when_needed(TailPackage, assign_preference_weighted):
     labels = ["0500", "0600", "0800", "0900"]
     weights = [1.0] * len(labels)
@@ -196,3 +201,28 @@ def test_is_easterly_offset_bounds(is_easterly_offset):
     assert not is_easterly_offset(-6.0)
     assert not is_easterly_offset(-1.5)
     assert not is_easterly_offset(0.0)
+
+
+def test_westerly_tails_prefer_last_shift(TailPackage, assign_preference_weighted):
+    labels = ["0500", "0800", "1200"]
+    weights = [1.0, 1.0, 2.0]
+    packages = [
+        _make_tail(TailPackage, "W1", "America/Los_Angeles"),
+        _make_tail(TailPackage, "W2", "America/Denver"),
+        _make_tail(TailPackage, "C1", "America/Chicago"),
+        _make_tail(TailPackage, "E1", "America/New_York"),
+    ]
+
+    buckets = assign_preference_weighted(packages, labels, weights)
+
+    western_tails = {"W1", "W2"}
+    last_shift = labels[-1]
+    last_shift_tails = {pkg.tail for pkg in buckets.get(last_shift, [])}
+    assert western_tails.issubset(last_shift_tails)
+
+
+def test_is_westerly_offset_bounds(is_westerly_offset):
+    assert is_westerly_offset(-8.0)
+    assert is_westerly_offset(-7.0)
+    assert not is_westerly_offset(-6.0)
+    assert not is_westerly_offset(-4.0)

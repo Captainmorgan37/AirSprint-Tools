@@ -536,10 +536,15 @@ def _offset_hours(dt: datetime) -> float:
 
 _EASTERLY_OFFSET_MIN = -5.5
 _EASTERLY_OFFSET_MAX = -2.0
+_WESTERLY_OFFSET_THRESHOLD = -6.75
 
 
 def _is_easterly_offset(offset: float) -> bool:
     return _EASTERLY_OFFSET_MIN <= offset <= _EASTERLY_OFFSET_MAX
+
+
+def _is_westerly_offset(offset: float) -> bool:
+    return offset <= _WESTERLY_OFFSET_THRESHOLD
 
 
 def assign_preference_weighted(
@@ -547,6 +552,7 @@ def assign_preference_weighted(
     labels: List[str],
     label_weights: Optional[Sequence[float]] = None,
     force_easterly_first: bool = False,
+    force_westerly_last: bool = True,
 ) -> Dict[str, List[TailPackage]]:
     if not packages or not labels:
         return {lab: [] for lab in labels}
@@ -596,6 +602,7 @@ def assign_preference_weighted(
     preferred_index: Dict[str, int] = {}
     pkg_offsets: Dict[str, float] = {}
     forced_early: Set[str] = set()
+    forced_late: Set[str] = set()
     packages_sorted = sorted(packages, key=lambda p: (p.first_local_dt, p.tail))
 
     for pkg in packages_sorted:
@@ -610,6 +617,14 @@ def assign_preference_weighted(
         preferred_idx = idx
         assign_idx = idx
         if (
+            force_westerly_last
+            and len(labels) > 1
+            and _is_westerly_offset(pkg_offset)
+        ):
+            preferred_idx = len(labels) - 1
+            assign_idx = len(labels) - 1
+            forced_late.add(pkg.tail)
+        elif (
             force_easterly_first
             and len(labels) > 1
             and _is_easterly_offset(pkg_offset)
@@ -663,12 +678,17 @@ def assign_preference_weighted(
                 hours_diff = abs(pkg_offsets.get(pkg.tail, tz_target) - tz_target)
                 distance = abs(idx - pref_idx)
                 later_distance = max(0, idx - pref_idx)
+                earlier_distance = max(0, pref_idx - idx)
                 penalty = int(round(hours_diff * scale)) * 2
                 penalty += distance * distance * scale
                 if force_easterly_first and pkg.tail in forced_early:
                     penalty += int(round(later_distance * scale * 0.5))
                 else:
                     penalty += later_distance * scale
+                if force_westerly_last and pkg.tail in forced_late:
+                    penalty += int(round(earlier_distance * scale * 0.5))
+                else:
+                    penalty += earlier_distance * scale
                 if pkg.has_priority and idx > pref_idx:
                     penalty += scale * 6
                 penalty_row.append(penalty)
@@ -798,11 +818,16 @@ def assign_preference_weighted(
                 max_late_distance = 1
                 if force_easterly_first and pkg.tail in forced_early:
                     max_late_distance = len(labels) - 1
+                max_early_distance = len(labels) - 1
+                if force_westerly_last and pkg.tail in forced_late:
+                    max_early_distance = 1
                 if target_idx > pref_idx and pref_distance > max_late_distance:
                     # Eastern-preferred packages (low preferred index) should not
                     # drift multiple shifts later unless the workload savings are
                     # overwhelming. Skip these moves so the eastern tails stay on
                     # the earlier shifts when possible.
+                    continue
+                if target_idx < pref_idx and pref_distance > max_early_distance:
                     continue
                 tz_penalty = abs(
                     pkg_offsets.get(pkg.tail, tz_targets[target_idx])
@@ -812,6 +837,8 @@ def assign_preference_weighted(
                 offset_priority = 0.0
                 if force_easterly_first and over_idx == 0:
                     offset_priority = pkg_offsets.get(pkg.tail, 0.0)
+                elif force_westerly_last and over_idx == len(labels) - 1:
+                    offset_priority = -pkg_offsets.get(pkg.tail, 0.0)
                 score = (
                     delta_error,
                     float(pref_distance),
