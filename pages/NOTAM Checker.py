@@ -1301,6 +1301,8 @@ def normalize_surface(surface):
         return "Asphalt", True
     elif any(c in s for c in ["CON", "CONC", "CONCRETE"]):
         return "Concrete", True
+    elif s == "PEM":
+        return "Pem", True
     else:
         return s.title(), False
 
