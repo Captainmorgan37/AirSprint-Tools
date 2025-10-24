@@ -170,7 +170,7 @@ with st.sidebar:
         "Select departure window",
         value=(today, default_end),
     )
-    st.caption("The report scans inclusive dates. End date defaults to 30 days after today.")
+    st.caption("The report scans inclusive dates. End date defaults to 45 days after today.")
 
     generate_report = st.button("Generate report", use_container_width=True)
 
