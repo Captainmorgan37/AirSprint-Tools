@@ -400,22 +400,69 @@ def _parse_visibility_value(value) -> float | None:
     return _try_float(text)
 
 
-def _should_highlight_visibility(value) -> bool:
+def _get_visibility_highlight(value) -> str | None:
     if value in (None, ""):
-        return False
+        return None
 
     if isinstance(value, str):
         stripped = value.strip()
         if not stripped:
-            return False
+            return None
         upper_value = stripped.upper()
         if "/" in upper_value and "SM" not in upper_value:
-            return False
+            return None
 
     vis_value = _parse_visibility_value(value)
     if vis_value is None:
-        return False
-    return vis_value <= 2.0
+        return None
+    if vis_value <= 2.0:
+        return "red"
+    if vis_value <= 3.0:
+        return "yellow"
+    return None
+
+
+def _parse_ceiling_value(value) -> float | None:
+    if value in (None, "", [], "M"):
+        return None
+
+    if isinstance(value, (int, float)):
+        return float(value)
+
+    if isinstance(value, (list, tuple)) and value:
+        return _parse_ceiling_value(value[0])
+
+    if isinstance(value, dict):
+        for key in ("value", "ceiling", "ceiling_ft_agl"):
+            if key in value:
+                parsed = _parse_ceiling_value(value[key])
+                if parsed is not None:
+                    return parsed
+        return None
+
+    try:
+        text = str(value).strip().replace(",", "")
+    except Exception:
+        return None
+
+    if not text:
+        return None
+
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _get_ceiling_highlight(value) -> str | None:
+    ceiling_value = _parse_ceiling_value(value)
+    if ceiling_value is None:
+        return None
+    if ceiling_value <= 1000:
+        return "red"
+    if ceiling_value <= 2000:
+        return "yellow"
+    return None
 
 
 def _should_highlight_weather(value) -> bool:
@@ -426,33 +473,42 @@ def _should_highlight_weather(value) -> bool:
     return "TS" in value.upper()
 
 
-def _wrap_highlight(text: str) -> str:
-    return f"<span style='color:#c41230;font-weight:bold'>{text}</span>"
+def _wrap_highlight(text: str, level: str = "red") -> str:
+    color_map = {
+        "red": "#c41230",
+        "yellow": "#b8860b",
+    }
+    color = color_map.get(level, color_map["red"])
+    return f"<span style='color:{color};font-weight:bold'>{text}</span>"
 
 
 def _format_detail_entry(label: str, value) -> str:
     value_text = "—" if value in (None, "") else str(value)
     label_lower = label.lower()
-    highlight = False
-    if "visibility" in label_lower and _should_highlight_visibility(value):
-        highlight = True
-    if "weather" in label_lower and _should_highlight_weather(value_text):
-        highlight = True
-    if highlight:
-        value_text = _wrap_highlight(value_text)
+    highlight_level = None
+    if "visibility" in label_lower:
+        highlight_level = _get_visibility_highlight(value)
+    if not highlight_level and "ceiling" in label_lower:
+        highlight_level = _get_ceiling_highlight(value)
+    if not highlight_level and "weather" in label_lower and _should_highlight_weather(value_text):
+        highlight_level = "red"
+    if highlight_level:
+        value_text = _wrap_highlight(value_text, highlight_level)
     return f"<strong>{label}:</strong> {value_text}"
 
 
 def _format_inline_detail(label: str, value) -> str:
     value_text = "—" if value in (None, "") else str(value)
     label_lower = label.lower()
-    highlight = False
-    if "visibility" in label_lower and _should_highlight_visibility(value):
-        highlight = True
-    if "weather" in label_lower and _should_highlight_weather(value_text):
-        highlight = True
+    highlight_level = None
+    if "visibility" in label_lower:
+        highlight_level = _get_visibility_highlight(value)
+    if not highlight_level and "ceiling" in label_lower:
+        highlight_level = _get_ceiling_highlight(value)
+    if not highlight_level and "weather" in label_lower and _should_highlight_weather(value_text):
+        highlight_level = "red"
     text = f"{label}: {value_text}"
-    return _wrap_highlight(text) if highlight else text
+    return _wrap_highlight(text, highlight_level) if highlight_level else text
 
 
 def _parse_signed_temperature(value: str) -> int | None:
@@ -588,8 +644,9 @@ def build_metar_summary(report_entry: dict) -> list[str]:
             vis_line = f"Visibility {vis_text} sm"
         else:
             vis_line = f"Visibility {vis_text}"
-        if _should_highlight_visibility(visibility):
-            vis_line = _wrap_highlight(vis_line)
+        highlight_level = _get_visibility_highlight(visibility)
+        if highlight_level:
+            vis_line = _wrap_highlight(vis_line, highlight_level)
         summary_lines.append(vis_line)
 
     altimeter = _format_numeric(
@@ -599,11 +656,14 @@ def build_metar_summary(report_entry: dict) -> list[str]:
     if altimeter:
         summary_lines.append(f"Altimeter {altimeter} inHg")
 
-    ceiling = _format_numeric(
-        _first_non_empty(metar_data, "ceiling", "ceiling_ft_agl")
-    )
+    ceiling_value = _first_non_empty(metar_data, "ceiling", "ceiling_ft_agl")
+    ceiling = _format_numeric(ceiling_value)
     if ceiling:
-        summary_lines.append(f"Ceiling {ceiling} ft")
+        ceiling_line = f"Ceiling {ceiling} ft"
+        ceiling_level = _get_ceiling_highlight(ceiling_value if ceiling_value is not None else ceiling)
+        if ceiling_level:
+            ceiling_line = _wrap_highlight(ceiling_line, ceiling_level)
+        summary_lines.append(ceiling_line)
 
     weather = _format_weather(metar_data)
     if weather:
@@ -1212,16 +1272,15 @@ def format_taf_for_display_html(raw_taf: str) -> str:
         tokens_html = []
         for token in line:
             token_str = token or ""
-            highlight = False
-            if _should_highlight_visibility(token_str):
-                highlight = True
-            if _should_highlight_weather(token_str):
-                highlight = True
             escaped_token = html.escape(token_str)
-            if highlight:
+            visibility_level = _get_visibility_highlight(token_str)
+            if visibility_level:
+                tokens_html.append(_wrap_highlight(escaped_token, visibility_level))
+                continue
+            if _should_highlight_weather(token_str):
                 tokens_html.append(_wrap_highlight(escaped_token))
-            else:
-                tokens_html.append(escaped_token)
+                continue
+            tokens_html.append(escaped_token)
         html_lines.append(" ".join(tokens_html))
 
     joined = "<br>".join(html_lines)
