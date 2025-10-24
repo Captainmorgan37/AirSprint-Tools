@@ -31,6 +31,7 @@ _purge_autorefresh_session_state()
 LOCAL_TZ = ZoneInfo(os.getenv("LOCAL_TZ", "America/Edmonton"))
 DEFAULT_TURN_THRESHOLD_MIN = int(os.getenv("TURN_THRESHOLD_MIN", "45"))
 PRIORITY_TURN_THRESHOLD_MIN = int(os.getenv("PRIORITY_TURN_THRESHOLD_MIN", "90"))
+PRIORITY_DUAL_LIST_THRESHOLD_MIN = 45
 
 # ----------------------------
 # Helper: Normalize / Parse datetimes
@@ -1108,7 +1109,20 @@ if not legs_df.empty:
                 False, index=display_short_df.index, dtype="bool"
             )
 
-        regular_short_df = display_short_df[~priority_mask]
+        if "turn_min" in display_short_df.columns:
+            turn_minutes = pd.to_numeric(
+                display_short_df["turn_min"], errors="coerce"
+            )
+            dual_list_mask = priority_mask & (
+                turn_minutes < PRIORITY_DUAL_LIST_THRESHOLD_MIN
+            )
+        else:
+            dual_list_mask = pd.Series(
+                False, index=display_short_df.index, dtype="bool"
+            )
+
+        regular_short_mask = (~priority_mask) | dual_list_mask
+        regular_short_df = display_short_df[regular_short_mask]
         priority_short_df = display_short_df[priority_mask]
 
         def _render_short_turn_table(df: pd.DataFrame, title: str, empty_message: str) -> None:
