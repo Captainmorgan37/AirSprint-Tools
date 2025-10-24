@@ -534,10 +534,19 @@ def _offset_hours(dt: datetime) -> float:
     return offset.total_seconds() / 3600
 
 
+_EASTERLY_OFFSET_MIN = -5.5
+_EASTERLY_OFFSET_MAX = -2.0
+
+
+def _is_easterly_offset(offset: float) -> bool:
+    return _EASTERLY_OFFSET_MIN <= offset <= _EASTERLY_OFFSET_MAX
+
+
 def assign_preference_weighted(
     packages: List[TailPackage],
     labels: List[str],
     label_weights: Optional[Sequence[float]] = None,
+    force_easterly_first: bool = False,
 ) -> Dict[str, List[TailPackage]]:
     if not packages or not labels:
         return {lab: [] for lab in labels}
@@ -586,6 +595,7 @@ def assign_preference_weighted(
     totals_by_index: List[float] = [0.0 for _ in labels]
     preferred_index: Dict[str, int] = {}
     pkg_offsets: Dict[str, float] = {}
+    forced_early: Set[str] = set()
     packages_sorted = sorted(packages, key=lambda p: (p.first_local_dt, p.tail))
 
     for pkg in packages_sorted:
@@ -597,9 +607,19 @@ def assign_preference_weighted(
             relative = (max_off - pkg_offset) / span
             idx = int(round(relative * (len(labels) - 1)))
             idx = max(0, min(len(labels) - 1, idx))
-        preferred_index[pkg.tail] = idx
-        buckets_by_index[idx].append(pkg)
-        totals_by_index[idx] += _workload(pkg)
+        preferred_idx = idx
+        assign_idx = idx
+        if (
+            force_easterly_first
+            and len(labels) > 1
+            and _is_easterly_offset(pkg_offset)
+        ):
+            preferred_idx = 0
+            assign_idx = 0
+            forced_early.add(pkg.tail)
+        preferred_index[pkg.tail] = preferred_idx
+        buckets_by_index[assign_idx].append(pkg)
+        totals_by_index[assign_idx] += _workload(pkg)
 
     def _assign_via_search() -> Optional[Dict[str, List[TailPackage]]]:
         """
@@ -645,7 +665,10 @@ def assign_preference_weighted(
                 later_distance = max(0, idx - pref_idx)
                 penalty = int(round(hours_diff * scale)) * 2
                 penalty += distance * distance * scale
-                penalty += later_distance * scale
+                if force_easterly_first and pkg.tail in forced_early:
+                    penalty += int(round(later_distance * scale * 0.5))
+                else:
+                    penalty += later_distance * scale
                 if pkg.has_priority and idx > pref_idx:
                     penalty += scale * 6
                 penalty_row.append(penalty)
@@ -770,13 +793,12 @@ def assign_preference_weighted(
                 delta_error = (new_over_error + new_target_error) - (
                     current_over_error + current_target_error
                 )
-                pref_distance = abs(
-                    target_idx - preferred_index.get(pkg.tail, over_idx)
-                )
-                if (
-                    target_idx > preferred_index.get(pkg.tail, over_idx)
-                    and pref_distance > 1
-                ):
+                pref_idx = preferred_index.get(pkg.tail, over_idx)
+                pref_distance = abs(target_idx - pref_idx)
+                max_late_distance = 1
+                if force_easterly_first and pkg.tail in forced_early:
+                    max_late_distance = len(labels) - 1
+                if target_idx > pref_idx and pref_distance > max_late_distance:
                     # Eastern-preferred packages (low preferred index) should not
                     # drift multiple shifts later unless the workload savings are
                     # overwhelming. Skip these moves so the eastern tails stay on
@@ -787,12 +809,16 @@ def assign_preference_weighted(
                     - tz_targets[target_idx]
                 )
                 distance_from_over = abs(target_idx - over_idx)
+                offset_priority = 0.0
+                if force_easterly_first and over_idx == 0:
+                    offset_priority = pkg_offsets.get(pkg.tail, 0.0)
                 score = (
                     delta_error,
                     float(pref_distance),
                     float(distance_from_over),
                     tz_penalty,
                     work,
+                    offset_priority,
                 )
                 if best_score is None or score < best_score:
                     best_score = score
@@ -1185,6 +1211,15 @@ for i in range(int(num_people)):
     )
     label_workloads.append(workload_percent / 100.0)
 
+force_easterly_first = st.sidebar.checkbox(
+    "Pre-assign easterly tails to earliest shift",
+    value=False,
+    help=(
+        "Group Eastern, Atlantic, and Newfoundland departures into the first shift "
+        "before rebalancing. Workload balancing can still push them west if needed."
+    ),
+)
+
 raw_labels = list(labels)
 labels = _disambiguate_labels(labels)
 if labels != raw_labels:
@@ -1259,7 +1294,12 @@ if st.session_state.get("_run"):
 
     st.subheader("Assignments")
 
-    buckets = assign_preference_weighted(packages, labels, label_workloads)
+    buckets = assign_preference_weighted(
+        packages,
+        labels,
+        label_workloads,
+        force_easterly_first=force_easterly_first,
+    )
 
     # Display per-shift tables
     tabs = st.tabs(labels)
