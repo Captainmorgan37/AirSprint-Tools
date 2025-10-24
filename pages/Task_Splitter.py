@@ -672,6 +672,8 @@ def assign_preference_weighted(
         for pkg in packages_sorted:
             pref_idx = preferred_index.get(pkg.tail, 0)
             pkg_offset = pkg_offsets.get(pkg.tail, tz_targets[pref_idx])
+            is_easterly = _is_easterly_offset(pkg_offset)
+            is_westerly = _is_westerly_offset(pkg_offset)
             penalty_row: List[int] = []
             for idx, label in enumerate(labels):
                 tz_target = tz_targets[idx]
@@ -681,14 +683,18 @@ def assign_preference_weighted(
                 earlier_distance = max(0, pref_idx - idx)
                 penalty = int(round(hours_diff * scale)) * 2
                 penalty += distance * distance * scale
+                later_penalty = later_distance * scale
+                if is_easterly:
+                    later_penalty *= 2.0
                 if force_easterly_first and pkg.tail in forced_early:
-                    penalty += int(round(later_distance * scale * 0.5))
-                else:
-                    penalty += later_distance * scale
+                    later_penalty *= 0.5
+                penalty += int(round(later_penalty))
+                earlier_penalty = earlier_distance * scale
+                if is_westerly:
+                    earlier_penalty *= 0.75
                 if force_westerly_last and pkg.tail in forced_late:
-                    penalty += int(round(earlier_distance * scale * 0.5))
-                else:
-                    penalty += earlier_distance * scale
+                    earlier_penalty *= 0.5
+                penalty += int(round(earlier_penalty))
                 if pkg.has_priority and idx > pref_idx:
                     penalty += scale * 6
                 penalty_row.append(penalty)
@@ -835,13 +841,21 @@ def assign_preference_weighted(
                 )
                 distance_from_over = abs(target_idx - over_idx)
                 offset_priority = 0.0
+                preference_penalty = float(pref_distance)
+                pkg_offset = pkg_offsets.get(
+                    pkg.tail, tz_targets[pref_idx]
+                )
+                if target_idx > pref_idx and _is_easterly_offset(pkg_offset):
+                    preference_penalty += pref_distance * 0.75
+                elif target_idx < pref_idx and _is_westerly_offset(pkg_offset):
+                    preference_penalty *= 0.75
                 if force_easterly_first and over_idx == 0:
                     offset_priority = pkg_offsets.get(pkg.tail, 0.0)
                 elif force_westerly_last and over_idx == len(labels) - 1:
                     offset_priority = -pkg_offsets.get(pkg.tail, 0.0)
                 score = (
                     delta_error,
-                    float(pref_distance),
+                    preference_penalty,
                     float(distance_from_over),
                     tz_penalty,
                     work,
