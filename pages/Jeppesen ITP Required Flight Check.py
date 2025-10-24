@@ -165,7 +165,7 @@ ACCOUNT_KEYS = (
 with st.sidebar:
     st.header("Date range")
     today = date.today()
-    default_end = today + timedelta(days=30)
+    default_end = today + timedelta(days=45)
     start_date, end_date = st.date_input(
         "Select departure window",
         value=(today, default_end),
