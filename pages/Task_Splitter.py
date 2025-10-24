@@ -3,6 +3,7 @@ password_gate()
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, date, time, timezone
+import math
 from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
@@ -585,8 +586,9 @@ def assign_preference_weighted(
     totals_by_index: List[float] = [0.0 for _ in labels]
     preferred_index: Dict[str, int] = {}
     pkg_offsets: Dict[str, float] = {}
+    packages_sorted = sorted(packages, key=lambda p: (p.first_local_dt, p.tail))
 
-    for pkg in sorted(packages, key=lambda p: p.first_local_dt):
+    for pkg in packages_sorted:
         pkg_offset = _offset_hours(pkg.first_local_dt)
         pkg_offsets[pkg.tail] = pkg_offset
         if len(labels) == 1 or span == 0:
@@ -598,6 +600,122 @@ def assign_preference_weighted(
         preferred_index[pkg.tail] = idx
         buckets_by_index[idx].append(pkg)
         totals_by_index[idx] += _workload(pkg)
+
+    def _assign_via_search() -> Optional[Dict[str, List[TailPackage]]]:
+        """
+        Explore a globally optimal assignment using a dynamic-programming search
+        when the number of packages is modest. This avoids the local optima that
+        the greedy balancing pass can fall into (e.g. leaving the later shifts
+        empty) while still respecting timezone preferences and per-shift
+        workload targets.
+        """
+
+        max_packages_for_search = 14
+        if len(packages_sorted) > max_packages_for_search or not packages_sorted:
+            return None
+
+        scale = 4  # workload granularity (base workload increments are 0.25)
+        workloads_int = [
+            max(1, int(round(_workload(pkg) * scale))) for pkg in packages_sorted
+        ]
+        targets_int = [
+            int(round(workload_targets[label] * scale)) for label in labels
+        ]
+
+        expected_counts: List[float] = []
+        total_packages = len(packages_sorted)
+        for label in labels:
+            weight = weights.get(label, 1.0)
+            expected = (
+                total_packages * (weight / total_weight)
+                if total_weight
+                else total_packages / float(len(labels))
+            )
+            expected_counts.append(expected)
+
+        tz_penalties: List[List[int]] = []
+        for pkg in packages_sorted:
+            pref_idx = preferred_index.get(pkg.tail, 0)
+            pkg_offset = pkg_offsets.get(pkg.tail, tz_targets[pref_idx])
+            penalty_row: List[int] = []
+            for idx, label in enumerate(labels):
+                tz_target = tz_targets[idx]
+                hours_diff = abs(pkg_offsets.get(pkg.tail, tz_target) - tz_target)
+                distance = abs(idx - pref_idx)
+                later_distance = max(0, idx - pref_idx)
+                penalty = int(round(hours_diff * scale)) * 2
+                penalty += distance * distance * scale
+                penalty += later_distance * scale
+                if pkg.has_priority and idx > pref_idx:
+                    penalty += scale * 6
+                penalty_row.append(penalty)
+            tz_penalties.append(penalty_row)
+
+        choice_cache: Dict[Tuple[int, Tuple[int, ...], Tuple[int, ...]], int] = {}
+
+        @lru_cache(None)
+        def _solve(
+            i: int, totals: Tuple[int, ...], counts: Tuple[int, ...]
+        ) -> float:
+            if i == len(packages_sorted):
+                cost = 0.0
+                for idx in range(len(labels)):
+                    diff = totals[idx] - targets_int[idx]
+                    cost += diff * diff * 5.0
+                    cost += abs(diff) * 3.0
+                    count_diff = counts[idx] - expected_counts[idx]
+                    cost += count_diff * count_diff * 2.5
+                    if expected_counts[idx] > 0.0 and counts[idx] == 0:
+                        cost += scale * 10
+                return cost
+
+            best_cost = math.inf
+            best_choice = 0
+            for idx in range(len(labels)):
+                new_totals = list(totals)
+                new_totals[idx] += workloads_int[i]
+                new_counts = list(counts)
+                new_counts[idx] += 1
+                new_totals_tuple = tuple(new_totals)
+                new_counts_tuple = tuple(new_counts)
+                cost = tz_penalties[i][idx] + _solve(
+                    i + 1, new_totals_tuple, new_counts_tuple
+                )
+                if cost < best_cost:
+                    best_cost = cost
+                    best_choice = idx
+            choice_cache[(i, totals, counts)] = best_choice
+            return best_cost
+
+        try:
+            zeros = tuple(0 for _ in labels)
+            _solve(0, zeros, zeros)
+        except RecursionError:
+            return None
+
+        assignment: Dict[str, List[TailPackage]] = {label: [] for label in labels}
+        totals_progress = [0 for _ in labels]
+        counts_progress = [0 for _ in labels]
+        for i, pkg in enumerate(packages_sorted):
+            state_totals = tuple(totals_progress)
+            state_counts = tuple(counts_progress)
+            idx = choice_cache.get((i, state_totals, state_counts))
+            if idx is None:
+                return None
+            assignment[labels[idx]].append(pkg)
+            totals_progress[idx] += workloads_int[i]
+            counts_progress[idx] += 1
+
+        for label in labels:
+            assignment[label] = sorted(
+                assignment[label], key=lambda p: (p.first_local_dt, p.tail)
+            )
+
+        return assignment
+
+    optimized_assignment = _assign_via_search()
+    if optimized_assignment is not None:
+        return optimized_assignment
 
     def _totals_delta(idx: int) -> float:
         label = labels[idx]
