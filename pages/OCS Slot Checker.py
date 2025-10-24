@@ -1,4 +1,4 @@
-from Home import password_gate
+from Home import get_secret, password_gate
 password_gate()
 import streamlit as st
 import pandas as pd
@@ -75,7 +75,7 @@ def _coerce_bool(value: Any) -> bool:
 
 
 def _build_fl3xx_config(token: Optional[str] = None) -> Fl3xxApiConfig:
-    secrets_section = st.secrets.get("fl3xx_api", {})
+    secrets_section = get_secret("fl3xx_api", {})
 
     base_url = (
         secrets_section.get("base_url")
@@ -599,7 +599,7 @@ if isinstance(date_selection, (tuple, list)) and len(date_selection) == 2:
 else:
     fl3xx_from = fl3xx_to = date_selection
 
-secrets_section = st.secrets.get("fl3xx_api", {})
+secrets_section = get_secret("fl3xx_api", {})
 env_token = os.getenv("FL3XX_API_TOKEN")
 env_auth_header = os.getenv("FL3XX_AUTH_HEADER_VALUE")
 

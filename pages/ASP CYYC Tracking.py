@@ -1,4 +1,4 @@
-from Home import password_gate
+from Home import get_secret, password_gate, require_secret
 password_gate()
 
 import imaplib
@@ -20,9 +20,9 @@ st.title("✈️ Aircraft Presence — McCall & Palmer")
 st_autorefresh(interval=180 * 1000, key="gpsfeedrefresh")
 
 # Load credentials from secrets
-EMAIL_ACCOUNT = st.secrets["EMAIL_ACCOUNT"]
-EMAIL_PASSWORD = st.secrets["EMAIL_PASSWORD"]
-IMAP_SERVER = st.secrets.get("IMAP_SERVER", "imap.gmail.com")
+EMAIL_ACCOUNT = require_secret("EMAIL_ACCOUNT")
+EMAIL_PASSWORD = require_secret("EMAIL_PASSWORD")
+IMAP_SERVER = get_secret("IMAP_SERVER", "imap.gmail.com")
 
 SENDER = "no-reply@telematics.guru"
 SUBJECT = "ASP TRACKING EMAIL"

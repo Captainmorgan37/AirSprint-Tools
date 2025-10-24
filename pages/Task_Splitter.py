@@ -1,4 +1,4 @@
-from Home import password_gate
+from Home import get_secret, password_gate
 password_gate()
 import re
 from dataclasses import dataclass, field
@@ -1183,16 +1183,11 @@ def build_shift_briefing_docs(
 st.sidebar.header("Inputs")
 
 fl3xx_cfg: Dict[str, Any] = {}
-try:
-    if "fl3xx_api" in st.secrets:
-        cfg = st.secrets["fl3xx_api"]
-        if isinstance(cfg, Mapping):
-            fl3xx_cfg = {str(k): cfg[k] for k in cfg}
-        elif isinstance(cfg, dict):
-            fl3xx_cfg = dict(cfg)
-except Exception:
-    # Accessing secrets outside Streamlit Cloud may raise; ignore gracefully.
-    fl3xx_cfg = {}
+cfg = get_secret("fl3xx_api", {})
+if isinstance(cfg, Mapping):
+    fl3xx_cfg = {str(k): cfg[k] for k in cfg}
+elif isinstance(cfg, dict):
+    fl3xx_cfg = dict(cfg)
 
 has_live_credentials = bool(fl3xx_cfg.get("api_token") or fl3xx_cfg.get("auth_header"))
 

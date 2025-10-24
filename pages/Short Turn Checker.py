@@ -1,4 +1,4 @@
-from Home import password_gate
+from Home import get_secret, password_gate
 password_gate()
 import os
 from collections.abc import Mapping
@@ -438,7 +438,7 @@ def _extract_datetime(payload: dict, options):
 
 
 def _build_fl3xx_config(token: str) -> Fl3xxApiConfig:
-    secrets_section = st.secrets.get("fl3xx_api", {})
+    secrets_section = get_secret("fl3xx_api", {})
 
     base_url = secrets_section.get("base_url") or os.getenv("FL3XX_BASE_URL") or Fl3xxApiConfig().base_url
 
@@ -944,10 +944,11 @@ if source != "FL3XX API":
 
 if source == "FL3XX API":
     default_token = ""
-    if "fl3xx_api" in st.secrets:
-        default_token = st.secrets["fl3xx_api"].get("api_token", "")
+    secrets_section = get_secret("fl3xx_api", {})
+    if isinstance(secrets_section, Mapping):
+        default_token = secrets_section.get("api_token", "")
     if not default_token:
-        default_token = st.secrets.get("FL3XX_TOKEN", "")
+        default_token = get_secret("FL3XX_TOKEN", "")
 
     token = default_token
     if not token:

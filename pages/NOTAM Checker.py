@@ -1,4 +1,4 @@
-from Home import password_gate
+from Home import password_gate, require_secret
 password_gate()
 import streamlit as st
 import pandas as pd
@@ -20,8 +20,8 @@ from flight_leg_utils import (
 from notam_filters import is_taxiway_only_notam
 
 # ----- CONFIG -----
-FAA_CLIENT_ID = st.secrets["FAA_CLIENT_ID"]
-FAA_CLIENT_SECRET = st.secrets["FAA_CLIENT_SECRET"]
+FAA_CLIENT_ID = require_secret("FAA_CLIENT_ID")
+FAA_CLIENT_SECRET = require_secret("FAA_CLIENT_SECRET")
 KEYWORDS = ["CLOSED", "CLSD"]  # Add any more keywords here
 HIDE_KEYWORDS = ["crane", "RUSSIAN", "CONGO", "OBST RIG", "CANCELLED", "CANCELED", 
                  "SAFETY AREA NOT STD", "GRASS CUTTING", "OBST TOWER", "SFC MARKINGS NOT STD"]
