@@ -1,10 +1,12 @@
 from Home import password_gate
 password_gate()
 
+import hashlib
 import html
+import json
 from collections import defaultdict
 from datetime import date, datetime, time, timedelta, timezone
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import requests
 import streamlit as st
@@ -206,13 +208,33 @@ def _tail_order_key(tail: str) -> Tuple[int, str]:
     return (TAIL_INDEX.get(tail, len(TAIL_DISPLAY_ORDER)), tail)
 
 
-@st.cache_data(show_spinner=True, ttl=300)
+def _settings_digest(settings: Mapping[str, Any]) -> str:
+    def _normalise(value: Any) -> Any:
+        if isinstance(value, Mapping):
+            return {str(k): _normalise(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple, set)):
+            return [_normalise(item) for item in value]
+        if isinstance(value, datetime):
+            return value.isoformat()
+        return value
+
+    normalized = {str(k): _normalise(v) for k, v in settings.items()}
+    encoded = json.dumps(normalized, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+@st.cache_data(show_spinner=True, ttl=300, hash_funcs={dict: lambda _: "0"})
 def load_flight_rows(
+    settings_digest: str,
     settings: Dict[str, Any],
     *,
     from_date: date,
     to_date: date,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any], Dict[str, Any]]:
+    # ``settings_digest`` participates in the cache key to ensure that changes to
+    # FL3XX credentials invalidate the cached data, while ``hash_funcs`` above
+    # avoids hashing the secrets themselves.
+    _ = settings_digest
     config = build_fl3xx_api_config(settings)
     flights, metadata = fetch_flights(config, from_date=from_date, to_date=to_date)
     normalized_rows, normalization_stats = normalize_fl3xx_payload({"items": flights})
@@ -406,13 +428,22 @@ with st.sidebar:
 window_start_date, window_end_date = _normalise_date_range(date_selection)
 fetch_to_date = window_end_date + timedelta(days=1)
 
-fl3xx_settings = st.secrets.get("fl3xx_api")
-if not fl3xx_settings:
+fl3xx_settings_raw = st.secrets.get("fl3xx_api")
+if not fl3xx_settings_raw:
     st.warning("Add FL3XX credentials to `.streamlit/secrets.toml` under `[fl3xx_api]` to fetch flights.")
     st.stop()
 
 try:
+    fl3xx_settings = dict(fl3xx_settings_raw)
+except (TypeError, ValueError):
+    st.error("FL3XX API secrets must be provided as key/value pairs.")
+    st.stop()
+
+settings_digest = _settings_digest(fl3xx_settings)
+
+try:
     flight_rows, metadata, normalization_stats = load_flight_rows(
+        settings_digest,
         fl3xx_settings,
         from_date=window_start_date,
         to_date=fetch_to_date,
