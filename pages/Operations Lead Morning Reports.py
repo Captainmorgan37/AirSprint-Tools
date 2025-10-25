@@ -1,13 +1,16 @@
-from Home import password_gate
-password_gate()
-import pandas as pd
-import streamlit as st
 from datetime import date, datetime, timedelta, timezone
 from typing import Iterable, List, Mapping, Optional, Sequence, Tuple
 
+import pandas as pd
+import streamlit as st
 
 from fl3xx_api import compute_fetch_dates
+from Home import configure_page, password_gate, render_sidebar
 from morning_reports import MorningReportResult, MorningReportRun, run_morning_reports
+
+configure_page(page_title="Operations Lead Morning Reports")
+password_gate()
+render_sidebar()
 
 
 _EXPECTED_REPORTS: Sequence[Tuple[str, str, str]] = (
@@ -68,7 +71,6 @@ def _build_expected_reports(
     return ordered_reports, missing_codes
 
 
-st.set_page_config(page_title="Operations Lead Morning Reports", layout="wide")
 st.title("📋 Operations Lead Morning Reports")
 
 

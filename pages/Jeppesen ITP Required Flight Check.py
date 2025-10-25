@@ -1,9 +1,5 @@
 from __future__ import annotations
 
-from Home import password_gate
-
-password_gate()
-
 import re
 from collections.abc import Mapping
 from dataclasses import replace
@@ -30,9 +26,13 @@ from jeppesen_itp_utils import (
     country_display_name,
     normalize_country_name,
 )
+from Home import configure_page, password_gate, render_sidebar
+
+configure_page(page_title="Jeppesen ITP Required Flight Check")
+password_gate()
+render_sidebar()
 
 
-st.set_page_config(page_title="Jeppesen ITP Required Flight Check", layout="wide")
 st.title("🛫 Jeppesen ITP Required Flight Check")
 
 st.write(

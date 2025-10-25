@@ -1,18 +1,21 @@
-from Home import get_secret, password_gate, require_secret
-password_gate()
-
-import imaplib
 import email
+import imaplib
 from datetime import datetime, timedelta
+
 import pandas as pd
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 from zoneinfo_compat import ZoneInfo
 
+from Home import configure_page, get_secret, password_gate, render_sidebar, require_secret
+
+configure_page(page_title="Aircraft Presence (McCall/Palmer)")
+password_gate()
+render_sidebar()
+
 # ----------------------------
 # Config
 # ----------------------------
-st.set_page_config(page_title="Aircraft Presence (McCall/Palmer)", layout="wide")
 st.title("✈️ Aircraft Presence — McCall & Palmer")
 
 
