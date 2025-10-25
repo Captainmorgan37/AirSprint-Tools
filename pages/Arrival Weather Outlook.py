@@ -276,17 +276,24 @@ def _select_forecast_period(
         key=lambda item: item.get("issue_time") or datetime.min.replace(tzinfo=timezone.utc),
         reverse=True,
     )
+    arrival_dt = _ensure_utc(arrival_dt)
+
     if arrival_dt is not None:
         for report in sorted_reports:
             valid_from = _ensure_utc(report.get("valid_from"))
             valid_to = _ensure_utc(report.get("valid_to"))
-            after_start = valid_from is None or arrival_dt >= valid_from
-            before_end = valid_to is None or arrival_dt < valid_to
-            if after_start and before_end:
+            if (
+                valid_from is not None
+                and valid_to is not None
+                and valid_from <= arrival_dt < valid_to
+            ):
                 period = _match_period(report.get("forecast", []), arrival_dt)
-                return report, period
+                if period:
+                    return report, period
+
     latest = sorted_reports[0]
-    return latest, _match_period(latest.get("forecast", []), arrival_dt)
+    fallback_period = _match_period(latest.get("forecast", []), arrival_dt)
+    return latest, fallback_period
 
 
 def _match_period(periods: Iterable[Dict[str, Any]], arrival_dt: Optional[datetime]) -> Optional[Dict[str, Any]]:
@@ -303,7 +310,8 @@ def _match_period(periods: Iterable[Dict[str, Any]], arrival_dt: Optional[dateti
             end = _ensure_utc(period.get("to_time"))
             after_start = start is None or arrival_dt >= start
             before_end = end is None or arrival_dt < end
-            if after_start and before_end:
+            touches_end = end is not None and arrival_dt == end
+            if after_start and (before_end or touches_end):
                 return period
     return sorted_periods[-1]
 
