@@ -197,6 +197,7 @@ _METAR_VIS_REGEX = re.compile(
     r")SM\b"
 )
 _METAR_TEMP_DEW_REGEX = re.compile(r"\b(?P<temp>M?\d{2})/(?P<dew>M?\d{2})\b")
+_CEILING_CODE_REGEX = re.compile(r"\b(BKN|OVC|VV)\s*(\d{2,4})", re.IGNORECASE)
 
 
 def _format_numeric(value, decimals: int | None = None) -> str | None:
@@ -400,22 +401,96 @@ def _parse_visibility_value(value) -> float | None:
     return _try_float(text)
 
 
-def _should_highlight_visibility(value) -> bool:
+def _get_visibility_highlight(value) -> str | None:
     if value in (None, ""):
-        return False
+        return None
 
     if isinstance(value, str):
         stripped = value.strip()
         if not stripped:
-            return False
+            return None
         upper_value = stripped.upper()
         if "/" in upper_value and "SM" not in upper_value:
-            return False
+            return None
 
     vis_value = _parse_visibility_value(value)
     if vis_value is None:
-        return False
-    return vis_value <= 2.0
+        return None
+    if vis_value <= 2.0:
+        return "red"
+    if vis_value <= 3.0:
+        return "yellow"
+    return None
+
+
+def _parse_ceiling_value(value) -> float | None:
+    if value in (None, "", [], "M"):
+        return None
+
+    if isinstance(value, (int, float)):
+        return float(value)
+
+    if isinstance(value, (list, tuple)) and value:
+        lowest: float | None = None
+        for item in value:
+            parsed = _parse_ceiling_value(item)
+            if parsed is None:
+                continue
+            if lowest is None or parsed < lowest:
+                lowest = parsed
+        return lowest
+
+    if isinstance(value, dict):
+        for key in ("value", "ceiling", "ceiling_ft_agl"):
+            if key in value:
+                parsed = _parse_ceiling_value(value[key])
+                if parsed is not None:
+                    return parsed
+        return None
+
+    try:
+        raw_text = str(value)
+    except Exception:
+        return None
+
+    text = raw_text.strip()
+    if not text:
+        return None
+
+    upper_text = text.upper()
+    match = _CEILING_CODE_REGEX.search(upper_text)
+    if match:
+        height_str = match.group(2)
+        if height_str.isdigit():
+            height_value = int(height_str)
+            following = upper_text[match.end() :].lstrip()
+            if following.startswith(("FT", "FT.", "FEET")):
+                return float(height_value)
+            if len(height_str) == 3:
+                return float(height_value * 100)
+            return float(height_value)
+
+    cleaned = upper_text.replace(",", "")
+    for suffix in (" FT", "FT", " FT.", "FT."):
+        if cleaned.endswith(suffix):
+            cleaned = cleaned[: -len(suffix)].strip()
+            break
+
+    try:
+        return float(cleaned)
+    except ValueError:
+        return None
+
+
+def _get_ceiling_highlight(value) -> str | None:
+    ceiling_value = _parse_ceiling_value(value)
+    if ceiling_value is None:
+        return None
+    if ceiling_value <= 1000:
+        return "red"
+    if ceiling_value <= 2000:
+        return "yellow"
+    return None
 
 
 def _should_highlight_weather(value) -> bool:
@@ -426,33 +501,46 @@ def _should_highlight_weather(value) -> bool:
     return "TS" in value.upper()
 
 
-def _wrap_highlight(text: str) -> str:
-    return f"<span style='color:#c41230;font-weight:bold'>{text}</span>"
+def _wrap_highlight(text: str, level: str = "red") -> str:
+    color_map = {
+        "red": "#c41230",
+        "yellow": "#b8860b",
+    }
+    color = color_map.get(level, color_map["red"])
+    return f"<span style='color:{color};font-weight:bold'>{text}</span>"
 
 
 def _format_detail_entry(label: str, value) -> str:
     value_text = "—" if value in (None, "") else str(value)
     label_lower = label.lower()
-    highlight = False
-    if "visibility" in label_lower and _should_highlight_visibility(value):
-        highlight = True
-    if "weather" in label_lower and _should_highlight_weather(value_text):
-        highlight = True
-    if highlight:
-        value_text = _wrap_highlight(value_text)
+    highlight_level = None
+    if "visibility" in label_lower:
+        highlight_level = _get_visibility_highlight(value)
+    if not highlight_level and "ceiling" in label_lower:
+        highlight_level = _get_ceiling_highlight(value)
+    if not highlight_level and "cloud" in label_lower:
+        highlight_level = _get_ceiling_highlight(value)
+    if not highlight_level and "weather" in label_lower and _should_highlight_weather(value_text):
+        highlight_level = "red"
+    if highlight_level:
+        value_text = _wrap_highlight(value_text, highlight_level)
     return f"<strong>{label}:</strong> {value_text}"
 
 
 def _format_inline_detail(label: str, value) -> str:
     value_text = "—" if value in (None, "") else str(value)
     label_lower = label.lower()
-    highlight = False
-    if "visibility" in label_lower and _should_highlight_visibility(value):
-        highlight = True
-    if "weather" in label_lower and _should_highlight_weather(value_text):
-        highlight = True
+    highlight_level = None
+    if "visibility" in label_lower:
+        highlight_level = _get_visibility_highlight(value)
+    if not highlight_level and "ceiling" in label_lower:
+        highlight_level = _get_ceiling_highlight(value)
+    if not highlight_level and "cloud" in label_lower:
+        highlight_level = _get_ceiling_highlight(value)
+    if not highlight_level and "weather" in label_lower and _should_highlight_weather(value_text):
+        highlight_level = "red"
     text = f"{label}: {value_text}"
-    return _wrap_highlight(text) if highlight else text
+    return _wrap_highlight(text, highlight_level) if highlight_level else text
 
 
 def _parse_signed_temperature(value: str) -> int | None:
@@ -503,6 +591,17 @@ def parse_metar_raw(raw_text: str) -> dict:
             parsed["temp"] = temp_value
         if dew_value is not None:
             parsed["dewpoint"] = dew_value
+
+    ceiling_values: list[float] = []
+    for match in _CEILING_CODE_REGEX.finditer(raw_text):
+        prefix, height_text = match.groups()
+        if not height_text or not height_text.isdigit():
+            continue
+        parsed_value = _parse_ceiling_value(f"{prefix.upper()}{height_text}")
+        if parsed_value is not None:
+            ceiling_values.append(parsed_value)
+    if ceiling_values:
+        parsed["ceiling"] = min(ceiling_values)
 
     return parsed
 
@@ -588,8 +687,9 @@ def build_metar_summary(report_entry: dict) -> list[str]:
             vis_line = f"Visibility {vis_text} sm"
         else:
             vis_line = f"Visibility {vis_text}"
-        if _should_highlight_visibility(visibility):
-            vis_line = _wrap_highlight(vis_line)
+        highlight_level = _get_visibility_highlight(visibility)
+        if highlight_level:
+            vis_line = _wrap_highlight(vis_line, highlight_level)
         summary_lines.append(vis_line)
 
     altimeter = _format_numeric(
@@ -599,11 +699,14 @@ def build_metar_summary(report_entry: dict) -> list[str]:
     if altimeter:
         summary_lines.append(f"Altimeter {altimeter} inHg")
 
-    ceiling = _format_numeric(
-        _first_non_empty(metar_data, "ceiling", "ceiling_ft_agl")
-    )
+    ceiling_value = _first_non_empty(metar_data, "ceiling", "ceiling_ft_agl")
+    ceiling = _format_numeric(ceiling_value)
     if ceiling:
-        summary_lines.append(f"Ceiling {ceiling} ft")
+        ceiling_line = f"Ceiling {ceiling} ft"
+        ceiling_level = _get_ceiling_highlight(ceiling_value if ceiling_value is not None else ceiling)
+        if ceiling_level:
+            ceiling_line = _wrap_highlight(ceiling_line, ceiling_level)
+        summary_lines.append(ceiling_line)
 
     weather = _format_weather(metar_data)
     if weather:
@@ -975,6 +1078,15 @@ def get_metar_reports(icao_codes: tuple[str, ...]):
         )
         if not isinstance(metar_data, dict):
             metar_data = {}
+
+        fallback_from_raw = parse_metar_raw(raw_text)
+        if fallback_from_raw:
+            ceiling_fallback = fallback_from_raw.get("ceiling")
+            if ceiling_fallback is not None:
+                if metar_data.get("ceiling") in (None, "", []):
+                    metar_data["ceiling"] = ceiling_fallback
+                if metar_data.get("ceiling_ft_agl") in (None, "", []):
+                    metar_data["ceiling_ft_agl"] = ceiling_fallback
         details = build_detail_list(metar_data, METAR_DETAIL_FIELDS)
 
         if not station:
@@ -1212,16 +1324,19 @@ def format_taf_for_display_html(raw_taf: str) -> str:
         tokens_html = []
         for token in line:
             token_str = token or ""
-            highlight = False
-            if _should_highlight_visibility(token_str):
-                highlight = True
-            if _should_highlight_weather(token_str):
-                highlight = True
             escaped_token = html.escape(token_str)
-            if highlight:
+            ceiling_level = _get_ceiling_highlight(token_str)
+            if ceiling_level:
+                tokens_html.append(_wrap_highlight(escaped_token, ceiling_level))
+                continue
+            visibility_level = _get_visibility_highlight(token_str)
+            if visibility_level:
+                tokens_html.append(_wrap_highlight(escaped_token, visibility_level))
+                continue
+            if _should_highlight_weather(token_str):
                 tokens_html.append(_wrap_highlight(escaped_token))
-            else:
-                tokens_html.append(escaped_token)
+                continue
+            tokens_html.append(escaped_token)
         html_lines.append(" ".join(tokens_html))
 
     joined = "<br>".join(html_lines)
