@@ -223,17 +223,35 @@ def build_detail_list(data_dict: Any, field_map: Iterable[Tuple[Iterable[str], s
     return details
 
 
+def _unwrap_time_value(value: Any) -> Any:
+    """Return the most useful representation of a time-like structure."""
+
+    if isinstance(value, MutableMapping):
+        for key in ("value", "dateTime", "date_time", "iso", "iso8601", "timestamp"):
+            if key in value and value[key] not in (None, "", []):
+                return _unwrap_time_value(value[key])
+        for key in ("repr", "text", "raw", "string"):
+            if key in value and value[key] not in (None, "", []):
+                return value[key]
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        for item in value:
+            candidate = _unwrap_time_value(item)
+            if candidate not in (None, "", []):
+                return candidate
+    return value
+
+
 def _extract_time_field(segment: MutableMapping[str, Any], keys: Sequence[str]) -> Any:
     for key in keys:
         if key in segment and segment[key] not in (None, "", []):
-            return segment[key]
+            return _unwrap_time_value(segment[key])
 
     for container_key in ("change", "time", "period", "window", "transition"):
         nested = segment.get(container_key)
         if isinstance(nested, MutableMapping):
             value = _extract_time_field(nested, keys)
             if value not in (None, "", []):
-                return value
+                return _unwrap_time_value(value)
     return None
 
 

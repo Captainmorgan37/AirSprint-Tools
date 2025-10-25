@@ -194,3 +194,62 @@ def test_get_taf_reports_extracts_modern_forecast_format(monkeypatch: pytest.Mon
     cloud_detail = next((value for label, value in third_period["details"] if label == "Clouds"), None)
     assert cloud_detail == "FEW 24000ft"
 
+
+def test_get_taf_reports_unwraps_nested_time_values(monkeypatch: pytest.MonkeyPatch):
+    payload = {
+        "features": [
+            {
+                "properties": {
+                    "station": "CYYZ",
+                    "issueTime": "2025-10-25T17:40:00Z",
+                    "validTimeFrom": "2025-10-25T18:00:00Z",
+                    "validTimeTo": "2025-10-26T24:00:00Z",
+                    "rawTAF": "TAF CYYZ 251740Z 2518/2624 30008KT",
+                    "forecast": {
+                        "segments": [
+                            {
+                                "startTime": {"value": "2025-10-25T18:00:00Z"},
+                                "endTime": {"value": "2025-10-26T02:00:00Z"},
+                                "wind": {
+                                    "direction": {"value": 300},
+                                    "speed": {"value": 8},
+                                },
+                                "visibility": {"repr": "P6SM"},
+                            },
+                            {
+                                "change": {
+                                    "time": {
+                                        "from": {"value": "2025-10-26T14:00:00Z", "repr": "2614/"},
+                                        "to": {"value": "2025-10-26T16:00:00Z"},
+                                    }
+                                },
+                                "wind": {
+                                    "direction": {"value": 20},
+                                    "speed": {"value": 8},
+                                },
+                                "visibility": {"repr": "P6SM"},
+                            },
+                        ]
+                    },
+                }
+            }
+        ]
+    }
+
+    def fake_get(url: str, params: Dict[str, Any], timeout: int) -> DummyResponse:
+        return DummyResponse(payload)
+
+    monkeypatch.setattr(taf_utils.requests, "get", fake_get)
+
+    reports = taf_utils.get_taf_reports(["CYYZ"])
+
+    station_report = reports["CYYZ"][0]
+    periods = station_report["forecast"]
+    assert len(periods) == 2
+    first, second = periods
+
+    assert first["from_time"] == datetime(2025, 10, 25, 18, 0, tzinfo=timezone.utc)
+    assert first["to_time"] == datetime(2025, 10, 26, 2, 0, tzinfo=timezone.utc)
+
+    assert second["from_time"] == datetime(2025, 10, 26, 14, 0, tzinfo=timezone.utc)
+    assert second["to_time"] == datetime(2025, 10, 26, 16, 0, tzinfo=timezone.utc)
