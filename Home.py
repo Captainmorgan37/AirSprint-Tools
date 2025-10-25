@@ -11,6 +11,7 @@ _SECRET_RETRY_MAX = 6
 _SECRET_RETRY_DELAY_SECONDS = 0.2
 _MISSING = object()
 _PAGE_CONFIGURED_KEY = "_page_configured"
+_SIDEBAR_HIDDEN_KEY = "_sidebar_nav_hidden"
 _DEFAULT_PAGE_TITLE = "AirSprint Ops Tools"
 _DEFAULT_PAGE_ICON = "✈️"
 
@@ -67,18 +68,40 @@ def get_secret(key: str, default: Any | None = None) -> Any:
     return _fetch_secret(key, required=False, default=sentinel)
 
 
+def _hide_builtin_sidebar_nav() -> None:
+    """Remove Streamlit's default page navigator from the sidebar."""
+
+    if st.session_state.get(_SIDEBAR_HIDDEN_KEY):
+        return
+
+    st.markdown(
+        """
+        <style>
+            section[data-testid="stSidebar"] div[data-testid="stSidebarNav"] {
+                display: none;
+            }
+            section[data-testid="stSidebar"] div[data-testid="stSidebarNav"] + div {
+                padding-top: 0;
+            }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.session_state[_SIDEBAR_HIDDEN_KEY] = True
+
+
 def configure_page(*, page_title: str | None = None) -> None:
     """Set the Streamlit page configuration once per run."""
 
-    if st.session_state.get(_PAGE_CONFIGURED_KEY):
-        return
+    if not st.session_state.get(_PAGE_CONFIGURED_KEY):
+        st.set_page_config(
+            page_title=page_title or _DEFAULT_PAGE_TITLE,
+            page_icon=_DEFAULT_PAGE_ICON,
+            layout="wide",
+        )
+        st.session_state[_PAGE_CONFIGURED_KEY] = True
 
-    st.set_page_config(
-        page_title=page_title or _DEFAULT_PAGE_TITLE,
-        page_icon=_DEFAULT_PAGE_ICON,
-        layout="wide",
-    )
-    st.session_state[_PAGE_CONFIGURED_KEY] = True
+    _hide_builtin_sidebar_nav()
 
 
 def _sidebar_links() -> list[dict[str, Any]]:
