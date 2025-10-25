@@ -916,6 +916,10 @@ def get_faa_notams(icao: str):
         for t in translations:
             if t.get("type") == "LOCAL_FORMAT":
                 simple_text = t.get("simpleText")
+        if simple_text:
+            normalized_simple = simple_text.strip().upper()
+            if normalized_simple == "NOT AVAILABLE" or normalized_simple.endswith(" NOT AVAILABLE"):
+                continue
         text_to_use = simple_text if simple_text else notam_text
 
         # Skip ICAO-format NOTAMs (keep only LOCAL_FORMAT / domestic)
