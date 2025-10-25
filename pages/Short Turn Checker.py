@@ -1,5 +1,3 @@
-from Home import get_secret, password_gate
-password_gate()
 import os
 from collections.abc import Mapping
 from datetime import datetime, timedelta
@@ -10,11 +8,15 @@ import streamlit as st
 
 
 from fl3xx_api import Fl3xxApiConfig, fetch_flights, fetch_postflight
+from Home import configure_page, get_secret, password_gate, render_sidebar
+
+configure_page(page_title="Short Turns Highlighter")
+password_gate()
+render_sidebar()
 
 # ----------------------------
 # App Config
 # ----------------------------
-st.set_page_config(page_title="Short Turns Highlighter", layout="wide")
 st.title("✈️ Short Turn/Priority Status Viewer")
 
 
