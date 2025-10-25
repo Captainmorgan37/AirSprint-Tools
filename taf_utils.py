@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, MutableMapping, Sequence, Tuple
 
 import json
+import re
 import requests
 
 
@@ -348,6 +349,172 @@ def _normalize_aviationweather_features(data: Any) -> Iterable[Dict[str, Any]]:
                     yield item  # type: ignore[misc]
 
 
+def _fallback_parse_raw_taf(
+    raw_taf: str,
+    issue_dt: datetime | None,
+    valid_from_dt: datetime | None,
+    valid_to_dt: datetime | None,
+) -> List[Dict[str, Any]]:
+    """Parse raw TAF text into simple forecast segments when none are provided."""
+
+    if not (raw_taf and issue_dt and valid_from_dt and valid_to_dt):
+        return []
+
+    taf_main = raw_taf.split(" RMK")[0]
+    tokens = taf_main.split()
+
+    idx = 0
+    if idx < len(tokens) and tokens[idx].startswith("TAF"):
+        idx += 1
+    if idx < len(tokens) and re.match(r"^[A-Z]{3,4}$", tokens[idx]):
+        idx += 1
+    if idx < len(tokens) and re.match(r"^\d{6}Z$", tokens[idx]):
+        idx += 1
+    if idx < len(tokens) and re.match(r"^\d{4}/\d{4}$", tokens[idx]):
+        idx += 1
+
+    CONTROL_TOKENS = ("TEMPO", "PROB", "BECMG")
+
+    def _parse_fm(token: str) -> datetime | None:
+        match = re.match(r"FM(\d{2})(\d{2})(\d{2})", token)
+        if not match or not issue_dt:
+            return None
+        day = int(match.group(1))
+        hour = int(match.group(2))
+        minute = int(match.group(3))
+
+        year = issue_dt.year
+        month = issue_dt.month
+        if day < issue_dt.day - 15:
+            month += 1
+            if month > 12:
+                month = 1
+                year += 1
+
+        return datetime(year, month, day, hour, minute, tzinfo=timezone.utc)
+
+    segs_raw: List[Tuple[datetime, List[str]]] = []
+    cur_start = valid_from_dt
+    cur_tokens: List[str] = []
+
+    i = idx
+    while i < len(tokens):
+        token = tokens[i]
+
+        fm_dt = _parse_fm(token)
+        if fm_dt:
+            if cur_tokens and cur_start:
+                segs_raw.append((cur_start, list(cur_tokens)))
+            cur_start = fm_dt
+            cur_tokens = []
+            i += 1
+            continue
+
+        if token == "TEMPO":
+            i += 1
+            if i < len(tokens) and re.match(r"^\d{4}/\d{4}$", tokens[i]):
+                i += 1
+            while i < len(tokens):
+                peek = tokens[i]
+                if peek in CONTROL_TOKENS or _parse_fm(peek):
+                    break
+                i += 1
+            continue
+
+        if token.startswith("PROB") and re.match(r"^PROB\d{2}$", token):
+            i += 1
+            if i < len(tokens) and tokens[i] == "TEMPO":
+                i += 1
+                if i < len(tokens) and re.match(r"^\d{4}/\d{4}$", tokens[i]):
+                    i += 1
+            while i < len(tokens):
+                peek = tokens[i]
+                if peek in CONTROL_TOKENS or _parse_fm(peek):
+                    break
+                i += 1
+            continue
+
+        if token.startswith("BECMG"):
+            i += 1
+            if i < len(tokens) and re.match(r"^\d{4}/\d{4}$", tokens[i]):
+                i += 1
+            continue
+
+        if cur_start:
+            cur_tokens.append(token)
+        i += 1
+
+    if cur_tokens and cur_start:
+        segs_raw.append((cur_start, list(cur_tokens)))
+
+    wind_re = re.compile(r"^(?P<dir>\d{3}|VRB)(?P<spd>\d{2,3})(G(?P<gst>\d{2,3}))?KT$")
+    cloud_re = re.compile(r"^(FEW|SCT|BKN|OVC)(\d{3})([A-Z]{2,3})?$")
+
+    segments: List[Dict[str, Any]] = []
+
+    for index, (segment_start, segment_tokens) in enumerate(segs_raw):
+        if index + 1 < len(segs_raw):
+            segment_end = segs_raw[index + 1][0]
+        else:
+            segment_end = valid_to_dt
+
+        wind_dir = wind_spd = wind_gust = None
+        visibility = None
+        weather_codes: List[str] = []
+        cloud_layers: List[str] = []
+
+        for token in segment_tokens:
+            wind_match = wind_re.match(token)
+            if wind_match and wind_spd is None:
+                wind_dir = wind_match.group("dir")
+                wind_spd = wind_match.group("spd")
+                wind_gust = wind_match.group("gst")
+                continue
+
+            if visibility is None and (token.endswith("SM") or token == "P6SM"):
+                visibility = token
+                continue
+
+            cloud_match = cloud_re.match(token)
+            if cloud_match:
+                coverage = cloud_match.group(1)
+                base_hundreds = int(cloud_match.group(2))
+                suffix = cloud_match.group(3) or ""
+                base_ft = base_hundreds * 100
+                cloud_layers.append(f"{coverage} {base_ft}ft{suffix}")
+                continue
+
+            if re.match(r"^[-+A-Z]{2,}$", token) and not token.endswith("KT"):
+                weather_codes.append(token)
+
+        details: List[Tuple[str, Any]] = []
+        if wind_dir or wind_spd or wind_gust:
+            if wind_dir:
+                details.append(("Wind Dir (°)", wind_dir))
+            if wind_spd:
+                details.append(("Wind Speed (kt)", wind_spd))
+            if wind_gust:
+                details.append(("Wind Gust (kt)", wind_gust))
+        if visibility:
+            details.append(("Visibility", visibility))
+        if weather_codes:
+            details.append(("Weather", ", ".join(weather_codes)))
+        if cloud_layers:
+            details.append(("Clouds", ", ".join(cloud_layers)))
+
+        segments.append(
+            {
+                "from_display": segment_start.strftime("%b %d %Y, %H:%MZ"),
+                "from_time": segment_start,
+                "to_display": segment_end.strftime("%b %d %Y, %H:%MZ") if segment_end else "N/A",
+                "to_time": segment_end,
+                "details": details,
+            }
+        )
+
+    return segments
+
+
 def get_taf_reports(icao_codes: Sequence[str]) -> Dict[str, List[Dict[str, Any]]]:
     if not icao_codes:
         return {}
@@ -501,6 +668,14 @@ def get_taf_reports(icao_codes: Sequence[str]) -> Dict[str, List[Dict[str, Any]]
                     "to_time": fc_to_dt,
                     "details": fc_details,
                 }
+            )
+
+        if not forecast_periods:
+            forecast_periods = _fallback_parse_raw_taf(
+                raw_text,
+                issue_dt,
+                valid_from_dt,
+                valid_to_dt,
             )
 
         taf_reports.setdefault(station, []).append(

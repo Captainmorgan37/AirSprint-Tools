@@ -296,30 +296,44 @@ def _select_forecast_period(
     return latest, fallback_period
 
 
-def _match_period(periods: Iterable[Dict[str, Any]], arrival_dt: Optional[datetime]) -> Optional[Dict[str, Any]]:
+def _match_period(
+    periods: Iterable[Dict[str, Any]], arrival_dt: Optional[datetime]
+) -> Optional[Dict[str, Any]]:
     period_list = [period for period in periods if isinstance(period, dict)]
     if not period_list:
         return None
+
     sorted_periods = sorted(
         period_list,
-        key=lambda period: period.get("from_time") or datetime.min.replace(tzinfo=timezone.utc),
+        key=lambda period: period.get("from_time")
+        or datetime.min.replace(tzinfo=timezone.utc),
     )
+
     arrival_dt = _ensure_utc(arrival_dt)
-    if arrival_dt is not None:
-        latest_before: Optional[Dict[str, Any]] = None
-        for period in sorted_periods:
-            start = _ensure_utc(period.get("from_time"))
-            end = _ensure_utc(period.get("to_time"))
-            after_start = start is None or arrival_dt >= start
-            before_end = end is None or arrival_dt < end
-            touches_end = end is not None and arrival_dt == end
-            if start is not None and arrival_dt >= start:
-                latest_before = period
-            if after_start and (before_end or touches_end):
-                return period
-        if latest_before is not None:
-            return latest_before
-    return sorted_periods[-1]
+
+    if arrival_dt is None:
+        return sorted_periods[-1]
+
+    for period in sorted_periods:
+        start = _ensure_utc(period.get("from_time"))
+        end = _ensure_utc(period.get("to_time"))
+        if start and end and start <= arrival_dt < end:
+            return period
+        if start and not end and arrival_dt >= start:
+            return period
+        if not start and end and arrival_dt < end:
+            return period
+
+    prior_periods = [
+        period
+        for period in sorted_periods
+        if (_ensure_utc(period.get("from_time")) or datetime.min.replace(tzinfo=timezone.utc))
+        <= arrival_dt
+    ]
+    if prior_periods:
+        return prior_periods[-1]
+
+    return sorted_periods[0]
 
 
 def _summarise_period(period: Dict[str, Any]) -> List[Tuple[str, str]]:
