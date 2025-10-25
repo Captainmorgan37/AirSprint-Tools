@@ -36,12 +36,19 @@ FORECAST_RELEVANT_KEYS: Tuple[str, ...] = (
     "timeTo",
     "time_from",
     "time_to",
+    "startTime",
+    "endTime",
+    "start_time",
+    "end_time",
+    "start",
+    "end",
     "wxString",
     "wx_string",
     "weather",
     "windDir",
     "wind_direction",
     "wind_dir",
+    "wind",
     "windSpeed",
     "wind_speed",
     "windSpd",
@@ -55,6 +62,26 @@ FORECAST_RELEVANT_KEYS: Tuple[str, ...] = (
     "cloudList",
     "skyCondition",
     "sky_condition",
+)
+
+TIME_FROM_FIELDS: Tuple[str, ...] = (
+    "fcstTimeFrom",
+    "timeFrom",
+    "time_from",
+    "startTime",
+    "start_time",
+    "from",
+    "start",
+)
+
+TIME_TO_FIELDS: Tuple[str, ...] = (
+    "fcstTimeTo",
+    "timeTo",
+    "time_to",
+    "endTime",
+    "end_time",
+    "to",
+    "end",
 )
 
 
@@ -196,6 +223,108 @@ def build_detail_list(data_dict: Any, field_map: Iterable[Tuple[Iterable[str], s
     return details
 
 
+def _unwrap_time_value(value: Any) -> Any:
+    """Return the most useful representation of a time-like structure."""
+
+    if isinstance(value, MutableMapping):
+        for key in ("value", "dateTime", "date_time", "iso", "iso8601", "timestamp"):
+            if key in value and value[key] not in (None, "", []):
+                return _unwrap_time_value(value[key])
+        for key in ("repr", "text", "raw", "string"):
+            if key in value and value[key] not in (None, "", []):
+                return value[key]
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        for item in value:
+            candidate = _unwrap_time_value(item)
+            if candidate not in (None, "", []):
+                return candidate
+    return value
+
+
+def _extract_time_field(segment: MutableMapping[str, Any], keys: Sequence[str]) -> Any:
+    for key in keys:
+        if key in segment and segment[key] not in (None, "", []):
+            return _unwrap_time_value(segment[key])
+
+    for container_key in ("change", "time", "period", "window", "transition"):
+        nested = segment.get(container_key)
+        if isinstance(nested, MutableMapping):
+            value = _extract_time_field(nested, keys)
+            if value not in (None, "", []):
+                return _unwrap_time_value(value)
+    return None
+
+
+def _normalise_forecast_segment(segment: MutableMapping[str, Any]) -> MutableMapping[str, Any]:
+    """Augment raw forecast data with legacy-style fields for easier rendering."""
+
+    normalized: Dict[str, Any] = dict(segment)
+
+    wind = normalized.get("wind")
+    if isinstance(wind, MutableMapping):
+        direction = _simplify_detail_value(wind.get("direction"))
+        speed = _simplify_detail_value(
+            wind.get("speed")
+            or wind.get("speedKt")
+            or wind.get("speedKts")
+            or wind.get("speed_kts")
+        )
+        gust = _simplify_detail_value(
+            wind.get("gust")
+            or wind.get("gustKt")
+            or wind.get("gustKts")
+            or wind.get("gust_kts")
+        )
+        if direction not in (None, "", []):
+            normalized.setdefault("windDir", direction)
+        if speed not in (None, "", []):
+            normalized.setdefault("windSpeed", speed)
+        if gust not in (None, "", []):
+            normalized.setdefault("windGust", gust)
+
+    visibility = normalized.get("visibility") or normalized.get("vis")
+    if isinstance(visibility, MutableMapping):
+        vis_value = _simplify_detail_value(visibility)
+        if vis_value not in (None, "", []):
+            normalized.setdefault("visibility", vis_value)
+
+    probability = normalized.get("probability")
+    if isinstance(probability, MutableMapping):
+        prob_value = _simplify_detail_value(probability)
+        if prob_value not in (None, "", []):
+            normalized.setdefault("probability", prob_value)
+
+    for icing_key in ("icing", "icingConditions"):
+        icing_value = normalized.get(icing_key)
+        if isinstance(icing_value, MutableMapping):
+            simplified = _simplify_detail_value(icing_value)
+            if simplified not in (None, "", []):
+                normalized.setdefault("icing", simplified)
+
+    for turb_key in ("turbulence", "turbulenceConditions"):
+        turb_value = normalized.get(turb_key)
+        if isinstance(turb_value, MutableMapping):
+            simplified = _simplify_detail_value(turb_value)
+            if simplified not in (None, "", []):
+                normalized.setdefault("turbulence", simplified)
+
+    weather = normalized.get("weather")
+    if isinstance(weather, Iterable) and not isinstance(weather, (str, bytes, bytearray)):
+        parts: List[str] = []
+        for item in weather:
+            simplified = _simplify_detail_value(item)
+            if simplified in (None, "", []):
+                continue
+            parts.append(str(simplified))
+        normalized["weather"] = parts
+    elif isinstance(weather, MutableMapping):
+        simplified = _simplify_detail_value(weather)
+        if simplified not in (None, "", []):
+            normalized["weather"] = simplified
+
+    return normalized
+
+
 def _normalize_aviationweather_features(data: Any) -> Iterable[Dict[str, Any]]:
     if isinstance(data, MutableMapping):
         for key in ("features", "data", "items", "reports"):
@@ -288,25 +417,34 @@ def get_taf_reports(icao_codes: Sequence[str]) -> Dict[str, List[Dict[str, Any]]
         for fc in _iter_forecast_candidates(forecast_source):
             if not isinstance(fc, MutableMapping):
                 continue
-            fc_from_display, fc_from_dt = format_iso_timestamp(
-                fc.get("fcstTimeFrom") or fc.get("timeFrom") or fc.get("time_from")
-            )
-            fc_to_display, fc_to_dt = format_iso_timestamp(
-                fc.get("fcstTimeTo") or fc.get("timeTo") or fc.get("time_to")
-            )
-            fc_details = build_detail_list(fc, TAF_FORECAST_FIELDS)
+            fc_processed = _normalise_forecast_segment(fc)
+            from_value = _extract_time_field(fc_processed, TIME_FROM_FIELDS)
+            to_value = _extract_time_field(fc_processed, TIME_TO_FIELDS)
+            fc_from_display, fc_from_dt = format_iso_timestamp(from_value)
+            fc_to_display, fc_to_dt = format_iso_timestamp(to_value)
+            fc_details = build_detail_list(fc_processed, TAF_FORECAST_FIELDS)
 
-            wx = fc.get("wxString") or fc.get("weather") or fc.get("wx_string")
+            wx = (
+                fc_processed.get("wxString")
+                or fc_processed.get("weather")
+                or fc_processed.get("wx_string")
+            )
             if wx:
-                if isinstance(wx, list):
-                    wx = ", ".join(str(v) for v in wx if v not in (None, ""))
+                if isinstance(wx, Iterable) and not isinstance(wx, (str, bytes, bytearray)):
+                    parts = []
+                    for item in wx:
+                        simplified = _simplify_detail_value(item)
+                        if simplified in (None, "", []):
+                            continue
+                        parts.append(str(simplified))
+                    wx = ", ".join(parts)
                 fc_details.append(("Weather", wx))
 
             clouds = (
-                fc.get("clouds")
-                or fc.get("cloudList")
-                or fc.get("skyCondition")
-                or fc.get("sky_condition")
+                fc_processed.get("clouds")
+                or fc_processed.get("cloudList")
+                or fc_processed.get("skyCondition")
+                or fc_processed.get("sky_condition")
             )
             if isinstance(clouds, str):
                 try:
@@ -328,6 +466,8 @@ def get_taf_reports(icao_codes: Sequence[str]) -> Dict[str, List[Dict[str, Any]]
                         or cloud.get("cloudCover")
                         or cloud.get("cloud_cover")
                         or cloud.get("skyCover")
+                        or cloud.get("amount")
+                        or cloud.get("repr")
                     )
                     base = (
                         cloud.get("base")
@@ -336,7 +476,16 @@ def get_taf_reports(icao_codes: Sequence[str]) -> Dict[str, List[Dict[str, Any]]
                         or cloud.get("cloudBaseFt")
                         or cloud.get("baseFeetAGL")
                         or cloud.get("base_feet_agl")
+                        or cloud.get("baseFeet")
                     )
+                    if isinstance(base, MutableMapping):
+                        base = (
+                            base.get("value")
+                            or base.get("feet")
+                            or base.get("repr")
+                            or base.get("minValue")
+                            or base.get("maxValue")
+                        )
                     if cover and base:
                         cloud_parts.append(f"{cover} {base}ft")
                     elif cover:
