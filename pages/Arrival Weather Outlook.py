@@ -110,9 +110,11 @@ st.markdown(
     """
     <style>
     .flight-row {display:flex; flex-wrap:wrap; gap:0.75rem; margin-bottom:1.5rem;}
-    .flight-card {background:rgba(17, 24, 39, 0.85); border:1px solid rgba(148, 163, 184, 0.4);
-                  border-radius:12px; padding:0.9rem 1.1rem; min-width:240px; max-width:360px;
-                  box-shadow:0 8px 18px rgba(15, 23, 42, 0.35);}
+    .flight-card {border-radius:12px; padding:0.9rem 1.1rem; min-width:240px; max-width:360px;
+                  box-shadow:0 8px 18px rgba(15, 23, 42, 0.35); border:1px solid rgba(148, 163, 184, 0.4);
+                  background:rgba(17, 24, 39, 0.85); transition:background 0.2s ease, border-color 0.2s ease;}
+    .flight-card--today {background:rgba(37, 99, 235, 0.22); border-color:rgba(147, 197, 253, 0.65);}
+    .flight-card--future {background:rgba(15, 23, 42, 0.88);}
     .flight-card h4 {margin:0 0 0.35rem 0; font-size:1.05rem; color:#f8fafc;}
     .flight-card .times {font-family:"Source Code Pro", Menlo, Consolas, monospace; font-size:0.9rem;
                          margin-bottom:0.45rem; line-height:1.35; color:#cbd5f5;}
@@ -127,6 +129,7 @@ st.markdown(
     .flight-card details pre {background:rgba(15,23,42,0.75); padding:0.5rem; border-radius:8px;
                               overflow:auto; color:#cbd5f5;}
     .flight-card .taf-missing {color:#fca5a5; font-style:italic;}
+    .flight-card .taf-warning {margin-top:0.35rem; color:#facc15; font-weight:600;}
     .tail-header {font-size:1.2rem; margin:0.5rem 0 0.4rem 0; padding-left:0.1rem; color:#e0f2fe;}
     .section-divider {border-bottom:1px solid rgba(148,163,184,0.25); margin:0.75rem 0 1.1rem 0;}
     </style>
@@ -391,6 +394,7 @@ def _format_period_window(period: Dict[str, Any]) -> str:
 def _build_taf_html(
     report: Optional[Dict[str, Any]],
     period: Optional[Dict[str, Any]],
+    arrival_dt: Optional[datetime] = None,
 ) -> str:
     if report is None:
         return "<div class='taf taf-missing'>No TAF segment matched the arrival window.</div>"
@@ -416,9 +420,37 @@ def _build_taf_html(
         return "".join(parts)
 
     window_text = _format_period_window(period)
+    arrival_dt = _ensure_utc(arrival_dt)
+    warning_html = ""
+    period_end = _ensure_utc(period.get("to_time"))
+    if (
+        arrival_dt is not None
+        and period_end is not None
+        and arrival_dt - period_end >= timedelta(hours=3)
+    ):
+        diff = arrival_dt - period_end
+        total_minutes = int(diff.total_seconds() // 60)
+        hours, minutes = divmod(total_minutes, 60)
+        diff_parts: List[str] = []
+        if hours:
+            diff_parts.append(f"{hours}h")
+        if minutes:
+            diff_parts.append(f"{minutes}m")
+        if not diff_parts:
+            diff_parts.append("0m")
+        diff_text = " ".join(diff_parts)
+        end_local_text = _format_local(period_end)
+        arrival_local_text = _format_local(arrival_dt)
+        warning_html = (
+            "<div class='taf-warning'>⚠️ Forecast window ends at "
+            f"{html.escape(end_local_text)} ({html.escape(diff_text)} before arrival"
+            f" at {html.escape(arrival_local_text)}).</div>"
+        )
     summary_items = _summarise_period(period)
 
     lines = [f"<div><strong>Forecast window:</strong> {html.escape(window_text)}</div>"]
+    if warning_html:
+        lines.append(warning_html)
     details_html = ""
     if summary_items:
         detail_entries = "".join(
@@ -449,6 +481,11 @@ def _build_flight_card(flight: Dict[str, Any], taf_html: str) -> str:
     route = f"{flight['departure_airport'] or '???'} → {flight['arrival_airport'] or '???'}"
     dep_line = f"Dep: {_format_local(flight['dep_dt_local'])} ({_format_utc(flight['dep_dt_utc'])})"
     arr_line = f"Arr: {_format_local(flight['arr_dt_local'])} ({_format_utc(flight['arr_dt_utc'])})"
+    card_classes = ["flight-card"]
+    if flight.get("is_today"):
+        card_classes.append("flight-card--today")
+    else:
+        card_classes.append("flight-card--future")
     badges: List[str] = []
     if flight.get("flight_type"):
         badges.append(html.escape(str(flight["flight_type"])))
@@ -464,7 +501,7 @@ def _build_flight_card(flight: Dict[str, Any], taf_html: str) -> str:
         ) + "</div>"
 
     return (
-        "<div class='flight-card'>"
+        f"<div class='{' '.join(card_classes)}'>"
         f"<h4>{html.escape(route)}</h4>"
         f"{badge_html}"
         f"<div class='times'>{html.escape(dep_line)}<br>{html.escape(arr_line)}</div>"
@@ -518,6 +555,7 @@ window_start_local = datetime.combine(window_start_date, time.min, tzinfo=MOUNTA
 window_end_local = datetime.combine(window_end_date + timedelta(days=1), time.min, tzinfo=MOUNTAIN_TZ)
 
 processed_flights: List[Dict[str, Any]] = []
+today_local_date = datetime.now(tz=MOUNTAIN_TZ).date()
 for row in flight_rows:
     tail = _coerce_code(row.get("tail"))
     if not tail:
@@ -530,6 +568,7 @@ for row in flight_rows:
     if candidate_dt is not None:
         if candidate_dt < window_start_local or candidate_dt >= window_end_local:
             continue
+    candidate_date = candidate_dt.date() if candidate_dt else None
     arrival_airport = _coerce_code(row.get("arrival_airport") or row.get("arrivalAirport") or row.get("airportTo"))
     departure_airport = _coerce_code(row.get("departure_airport") or row.get("departureAirport") or row.get("airportFrom"))
     processed_flights.append(
@@ -545,6 +584,8 @@ for row in flight_rows:
             "account_name": row.get("accountName") or row.get("account"),
             "pax": row.get("paxNumber") or row.get("pax_count") or row.get("pax"),
             "raw": row,
+            "local_service_date": candidate_date,
+            "is_today": candidate_date == today_local_date,
         }
     )
 
@@ -616,7 +657,11 @@ for tail in sorted(flights_by_tail.keys(), key=_tail_order_key):
     st.markdown(f"<div class='tail-header'>{tail}</div>", unsafe_allow_html=True)
     cards = []
     for flight in tail_flights:
-        taf_html = _build_taf_html(flight.get("taf_report"), flight.get("taf_period"))
+        taf_html = _build_taf_html(
+            flight.get("taf_report"),
+            flight.get("taf_period"),
+            flight.get("arr_dt_utc"),
+        )
         cards.append(_build_flight_card(flight, taf_html))
     st.markdown(f"<div class='flight-row'>{''.join(cards)}</div>", unsafe_allow_html=True)
     st.markdown("<div class='section-divider'></div>", unsafe_allow_html=True)
