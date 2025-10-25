@@ -11,7 +11,6 @@ _SECRET_RETRY_MAX = 6
 _SECRET_RETRY_DELAY_SECONDS = 0.2
 _MISSING = object()
 _PAGE_CONFIGURED_KEY = "_page_configured"
-_SIDEBAR_HIDDEN_KEY = "_sidebar_nav_hidden"
 _DEFAULT_PAGE_TITLE = "AirSprint Ops Tools"
 _DEFAULT_PAGE_ICON = "✈️"
 
@@ -71,9 +70,6 @@ def get_secret(key: str, default: Any | None = None) -> Any:
 def _hide_builtin_sidebar_nav() -> None:
     """Remove Streamlit's default page navigator from the sidebar."""
 
-    if st.session_state.get(_SIDEBAR_HIDDEN_KEY):
-        return
-
     st.markdown(
         """
         <style>
@@ -87,7 +83,6 @@ def _hide_builtin_sidebar_nav() -> None:
         """,
         unsafe_allow_html=True,
     )
-    st.session_state[_SIDEBAR_HIDDEN_KEY] = True
 
 
 def configure_page(*, page_title: str | None = None) -> None:
