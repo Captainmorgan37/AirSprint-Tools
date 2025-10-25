@@ -198,7 +198,10 @@ _METAR_VIS_REGEX = re.compile(
     r")SM\b"
 )
 _METAR_TEMP_DEW_REGEX = re.compile(r"\b(?P<temp>M?\d{2})/(?P<dew>M?\d{2})\b")
-_CEILING_CODE_REGEX = re.compile(r"\b(BKN|OVC|VV)\s*(\d{2,4})", re.IGNORECASE)
+_CEILING_CODE_REGEX = re.compile(
+    r"\b(BKN|OVC|VV)\s*(\d(?:[\s,]?\d){1,})",
+    re.IGNORECASE,
+)
 
 
 def _format_numeric(value, decimals: int | None = None) -> str | None:
@@ -461,23 +464,14 @@ def _parse_ceiling_value(value) -> float | None:
     upper_text = text.upper()
     match = _CEILING_CODE_REGEX.search(upper_text)
     if match:
-        height_str = match.group(2)
-        if height_str.isdigit():
+        height_digits = re.sub(r"\D", "", match.group(2))
+        if height_digits:
+            height_value = int(height_digits)
             remainder = upper_text[match.end() :]
-            trailing_digits: List[str] = []
-            for char in remainder:
-                if char.isdigit():
-                    trailing_digits.append(char)
-                else:
-                    break
-            if trailing_digits:
-                height_str = f"{height_str}{''.join(trailing_digits)}"
-                remainder = remainder[len(trailing_digits) :]
-            height_value = int(height_str)
             following = remainder.lstrip()
             if following.startswith(("FT", "FT.", "FEET")):
                 return float(height_value)
-            if len(height_str) == 3:
+            if len(height_digits) == 3:
                 return float(height_value * 100)
             return float(height_value)
 
@@ -497,9 +491,9 @@ def _get_ceiling_highlight(value) -> str | None:
     ceiling_value = _parse_ceiling_value(value)
     if ceiling_value is None:
         return None
-    if ceiling_value <= 1000:
-        return "red"
     if ceiling_value <= 2000:
+        return "red"
+    if ceiling_value <= 3000:
         return "yellow"
     return None
 
