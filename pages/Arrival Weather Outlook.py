@@ -353,8 +353,28 @@ def _build_taf_html(
     report: Optional[Dict[str, Any]],
     period: Optional[Dict[str, Any]],
 ) -> str:
-    if report is None or period is None:
+    if report is None:
         return "<div class='taf taf-missing'>No TAF segment matched the arrival window.</div>"
+
+    if period is None:
+        raw_taf = html.escape(str(report.get("raw") or ""))
+        issue_display = html.escape(str(report.get("issue_time_display") or ""))
+        parts = [
+            "<div class='taf'>",
+            "<div class='taf-missing'>No structured TAF segment matched the arrival window.</div>",
+        ]
+        if issue_display:
+            parts.append(
+                "<div style='font-size:0.75rem;color:#94a3b8;margin-top:0.3rem;'>"
+                f"Issued {issue_display}"
+                "</div>"
+            )
+        if raw_taf:
+            parts.append("<details><summary>Raw TAF</summary><pre>")
+            parts.append(raw_taf)
+            parts.append("</pre></details>")
+        parts.append("</div>")
+        return "".join(parts)
 
     window_text = _format_period_window(period)
     summary_items = _summarise_period(period)
