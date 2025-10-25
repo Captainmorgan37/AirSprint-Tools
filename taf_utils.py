@@ -19,6 +19,44 @@ TAF_FORECAST_FIELDS = [
     (("turbulence",), "Turbulence"),
 ]
 
+FORECAST_CONTAINER_KEYS: Tuple[str, ...] = (
+    "data",
+    "period",
+    "periods",
+    "forecast",
+    "forecastList",
+    "items",
+    "segments",
+)
+
+FORECAST_RELEVANT_KEYS: Tuple[str, ...] = (
+    "fcstTimeFrom",
+    "fcstTimeTo",
+    "timeFrom",
+    "timeTo",
+    "time_from",
+    "time_to",
+    "wxString",
+    "wx_string",
+    "weather",
+    "windDir",
+    "wind_direction",
+    "wind_dir",
+    "windSpeed",
+    "wind_speed",
+    "windSpd",
+    "windGust",
+    "wind_gust",
+    "visibility",
+    "visibilitySM",
+    "visibility_sm",
+    "visibility_mi",
+    "clouds",
+    "cloudList",
+    "skyCondition",
+    "sky_condition",
+)
+
 
 def format_iso_timestamp(value: Any) -> Tuple[str, datetime | None]:
     """Return a human-readable timestamp and a timezone-aware datetime."""
@@ -88,6 +126,54 @@ def _simplify_detail_value(value: Any) -> Any:
         ]
         return ", ".join(parts) if parts else None
     return value
+
+
+def _iter_forecast_candidates(value: Any) -> Iterable[MutableMapping[str, Any]]:
+    """Yield potential forecast period dictionaries from varied structures."""
+
+    def _walk(item: Any) -> Iterable[Any]:
+        if item in (None, "", []):
+            return
+        if isinstance(item, str):
+            text = item.strip()
+            if not text:
+                return
+            try:
+                parsed = json.loads(text)
+            except (TypeError, ValueError):
+                return
+            yield from _walk(parsed)
+            return
+        if isinstance(item, MutableMapping):
+            yield item
+            handled_ids: set[int] = set()
+            for key in FORECAST_CONTAINER_KEYS:
+                if key in item:
+                    child = item[key]
+                    handled_ids.add(id(child))
+                    yield from _walk(child)
+            for value in item.values():
+                if id(value) in handled_ids:
+                    continue
+                if isinstance(value, (MutableMapping, list, tuple, set)):
+                    yield from _walk(value)
+                elif isinstance(value, str):
+                    yield from _walk(value)
+            return
+        if isinstance(item, Iterable) and not isinstance(item, (bytes, bytearray)):
+            for sub in item:
+                yield from _walk(sub)
+
+    seen: set[int] = set()
+    for candidate in _walk(value):
+        if not isinstance(candidate, MutableMapping):
+            continue
+        candidate_id = id(candidate)
+        if candidate_id in seen:
+            continue
+        seen.add(candidate_id)
+        if any(key in candidate for key in FORECAST_RELEVANT_KEYS):
+            yield candidate
 
 
 def build_detail_list(data_dict: Any, field_map: Iterable[Tuple[Iterable[str], str]]) -> List[Tuple[str, Any]]:
@@ -192,28 +278,14 @@ def get_taf_reports(icao_codes: Sequence[str]) -> Dict[str, List[Dict[str, Any]]
             or ""
         )
 
+        forecast_periods: List[Dict[str, Any]] = []
         forecast_source = (
             props.get("forecast")
             or props.get("forecastList")
             or props.get("periods")
             or []
         )
-        if isinstance(forecast_source, MutableMapping):
-            nested: List[Any] = []
-            for key in ("data", "period", "periods", "forecast"):
-                value = forecast_source.get(key)
-                if isinstance(value, list):
-                    nested.extend(value)
-            if not nested:
-                nested.extend(
-                    value for value in forecast_source.values() if isinstance(value, MutableMapping)
-                )
-            forecast_source = nested
-        if not isinstance(forecast_source, list):
-            forecast_source = []
-
-        forecast_periods: List[Dict[str, Any]] = []
-        for fc in forecast_source:
+        for fc in _iter_forecast_candidates(forecast_source):
             if not isinstance(fc, MutableMapping):
                 continue
             fc_from_display, fc_from_dt = format_iso_timestamp(
@@ -236,9 +308,19 @@ def get_taf_reports(icao_codes: Sequence[str]) -> Dict[str, List[Dict[str, Any]]
                 or fc.get("skyCondition")
                 or fc.get("sky_condition")
             )
-            if isinstance(clouds, list):
+            if isinstance(clouds, str):
+                try:
+                    parsed_clouds = json.loads(clouds)
+                except (TypeError, ValueError):
+                    parsed_clouds = []
+                clouds = parsed_clouds
+            if isinstance(clouds, Iterable) and not isinstance(clouds, (str, bytes, bytearray)):
+                cloud_iterable = clouds
+            else:
+                cloud_iterable = []
+            if isinstance(cloud_iterable, Iterable):
                 cloud_parts: List[str] = []
-                for cloud in clouds:
+                for cloud in cloud_iterable:
                     if not isinstance(cloud, MutableMapping):
                         continue
                     cover = (
