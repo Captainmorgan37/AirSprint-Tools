@@ -197,6 +197,7 @@ _METAR_VIS_REGEX = re.compile(
     r")SM\b"
 )
 _METAR_TEMP_DEW_REGEX = re.compile(r"\b(?P<temp>M?\d{2})/(?P<dew>M?\d{2})\b")
+_CEILING_CODE_REGEX = re.compile(r"\b(BKN|OVC|VV)\s*(\d{2,4})", re.IGNORECASE)
 
 
 def _format_numeric(value, decimals: int | None = None) -> str | None:
@@ -430,7 +431,14 @@ def _parse_ceiling_value(value) -> float | None:
         return float(value)
 
     if isinstance(value, (list, tuple)) and value:
-        return _parse_ceiling_value(value[0])
+        lowest: float | None = None
+        for item in value:
+            parsed = _parse_ceiling_value(item)
+            if parsed is None:
+                continue
+            if lowest is None or parsed < lowest:
+                lowest = parsed
+        return lowest
 
     if isinstance(value, dict):
         for key in ("value", "ceiling", "ceiling_ft_agl"):
@@ -441,15 +449,35 @@ def _parse_ceiling_value(value) -> float | None:
         return None
 
     try:
-        text = str(value).strip().replace(",", "")
+        raw_text = str(value)
     except Exception:
         return None
 
+    text = raw_text.strip()
     if not text:
         return None
 
+    upper_text = text.upper()
+    match = _CEILING_CODE_REGEX.search(upper_text)
+    if match:
+        height_str = match.group(2)
+        if height_str.isdigit():
+            height_value = int(height_str)
+            following = upper_text[match.end() :].lstrip()
+            if following.startswith(("FT", "FT.", "FEET")):
+                return float(height_value)
+            if len(height_str) == 3:
+                return float(height_value * 100)
+            return float(height_value)
+
+    cleaned = upper_text.replace(",", "")
+    for suffix in (" FT", "FT", " FT.", "FT."):
+        if cleaned.endswith(suffix):
+            cleaned = cleaned[: -len(suffix)].strip()
+            break
+
     try:
-        return float(text)
+        return float(cleaned)
     except ValueError:
         return None
 
@@ -490,6 +518,8 @@ def _format_detail_entry(label: str, value) -> str:
         highlight_level = _get_visibility_highlight(value)
     if not highlight_level and "ceiling" in label_lower:
         highlight_level = _get_ceiling_highlight(value)
+    if not highlight_level and "cloud" in label_lower:
+        highlight_level = _get_ceiling_highlight(value)
     if not highlight_level and "weather" in label_lower and _should_highlight_weather(value_text):
         highlight_level = "red"
     if highlight_level:
@@ -504,6 +534,8 @@ def _format_inline_detail(label: str, value) -> str:
     if "visibility" in label_lower:
         highlight_level = _get_visibility_highlight(value)
     if not highlight_level and "ceiling" in label_lower:
+        highlight_level = _get_ceiling_highlight(value)
+    if not highlight_level and "cloud" in label_lower:
         highlight_level = _get_ceiling_highlight(value)
     if not highlight_level and "weather" in label_lower and _should_highlight_weather(value_text):
         highlight_level = "red"
@@ -559,6 +591,17 @@ def parse_metar_raw(raw_text: str) -> dict:
             parsed["temp"] = temp_value
         if dew_value is not None:
             parsed["dewpoint"] = dew_value
+
+    ceiling_values: list[float] = []
+    for match in _CEILING_CODE_REGEX.finditer(raw_text):
+        prefix, height_text = match.groups()
+        if not height_text or not height_text.isdigit():
+            continue
+        parsed_value = _parse_ceiling_value(f"{prefix.upper()}{height_text}")
+        if parsed_value is not None:
+            ceiling_values.append(parsed_value)
+    if ceiling_values:
+        parsed["ceiling"] = min(ceiling_values)
 
     return parsed
 
@@ -1039,6 +1082,15 @@ def get_metar_reports(icao_codes: tuple[str, ...]):
         )
         if not isinstance(metar_data, dict):
             metar_data = {}
+
+        fallback_from_raw = parse_metar_raw(raw_text)
+        if fallback_from_raw:
+            ceiling_fallback = fallback_from_raw.get("ceiling")
+            if ceiling_fallback is not None:
+                if metar_data.get("ceiling") in (None, "", []):
+                    metar_data["ceiling"] = ceiling_fallback
+                if metar_data.get("ceiling_ft_agl") in (None, "", []):
+                    metar_data["ceiling_ft_agl"] = ceiling_fallback
         details = build_detail_list(metar_data, METAR_DETAIL_FIELDS)
 
         if not station:
@@ -1277,6 +1329,10 @@ def format_taf_for_display_html(raw_taf: str) -> str:
         for token in line:
             token_str = token or ""
             escaped_token = html.escape(token_str)
+            ceiling_level = _get_ceiling_highlight(token_str)
+            if ceiling_level:
+                tokens_html.append(_wrap_highlight(escaped_token, ceiling_level))
+                continue
             visibility_level = _get_visibility_highlight(token_str)
             if visibility_level:
                 tokens_html.append(_wrap_highlight(escaped_token, visibility_level))
