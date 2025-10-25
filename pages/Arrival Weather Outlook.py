@@ -304,15 +304,21 @@ def _match_period(periods: Iterable[Dict[str, Any]], arrival_dt: Optional[dateti
         period_list,
         key=lambda period: period.get("from_time") or datetime.min.replace(tzinfo=timezone.utc),
     )
+    arrival_dt = _ensure_utc(arrival_dt)
     if arrival_dt is not None:
+        latest_before: Optional[Dict[str, Any]] = None
         for period in sorted_periods:
             start = _ensure_utc(period.get("from_time"))
             end = _ensure_utc(period.get("to_time"))
             after_start = start is None or arrival_dt >= start
             before_end = end is None or arrival_dt < end
             touches_end = end is not None and arrival_dt == end
+            if start is not None and arrival_dt >= start:
+                latest_before = period
             if after_start and (before_end or touches_end):
                 return period
+        if latest_before is not None:
+            return latest_before
     return sorted_periods[-1]
 
 
