@@ -303,10 +303,10 @@ def _get_ceiling_highlight(value) -> Optional[str]:
     ceiling_value = _parse_ceiling_value(value)
     if ceiling_value is None:
         return None
-    if ceiling_value <= 1000:
-        return "red"
     if ceiling_value <= 2000:
         return "yellow"
+    if ceiling_value <= 3000:
+        return "red"
     return None
 
 
@@ -328,6 +328,35 @@ def _determine_highlight_level(label: str, value: Any) -> Optional[str]:
     if not highlight_level and "weather" in label_lower and _should_highlight_weather(value):
         highlight_level = "red"
     return highlight_level
+
+
+def _format_clouds_value(value: Any) -> str:
+    if value in (None, ""):
+        return ""
+
+    text = str(value)
+    parts: List[str] = []
+    last_index = 0
+    for match in _CEILING_CODE_REGEX.finditer(text):
+        start, end = match.span()
+        if start > last_index:
+            parts.append(html.escape(text[last_index:start]))
+        match_text = text[start:end]
+        highlight_level = _get_ceiling_highlight(match_text)
+        escaped_match = html.escape(match_text)
+        if highlight_level:
+            parts.append(_wrap_highlight_html(escaped_match, highlight_level))
+        else:
+            parts.append(escaped_match)
+        last_index = end
+
+    if last_index < len(text):
+        parts.append(html.escape(text[last_index:]))
+
+    if parts:
+        return "".join(parts)
+
+    return html.escape(text)
 
 
 def _wrap_highlight_html(text: str, level: Optional[str]) -> str:
@@ -661,10 +690,14 @@ def _build_taf_html(
     if summary_items:
         detail_entries: List[str] = []
         for label, value in summary_items:
-            highlight_level = _determine_highlight_level(label, value)
-            value_text = html.escape(str(value))
-            if highlight_level:
-                value_text = _wrap_highlight_html(value_text, highlight_level)
+            label_lower = label.lower()
+            if "cloud" in label_lower:
+                value_text = _format_clouds_value(value)
+            else:
+                value_text = html.escape(str(value))
+                highlight_level = _determine_highlight_level(label, value)
+                if highlight_level:
+                    value_text = _wrap_highlight_html(value_text, highlight_level)
             detail_entries.append(
                 f"<li><strong>{html.escape(label)}:</strong> {value_text}</li>"
             )
