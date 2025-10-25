@@ -1,5 +1,3 @@
-from Home import get_secret, password_gate
-password_gate()
 import io
 import re
 from collections.abc import Mapping
@@ -31,6 +29,11 @@ from flight_leg_utils import (
     load_airport_metadata_lookup,
     safe_parse_dt,
 )
+from Home import configure_page, get_secret, password_gate, render_sidebar
+
+configure_page(page_title="Customs Dashboard")
+password_gate()
+render_sidebar()
 from fl3xx_api import fetch_flight_migration
 
 
@@ -83,7 +86,6 @@ CUSTOMS_RULES_PATH = Path(__file__).resolve().parent.parent / "customs_rules.csv
 _SESSION_STATE_KEY = "customs_dashboard_cached_data"
 
 
-st.set_page_config(page_title="Customs Dashboard", layout="wide")
 st.title("🛃 Customs Dashboard")
 
 st.caption(

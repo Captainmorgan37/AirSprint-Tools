@@ -1,17 +1,20 @@
-from Home import password_gate
-password_gate()
-
-import streamlit as st
-import pandas as pd
 import itertools
 import math
+
+import pandas as pd
 import plotly.graph_objects as go
+import streamlit as st
+
+from Home import configure_page, password_gate, render_sidebar
+
+configure_page(page_title="Aircraft Cargo Fit Checker")
+password_gate()
+render_sidebar()
 
 
 # ============================================================
 # Config / Title
 # ============================================================
-st.set_page_config(page_title="Aircraft Cargo Fit Checker", layout="wide")
 st.title("Aircraft Cargo Fit Checker")
 
 st.markdown(

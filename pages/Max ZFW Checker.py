@@ -1,10 +1,12 @@
-from Home import password_gate
-password_gate()
-import streamlit as st
 from datetime import date
 
+import streamlit as st
 
-st.set_page_config(page_title="Max ZFW (Pax + Cargo) Checker", layout="centered")
+from Home import configure_page, password_gate, render_sidebar
+
+configure_page(page_title="Max ZFW (Pax + Cargo) Checker")
+password_gate()
+render_sidebar()
 
 # --------------------------
 # Initialize defaults in session_state
