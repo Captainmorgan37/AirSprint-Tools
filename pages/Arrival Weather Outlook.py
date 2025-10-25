@@ -279,8 +279,18 @@ def _parse_ceiling_value(value) -> Optional[float]:
     if match:
         height_str = match.group(2)
         if height_str.isdigit():
+            remainder = upper_text[match.end() :]
+            trailing_digits: List[str] = []
+            for char in remainder:
+                if char.isdigit():
+                    trailing_digits.append(char)
+                else:
+                    break
+            if trailing_digits:
+                height_str = f"{height_str}{''.join(trailing_digits)}"
+                remainder = remainder[len(trailing_digits) :]
             height_value = int(height_str)
-            following = upper_text[match.end() :].lstrip()
+            following = remainder.lstrip()
             if following.startswith(("FT", "FT.", "FEET")):
                 return float(height_value)
             if len(height_str) == 3:
