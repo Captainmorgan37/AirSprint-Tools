@@ -186,6 +186,16 @@ def _to_local(dt: Optional[datetime]) -> Optional[datetime]:
     return dt.astimezone(MOUNTAIN_TZ)
 
 
+def _ensure_utc(dt: Optional[datetime]) -> Optional[datetime]:
+    if dt is None:
+        return None
+    if not isinstance(dt, datetime):
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
 def _format_local(dt: Optional[datetime]) -> str:
     if dt is None:
         return "—"
@@ -268,8 +278,8 @@ def _select_forecast_period(
     )
     if arrival_dt is not None:
         for report in sorted_reports:
-            valid_from = report.get("valid_from")
-            valid_to = report.get("valid_to")
+            valid_from = _ensure_utc(report.get("valid_from"))
+            valid_to = _ensure_utc(report.get("valid_to"))
             after_start = valid_from is None or arrival_dt >= valid_from
             before_end = valid_to is None or arrival_dt < valid_to
             if after_start and before_end:
@@ -289,8 +299,8 @@ def _match_period(periods: Iterable[Dict[str, Any]], arrival_dt: Optional[dateti
     )
     if arrival_dt is not None:
         for period in sorted_periods:
-            start = period.get("from_time")
-            end = period.get("to_time")
+            start = _ensure_utc(period.get("from_time"))
+            end = _ensure_utc(period.get("to_time"))
             after_start = start is None or arrival_dt >= start
             before_end = end is None or arrival_dt < end
             if after_start and before_end:
@@ -337,8 +347,8 @@ def _summarise_period(period: Dict[str, Any]) -> List[Tuple[str, str]]:
 
 
 def _format_period_window(period: Dict[str, Any]) -> str:
-    start = period.get("from_time")
-    end = period.get("to_time")
+    start = _ensure_utc(period.get("from_time"))
+    end = _ensure_utc(period.get("to_time"))
     start_text = _format_local(start) if isinstance(start, datetime) else "—"
     end_text = _format_local(end) if isinstance(end, datetime) else "—"
     if start_text == "—" and end_text == "—":
