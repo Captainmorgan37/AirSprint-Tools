@@ -7,8 +7,8 @@ import streamlit as st
 
 
 _SECRET_RETRY_PREFIX = "_secret_retry__"
-_SECRET_RETRY_MAX = 6
-_SECRET_RETRY_DELAY_SECONDS = 0.2
+_SECRET_RETRY_MAX = 10
+_SECRET_RETRY_DELAY_SECONDS = 1
 _MISSING = object()
 _PAGE_CONFIGURED_KEY = "_page_configured"
 _DEFAULT_PAGE_TITLE = "AirSprint Ops Tools"
