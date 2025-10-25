@@ -1,21 +1,19 @@
-from Home import get_secret, password_gate
-password_gate()
 import re
+from collections import Counter, defaultdict
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, date, time, timezone
+from datetime import date, datetime, time, timedelta, timezone
 import math
 from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
-from collections import Counter, defaultdict
-from collections.abc import Mapping
-from typing import List, Dict, Any, Tuple, Optional, Set, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 import pandas as pd
 import pytz
-from zoneinfo_compat import ZoneInfo
 import streamlit as st
 from pandas.api.types import is_scalar
+from zoneinfo_compat import ZoneInfo
 
 
 from docx import Document
@@ -39,11 +37,15 @@ from flight_leg_utils import (
     load_airport_metadata_lookup,
     safe_parse_dt,
 )
+from Home import configure_page, get_secret, password_gate, render_sidebar
+
+configure_page(page_title="Night-Shift Tail Splitter")
+password_gate()
+render_sidebar()
 
 # ----------------------------
 # App Config
 # ----------------------------
-st.set_page_config(page_title="Night-Shift Tail Splitter", layout="wide")
 st.title("🛫 Night-Shift Tail Splitter")
 
 st.caption(

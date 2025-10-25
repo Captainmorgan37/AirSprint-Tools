@@ -1,17 +1,19 @@
-from Home import get_secret, password_gate
-password_gate()
-import streamlit as st
-import pandas as pd
-import re
 import os
-from datetime import datetime, date, timedelta, timezone
+import re
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Iterable, Mapping, Optional, Sequence, Tuple
 
+import pandas as pd
+import streamlit as st
 
 from fl3xx_api import Fl3xxApiConfig, fetch_flights, compute_flights_digest
 from flight_leg_utils import filter_out_subcharter_rows, normalize_fl3xx_payload, safe_parse_dt
+from Home import configure_page, get_secret, password_gate, render_sidebar
 
-st.set_page_config(page_title="OCS vs Fl3xx Slot Compliance", layout="wide")
+configure_page(page_title="OCS vs Fl3xx Slot Compliance")
+password_gate()
+render_sidebar()
+
 st.title("🛫 OCS vs Fl3xx Slot Compliance")
 
 st.markdown("""

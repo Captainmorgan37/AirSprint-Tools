@@ -1,6 +1,3 @@
-from Home import password_gate
-password_gate()
-
 import hashlib
 import html
 import json
@@ -19,11 +16,15 @@ from flight_leg_utils import (
     normalize_fl3xx_payload,
     safe_parse_dt,
 )
+from Home import configure_page, password_gate, render_sidebar
 from taf_utils import get_taf_reports
 from zoneinfo_compat import ZoneInfo
 
+configure_page(page_title="Arrival Weather Outlook")
+password_gate()
+render_sidebar()
 
-st.set_page_config(page_title="Arrival Weather Outlook", layout="wide")
+
 st.title("🛬 Arrival Weather Outlook")
 
 

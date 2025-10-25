@@ -1,23 +1,26 @@
-from Home import password_gate, require_secret
-password_gate()
-import streamlit as st
-import pandas as pd
-import requests
-import json
-import itertools
-import re
 import html
-from datetime import datetime, timedelta, date
+import itertools
+import json
+import re
+from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Union
 
+import pandas as pd
+import requests
+import streamlit as st
 
-from fl3xx_client import fetch_flights, compute_fetch_dates
+from fl3xx_client import compute_fetch_dates, fetch_flights
 from flight_leg_utils import (
     FlightDataError,
     build_fl3xx_api_config,
     normalize_fl3xx_payload,
 )
+from Home import configure_page, password_gate, render_sidebar, require_secret
 from notam_filters import is_taxiway_only_notam
+
+configure_page(page_title="CFPS/FAA NOTAM Viewer")
+password_gate()
+render_sidebar()
 
 # ----- CONFIG -----
 FAA_CLIENT_ID = require_secret("FAA_CLIENT_ID")
@@ -33,8 +36,6 @@ CATEGORY_COLORS = {
     "Airport Services": "#ffa64d",
     "Other": "#ccc"
 }
-
-st.set_page_config(page_title="CFPS/FAA NOTAM Viewer", layout="wide")
 st.title("CFPS & FAA NOTAM Viewer")
 
 # ----- RUNWAYS DATA -----

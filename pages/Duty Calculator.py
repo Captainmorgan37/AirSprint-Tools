@@ -1,10 +1,11 @@
-from Home import password_gate
-password_gate()
-
 import streamlit as st
 from datetime import datetime, timedelta, time
 
-st.set_page_config(layout="wide")
+from Home import configure_page, password_gate, render_sidebar
+
+configure_page(page_title="Duty & Rest Calculator")
+password_gate()
+render_sidebar()
 
 # Helper functions
 def parse_time(t_str):

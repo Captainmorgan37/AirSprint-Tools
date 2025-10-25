@@ -1,16 +1,13 @@
-from Home import password_gate
-password_gate()
 import json
 import re
+from datetime import date, datetime, timedelta, timezone
+from functools import lru_cache
+from pathlib import Path
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 import pandas as pd
 import requests
 import streamlit as st
-
-from functools import lru_cache
-from datetime import date, datetime, timedelta, timezone
-from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from fl3xx_api import (
     Fl3xxApiConfig,
@@ -26,10 +23,15 @@ from flight_leg_utils import (
     normalize_fl3xx_payload,
     safe_parse_dt,
 )
+from Home import configure_page, password_gate, render_sidebar
 from owner_services import (
     OwnerServicesSummary,
     format_owner_service_entries,
 )
+
+configure_page(page_title="Owner Services Dashboard")
+password_gate()
+render_sidebar()
 
 
 ROW_STATE_STYLES: Dict[str, Dict[str, str]] = {
@@ -46,7 +48,6 @@ ROW_STATE_STYLES: Dict[str, Dict[str, str]] = {
 }
 
 
-st.set_page_config(page_title="Owner Services Dashboard", layout="wide")
 st.title("🧾 Owner Catering & Transport Dashboard")
 
 
