@@ -578,73 +578,118 @@ def _build_snapshot_from_postflight(
 
 
 def _parse_pilot_blocks(postflight_payload: Any) -> List[DutyStartPilotSnapshot]:
-    if isinstance(postflight_payload, MutableMapping):
-        dtls2 = postflight_payload.get("dtls2")
-    else:
-        dtls2 = None
-
-    if not isinstance(dtls2, list):
+    if not isinstance(postflight_payload, MutableMapping):
         return []
+
+    time_block = postflight_payload.get("time")
+    if not isinstance(time_block, Mapping):
+        time_block = {}
+
+    dtls2 = time_block.get("dtls2")
+    if not isinstance(dtls2, list):
+        dtls2 = postflight_payload.get("dtls2")
+    if not isinstance(dtls2, list):
+        dtls2 = []
 
     pilots: List[DutyStartPilotSnapshot] = []
     for pilot_block in dtls2:
-        if not isinstance(pilot_block, MutableMapping):
-            continue
+        snapshot = _pilot_snapshot_from_block(pilot_block)
+        if snapshot:
+            pilots.append(snapshot)
 
-        seat = _normalise_seat(pilot_block.get("pilotRole") or pilot_block.get("role"))
-        name = _derive_name(pilot_block)
+    if not pilots and time_block:
+        for key, seat in (("cmd", "PIC"), ("fo", "SIC")):
+            snapshot = _pilot_snapshot_from_block(time_block.get(key), default_seat=seat)
+            if snapshot:
+                pilots.append(snapshot)
 
-        full_duty_state = _clone_mapping(pilot_block.get("fullDutyState"))
-        explainer_map = _clone_mapping(full_duty_state.get("explainerMap")) if full_duty_state else {}
-        rest_payload = _clone_mapping(pilot_block.get("restAfterDuty"))
-
-        fdp_info = _clone_mapping(full_duty_state.get("fdp")) if full_duty_state else {}
-        fdp_actual_min = _coerce_minutes(fdp_info.get("actual")) if fdp_info else None
-        fdp_max_min = _coerce_minutes(fdp_info.get("max")) if fdp_info else None
-
-        fdp_actual_str = _extract_fdp_actual_str(explainer_map)
-        split_break_str = _extract_break_str(explainer_map)
-
-        split_duty = False
-        if _is_truthy(pilot_block.get("splitDutyStart")) or pilot_block.get("splitDutyType"):
-            split_duty = True
-        if isinstance(full_duty_state, dict):
-            if _is_truthy(full_duty_state.get("splitDutyStart")) or full_duty_state.get(
-                "splitDutyType"
-            ):
-                split_duty = True
-
-        rest_after_min = _extract_rest_minutes(rest_payload, full_duty_state)
-        rest_after_str = _minutes_to_hhmm(rest_after_min)
-
-        pilot_snapshot = DutyStartPilotSnapshot(
-            seat=seat,
-            name=name,
-            person_id=_clean_str(
-                pilot_block.get("personId")
-                or pilot_block.get("personnelId")
-                or pilot_block.get("crewPersonId")
-            ),
-            crew_member_id=_clean_str(pilot_block.get("crewMemberId") or pilot_block.get("crewId")),
-            personnel_number=_clean_str(pilot_block.get("personnelNumber")),
-            log_name=_clean_str(pilot_block.get("logName")),
-            email=_clean_str(pilot_block.get("email")),
-            trigram=_clean_str(pilot_block.get("trigram")),
-            full_duty_state=full_duty_state,
-            explainer_map=explainer_map,
-            rest_payload=rest_payload,
-            raw_payload=dict(pilot_block),
-            fdp_actual_min=fdp_actual_min,
-            fdp_max_min=fdp_max_min,
-            fdp_actual_str=fdp_actual_str,
-            split_duty=split_duty,
-            split_break_str=split_break_str,
-            rest_after_min=rest_after_min,
-            rest_after_str=rest_after_str,
-        )
-        pilots.append(pilot_snapshot)
+    if not pilots:
+        deice_block = postflight_payload.get("deice")
+        if isinstance(deice_block, Mapping):
+            crew_list = deice_block.get("crew")
+            if isinstance(crew_list, list):
+                for index, member in enumerate(crew_list):
+                    default_seat = "PIC" if index == 0 else "SIC"
+                    seat_hint = member.get("jobTitle") or member.get("role")
+                    snapshot = _pilot_snapshot_from_block(
+                        member,
+                        default_seat=_normalise_seat(seat_hint or default_seat),
+                    )
+                    if snapshot:
+                        pilots.append(snapshot)
 
     return pilots
+
+
+def _pilot_snapshot_from_block(
+    pilot_block: Any,
+    *,
+    default_seat: str = "PIC",
+) -> Optional[DutyStartPilotSnapshot]:
+    if not isinstance(pilot_block, Mapping):
+        return None
+
+    seat = _normalise_seat(pilot_block.get("pilotRole") or pilot_block.get("role") or default_seat)
+    name = _derive_name(pilot_block)
+
+    full_duty_state = _clone_mapping(pilot_block.get("fullDutyState"))
+    explainer_map = _clone_mapping(full_duty_state.get("explainerMap")) if full_duty_state else {}
+    if not explainer_map:
+        explainer_map = _clone_mapping(pilot_block.get("explainerMap"))
+    rest_payload = _clone_mapping(pilot_block.get("restAfterDuty"))
+
+    fdp_info = _clone_mapping(full_duty_state.get("fdp")) if full_duty_state else {}
+    if not fdp_info:
+        fdp_info = _clone_mapping(pilot_block.get("fdp"))
+    fdp_actual_min = _coerce_minutes(fdp_info.get("actual")) if fdp_info else None
+    fdp_max_min = _coerce_minutes(fdp_info.get("max")) if fdp_info else None
+
+    fdp_actual_str = _extract_fdp_actual_str(explainer_map)
+    split_break_str = _extract_break_str(explainer_map)
+
+    split_duty = False
+    for candidate in (pilot_block, full_duty_state):
+        if isinstance(candidate, Mapping):
+            if _is_truthy(candidate.get("splitDutyStart")) or candidate.get("splitDutyType"):
+                split_duty = True
+                break
+
+    rest_after_min = _extract_rest_minutes(rest_payload, full_duty_state)
+    rest_after_str = _minutes_to_hhmm(rest_after_min)
+
+    person_identifier = _clean_str(
+        _extract_first(
+            pilot_block,
+            "personId",
+            "personnelId",
+            "crewPersonId",
+            "userId",
+            "id",
+        )
+    )
+
+    pilot_snapshot = DutyStartPilotSnapshot(
+        seat=seat,
+        name=name,
+        person_id=person_identifier,
+        crew_member_id=_clean_str(_extract_first(pilot_block, "crewMemberId", "crewId")),
+        personnel_number=_clean_str(pilot_block.get("personnelNumber")),
+        log_name=_clean_str(pilot_block.get("logName")),
+        email=_clean_str(pilot_block.get("email")),
+        trigram=_clean_str(pilot_block.get("trigram")),
+        full_duty_state=full_duty_state,
+        explainer_map=explainer_map,
+        rest_payload=rest_payload,
+        raw_payload=dict(pilot_block),
+        fdp_actual_min=fdp_actual_min,
+        fdp_max_min=fdp_max_min,
+        fdp_actual_str=fdp_actual_str,
+        split_duty=split_duty,
+        split_break_str=split_break_str,
+        rest_after_min=rest_after_min,
+        rest_after_str=rest_after_str,
+    )
+    return pilot_snapshot
 
 
 def _select_identifier(pilot: DutyStartPilotSnapshot) -> Optional[str]:
