@@ -445,9 +445,82 @@ def _extract_first(mapping: Mapping[str, Any], *keys: str) -> Any:
     return None
 
 
+def summarize_long_duty_days(
+    collection: Iterable[DutyStartSnapshot] | DutyStartCollection,
+) -> List[str]:
+    """Return formatted lines for the Long Duty Days section."""
+
+    if isinstance(collection, DutyStartCollection):
+        snapshots: Iterable[DutyStartSnapshot] = collection.snapshots
+    else:
+        snapshots = collection
+
+    lines: List[str] = []
+
+    for snapshot in snapshots:
+        tail = snapshot.tail or "UNKNOWN"
+        qualifying: List[Dict[str, Any]] = []
+
+        for pilot in snapshot.pilots:
+            actual_min = pilot.fdp_actual_min
+            max_min = pilot.fdp_max_min
+            if actual_min is None or not max_min:
+                continue
+
+            if max_min <= 0:
+                continue
+
+            ratio = actual_min / max_min
+            if ratio < 0.90:
+                continue
+
+            seat = (pilot.seat or "PIC").upper()
+            actual_display = pilot.fdp_actual_str or _minutes_to_hhmm(actual_min)
+            max_display = _minutes_to_hhmm(max_min)
+
+            qualifying.append(
+                {
+                    "seat": seat,
+                    "ratio": ratio,
+                    "actual_display": actual_display,
+                    "max_display": max_display,
+                }
+            )
+
+        if not qualifying:
+            continue
+
+        seats = "/".join(sorted({entry["seat"] for entry in qualifying}))
+        highlight = max(qualifying, key=lambda entry: entry["ratio"])
+        ratio_percent = highlight["ratio"] * 100
+        ratio_display = f"{ratio_percent:.0f}%"
+
+        actual_display = highlight.get("actual_display")
+        max_display = highlight.get("max_display")
+
+        if actual_display and max_display:
+            detail = f"{actual_display} of {max_display}"
+        elif actual_display:
+            detail = actual_display
+        elif max_display:
+            detail = f"of {max_display}"
+        else:
+            detail = None
+
+        if detail:
+            line = f"{tail} – {ratio_display} FDP ({detail}) ({seats})"
+        else:
+            line = f"{tail} – {ratio_display} FDP ({seats})"
+
+        lines.append(line)
+
+    return lines
+
+
 __all__ = [
     "DutyStartPilotSnapshot",
     "DutyStartSnapshot",
     "DutyStartCollection",
     "collect_duty_start_snapshots",
+    "summarize_long_duty_days",
 ]
