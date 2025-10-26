@@ -186,11 +186,11 @@ if submitted:
             report = build_flight_following_report(
                 collection,
                 section_builders=(
-                    ("CYYZ Night Operations", summarize_cyyz_night_operations),
                     ("Long Duty Days", summarize_long_duty_days),
                     ("Split Duty Days", summarize_split_duty_days),
                     ("Tight Turnarounds (<11h Before Next Duty)", tight_turns_builder),
                     ("Short Turns (<45 min)", short_turn_section),
+                    ("", summarize_cyyz_night_operations),
                 ),
                 metadata=report_metadata,
             )

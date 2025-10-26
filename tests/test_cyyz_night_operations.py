@@ -60,10 +60,7 @@ def test_summarize_cyyz_night_operations_highlights_arrivals_and_departures():
     lines = summarize_cyyz_night_operations(collection)
 
     assert lines == [
-        "CYYZ Late Arrivals:",
-        "CFASP – 2315 – OCS",
-        "CYYZ Late Departures:",
-        "CGZAS – 0013 – OCS",
+        "CYYZ Late Arrivals:\nCFASP – 2315 – OCS\n\nCYYZ Late Departures:\nCGZAS – 0013 – OCS",
     ]
 
 
@@ -98,8 +95,5 @@ def test_summarize_cyyz_night_operations_handles_empty_matches():
     lines = summarize_cyyz_night_operations(collection)
 
     assert lines == [
-        "CYYZ Late Arrivals:",
-        "None currently scheduled",
-        "CYYZ Late Departures:",
-        "None currently scheduled",
+        "CYYZ Late Arrivals:\nNone currently scheduled\n\nCYYZ Late Departures:\nNone currently scheduled",
     ]

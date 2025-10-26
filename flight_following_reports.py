@@ -552,8 +552,9 @@ def summarize_cyyz_night_operations(
 
     lines: List[str] = []
     lines.extend(_format_cyyz_group("CYYZ Late Arrivals", arrivals))
+    lines.append("")
     lines.extend(_format_cyyz_group("CYYZ Late Departures", departures))
-    return lines
+    return ["\n".join(lines)]
 
 
 def _format_cyyz_group(
@@ -1814,10 +1815,10 @@ def build_flight_following_report(
 
     if section_builders is None:
         section_builders = (
-            ("CYYZ Night Operations", summarize_cyyz_night_operations),
             ("Long Duty Days", summarize_long_duty_days),
             ("Split Duty Days", summarize_split_duty_days),
             ("Tight Turnarounds (<11h Before Next Duty)", summarize_tight_turnarounds),
+            ("", summarize_cyyz_night_operations),
         )
 
     sections: List[FlightFollowingReportSection] = []
