@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone, tzinfo
 import re
 from typing import (
     Any,
@@ -354,6 +354,355 @@ def summarize_short_turns_for_collection(
     if not summary_text:
         return []
     return [summary_text]
+
+
+_CYYZ_AIRPORT_CODE = "CYYZ"
+_CYYZ_LOCAL_TZ_NAME = "America/Toronto"
+_CYYZ_NIGHT_START_MINUTES = 23 * 60
+_CYYZ_NIGHT_END_MINUTES = 6 * 60 + 29
+
+_CYYZ_DEPARTURE_AIRPORT_KEYS = (
+    "departureAirportIcao",
+    "departureAirport.icao",
+    "departure.airportIcao",
+    "departure.airport.icao",
+    "departureAirport",
+    "departure.icao",
+    "departure.airport",
+    "departureStation",
+    "airportFrom",
+    "fromAirport",
+    "realAirportFrom",
+)
+
+_CYYZ_ARRIVAL_AIRPORT_KEYS = (
+    "arrivalAirportIcao",
+    "arrivalAirport.icao",
+    "arrival.airportIcao",
+    "arrival.airport.icao",
+    "arrivalAirport",
+    "arrival.icao",
+    "arrival.airport",
+    "arrivalStation",
+    "airportTo",
+    "toAirport",
+    "realAirportTo",
+)
+
+_CYYZ_DEPARTURE_TIME_KEYS = (
+    "blockOffEstUTC",
+    "blockOffActualUTC",
+    "blockOffEstLocal",
+    "blockOffTimeUtc",
+    "scheduledOffBlockUtc",
+    "departureScheduledUtc",
+    "departureActualUtc",
+    "departureTimeUtc",
+    "departureTimeScheduled",
+    "departureTimeActual",
+    "departure.scheduledUtc",
+    "departure.actualUtc",
+    "departure.scheduledTime",
+    "departure.actualTime",
+    "departure.scheduled",
+    "departure.actual",
+    "times.departure.scheduled",
+    "times.departure.actual",
+    "times.offBlock.scheduled",
+    "times.offBlock.actual",
+    "scheduledOut",
+    "actualOut",
+    "outScheduled",
+    "outActual",
+    "offBlock",
+    "offBlockActual",
+    "offBlockScheduled",
+)
+
+_CYYZ_ARRIVAL_TIME_KEYS = (
+    "blockOnEstUTC",
+    "blockOnActualUTC",
+    "blockOnEstLocal",
+    "blocksonestimated",
+    "arrivalScheduledUtc",
+    "arrivalActualUtc",
+    "arrivalTimeUtc",
+    "arrivalTimeScheduled",
+    "arrivalTimeActual",
+    "arrival.scheduledUtc",
+    "arrival.actualUtc",
+    "arrival.scheduledTime",
+    "arrival.actualTime",
+    "arrival.scheduled",
+    "arrival.actual",
+    "times.arrival.scheduled",
+    "times.arrival.actual",
+    "times.onBlock.scheduled",
+    "times.onBlock.actual",
+    "scheduledIn",
+    "actualIn",
+    "inScheduled",
+    "inActual",
+    "onBlock",
+    "onBlockActual",
+    "onBlockScheduled",
+)
+
+_CYYZ_TAIL_KEYS = (
+    "tailNumber",
+    "registrationNumber",
+    "aircraftRegistration",
+    "aircraft.registration",
+    "aircraft.registrationNumber",
+    "aircraft.tailNumber",
+    "aircraft.name",
+    "tail",
+    "aircraft",
+)
+
+_CYYZ_ACCOUNT_KEYS = (
+    "accountName",
+    "account",
+    "account_name",
+    "owner",
+    "ownerName",
+    "customer",
+    "customerName",
+    "client",
+    "clientName",
+    "detail.accountName",
+    "detail.account",
+    "detail.account_name",
+)
+
+_ACCOUNT_NESTED_NAME_KEYS = (
+    "name",
+    "accountName",
+    "account",
+    "account_name",
+    "owner",
+    "ownerName",
+    "customer",
+    "customerName",
+    "client",
+    "clientName",
+    "displayName",
+    "label",
+)
+
+
+def summarize_cyyz_night_operations(
+    collection: Iterable[DutyStartSnapshot] | DutyStartCollection,
+    *,
+    local_tz_name: str = _CYYZ_LOCAL_TZ_NAME,
+    airport_code: str = _CYYZ_AIRPORT_CODE,
+) -> List[str]:
+    """Return formatted lines identifying CYYZ flights in the night window."""
+
+    zone = ZoneInfo(local_tz_name) if ZoneInfo else None
+    if zone is None:
+        return ["CYYZ Late Arrivals: None", "CYYZ Late Departures: None"]
+
+    flights = _collect_flights_for_short_turns(collection)
+    if not flights:
+        return ["CYYZ Late Arrivals: None", "CYYZ Late Departures: None"]
+
+    arrivals: List[Tuple[datetime, str, str]] = []
+    departures: List[Tuple[datetime, str, str]] = []
+    seen: set[Tuple[str, str, datetime, str]] = set()
+
+    for flight in flights:
+        if not isinstance(flight, Mapping):
+            continue
+
+        tail = _extract_tail_value(flight)
+        if not tail:
+            continue
+
+        account = _extract_account_name(flight) or "Unknown Account"
+        account_display = account if account.strip() else "Unknown Account"
+
+        dep_airport = _extract_airport_code(flight, _CYYZ_DEPARTURE_AIRPORT_KEYS)
+        arr_airport = _extract_airport_code(flight, _CYYZ_ARRIVAL_AIRPORT_KEYS)
+
+        if dep_airport == airport_code:
+            dep_dt = _extract_datetime_field(flight, _CYYZ_DEPARTURE_TIME_KEYS)
+            local_dep = _convert_to_timezone(dep_dt, zone)
+            if local_dep and _is_within_cyyz_night_window(local_dep):
+                key = ("dep", tail, _truncate_dt(local_dep), account_display)
+                if key not in seen:
+                    seen.add(key)
+                    departures.append((local_dep, tail, account_display))
+
+        if arr_airport == airport_code:
+            arr_dt = _extract_datetime_field(flight, _CYYZ_ARRIVAL_TIME_KEYS)
+            local_arr = _convert_to_timezone(arr_dt, zone)
+            if local_arr and _is_within_cyyz_night_window(local_arr):
+                key = ("arr", tail, _truncate_dt(local_arr), account_display)
+                if key not in seen:
+                    seen.add(key)
+                    arrivals.append((local_arr, tail, account_display))
+
+    arrivals.sort(key=lambda item: (item[0], item[1]))
+    departures.sort(key=lambda item: (item[0], item[1]))
+
+    lines: List[str] = []
+    lines.extend(_format_cyyz_group("CYYZ Late Arrivals", arrivals))
+    lines.extend(_format_cyyz_group("CYYZ Late Departures", departures))
+    return lines
+
+
+def _format_cyyz_group(
+    title: str, entries: Sequence[Tuple[datetime, str, str]]
+) -> List[str]:
+    if not entries:
+        return [f"{title}: None"]
+
+    lines = [f"{title}:"]
+    for local_dt, tail, account in entries:
+        lines.append(_format_night_operation_line(tail, local_dt, account))
+    return lines
+
+
+def _truncate_dt(value: datetime) -> datetime:
+    return value.replace(second=0, microsecond=0)
+
+
+def _format_night_operation_line(tail: str, local_dt: datetime, account: str) -> str:
+    display_tail = tail or "UNKNOWN"
+    time_str = local_dt.strftime("%H%M")
+    account_display = account.strip() or "Unknown Account"
+    return f"{display_tail} – {time_str} – {account_display}"
+
+
+def _extract_tail_value(flight: Mapping[str, Any]) -> Optional[str]:
+    for key in _CYYZ_TAIL_KEYS:
+        value = _get_nested_value(flight, key)
+        if isinstance(value, str):
+            candidate = value.strip().upper()
+        elif value is not None:
+            candidate = str(value).strip().upper()
+        else:
+            candidate = ""
+        if candidate:
+            return candidate
+    return None
+
+
+def _extract_account_name(flight: Mapping[str, Any]) -> Optional[str]:
+    for key in _CYYZ_ACCOUNT_KEYS:
+        value = _get_nested_value(flight, key)
+        candidate = _coerce_account_value(value)
+        if candidate:
+            return candidate
+    return None
+
+
+def _coerce_account_value(value: Any) -> Optional[str]:
+    if isinstance(value, str):
+        candidate = value.strip()
+        return candidate or None
+    if isinstance(value, Mapping):
+        for nested_key in _ACCOUNT_NESTED_NAME_KEYS:
+            nested_value = value.get(nested_key)
+            candidate = _coerce_account_value(nested_value)
+            if candidate:
+                return candidate
+        return None
+    if value is not None:
+        candidate = str(value).strip()
+        return candidate or None
+    return None
+
+
+def _extract_airport_code(
+    flight: Mapping[str, Any], keys: Sequence[str]
+) -> Optional[str]:
+    for key in keys:
+        value = _get_nested_value(flight, key)
+        if isinstance(value, str):
+            candidate = value.strip().upper()
+        elif value is not None:
+            candidate = str(value).strip().upper()
+        else:
+            candidate = ""
+        if candidate:
+            return candidate
+    return None
+
+
+def _extract_datetime_field(
+    flight: Mapping[str, Any], keys: Sequence[str]
+) -> Optional[datetime]:
+    for key in keys:
+        value = _get_nested_value(flight, key)
+        dt = _coerce_datetime(value)
+        if dt is not None:
+            return dt
+    return None
+
+
+def _coerce_datetime(value: Any) -> Optional[datetime]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        dt = value
+    elif hasattr(value, "to_pydatetime"):
+        dt = value.to_pydatetime()
+    elif isinstance(value, (int, float)):
+        try:
+            seconds = float(value)
+            if seconds > 1e12:
+                seconds /= 1000.0
+            dt = datetime.fromtimestamp(seconds, tz=UTC)
+        except Exception:
+            return None
+    else:
+        text = str(value).strip()
+        if not text:
+            return None
+        try:
+            dt = safe_parse_dt(text)
+        except Exception:
+            return None
+
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    else:
+        dt = dt.astimezone(UTC)
+    return dt
+
+
+def _convert_to_timezone(dt: Optional[datetime], zone: tzinfo) -> Optional[datetime]:
+    if dt is None:
+        return None
+    try:
+        return dt.astimezone(zone)
+    except Exception:
+        return dt
+
+
+def _is_within_cyyz_night_window(local_dt: datetime) -> bool:
+    minutes = local_dt.hour * 60 + local_dt.minute
+    if minutes >= _CYYZ_NIGHT_START_MINUTES:
+        return True
+    if minutes <= _CYYZ_NIGHT_END_MINUTES:
+        return True
+    return False
+
+
+def _get_nested_value(mapping: Mapping[str, Any], key_path: str) -> Any:
+    if not isinstance(mapping, Mapping):
+        return None
+    parts = key_path.split(".") if key_path else []
+    current: Any = mapping
+    for part in parts:
+        if not isinstance(current, Mapping):
+            return None
+        current = current.get(part)
+        if current is None:
+            return None
+    return current
 
 
 def build_rest_before_index(
@@ -1438,6 +1787,7 @@ def build_flight_following_report(
 
     if section_builders is None:
         section_builders = (
+            ("CYYZ Night Operations", summarize_cyyz_night_operations),
             ("Long Duty Days", summarize_long_duty_days),
             ("Split Duty Days", summarize_split_duty_days),
             ("Tight Turnarounds (<11h Before Next Duty)", summarize_tight_turnarounds),
@@ -1474,5 +1824,6 @@ __all__ = [
     "summarize_insufficient_rest",
     "compute_short_turn_summary_for_collection",
     "summarize_short_turns_for_collection",
+    "summarize_cyyz_night_operations",
     "build_flight_following_report",
 ]
