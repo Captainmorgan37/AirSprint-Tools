@@ -5,7 +5,13 @@ import sys
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
 from fl3xx_api import Fl3xxApiConfig
-from flight_following_reports import collect_duty_start_snapshots
+from flight_following_reports import (
+    DutyStartCollection,
+    DutyStartPilotSnapshot,
+    DutyStartSnapshot,
+    collect_duty_start_snapshots,
+    summarize_long_duty_days,
+)
 
 
 UTC = timezone.utc
@@ -139,3 +145,66 @@ def test_collect_duty_start_snapshots_groups_by_tail_and_tracks_crew_changes():
     assert other_tail_snapshot.flight_id == 4
     assert other_tail_snapshot.pilots[0].name == "Riley Blue"
     assert other_tail_snapshot.crew_signature() == (("PIC", "P3"), ("SIC", "S3"))
+
+
+def test_summarize_long_duty_days_formats_ratio_and_times():
+    snapshot = DutyStartSnapshot(
+        tail="C-FAKE",
+        flight_id=1,
+        block_off_est_utc=None,
+        pilots=[
+            DutyStartPilotSnapshot(
+                seat="PIC",
+                name="Jane Doe",
+                fdp_actual_min=540,
+                fdp_max_min=600,
+                fdp_actual_str="9:00",
+            ),
+            DutyStartPilotSnapshot(
+                seat="SIC",
+                name="John Smith",
+                fdp_actual_min=420,
+                fdp_max_min=600,
+                fdp_actual_str="7:00",
+            ),
+        ],
+    )
+
+    lines = summarize_long_duty_days([snapshot])
+
+    assert lines == ["C-FAKE – 90% FDP (9:00 of 10:00) (PIC)"]
+
+
+def test_summarize_long_duty_days_collapses_pic_and_sic():
+    snapshot = DutyStartSnapshot(
+        tail="C-BOTH",
+        flight_id=99,
+        block_off_est_utc=None,
+        pilots=[
+            DutyStartPilotSnapshot(
+                seat="PIC",
+                name="Riley Blue",
+                fdp_actual_min=590,
+                fdp_max_min=600,
+                fdp_actual_str="9:50",
+            ),
+            DutyStartPilotSnapshot(
+                seat="SIC",
+                name="Mason Gray",
+                fdp_actual_min=540,
+                fdp_max_min=600,
+                fdp_actual_str="9:00",
+            ),
+        ],
+    )
+
+    collection = DutyStartCollection(
+        target_date=date(2024, 1, 1),
+        start_utc=datetime(2024, 1, 1, 6, 0, tzinfo=UTC),
+        end_utc=datetime(2024, 1, 2, 6, 0, tzinfo=UTC),
+        snapshots=[snapshot],
+    )
+
+    lines = summarize_long_duty_days(collection)
+
+    assert lines == ["C-BOTH – 98% FDP (9:50 of 10:00) (PIC/SIC)"]
