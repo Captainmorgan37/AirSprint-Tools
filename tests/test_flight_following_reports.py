@@ -11,6 +11,7 @@ from flight_following_reports import (
     DutyStartCollection,
     DutyStartPilotSnapshot,
     DutyStartSnapshot,
+    _coerce_minutes,
     build_flight_following_report,
     collect_duty_start_snapshots,
     summarize_insufficient_rest,
@@ -210,6 +211,52 @@ def test_collect_duty_start_snapshots_detects_string_split_duty_flags():
     snapshot = collection.snapshots[0]
     assert any(pilot.split_duty for pilot in snapshot.pilots)
     assert snapshot.pilots[1].split_duty is False
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        ("15H31", 15 * 60 + 31),
+        ("15h31m", 15 * 60 + 31),
+        ("15:31", 15 * 60 + 31),
+        ("15:31:30", 15 * 60 + 31),
+        ("PT15H31M", 15 * 60 + 31),
+        ("90m", 90),
+        (" 45 ", 45),
+        ("", None),
+        (None, None),
+    ],
+)
+def test_coerce_minutes_handles_duration_strings(value, expected):
+    assert _coerce_minutes(value) == expected
+
+
+def test_long_duty_summary_includes_string_encoded_durations():
+    snapshot = DutyStartSnapshot(
+        tail="C-LONG",
+        flight_id=42,
+        block_off_est_utc=None,
+        pilots=[
+            DutyStartPilotSnapshot(
+                seat="PIC",
+                name="Jordan Pilot",
+                fdp_actual_min=_coerce_minutes("15H31"),
+                fdp_max_min=_coerce_minutes("PT16H0M"),
+                fdp_actual_str="15:31",
+            ),
+            DutyStartPilotSnapshot(
+                seat="SIC",
+                name="Sky Copilot",
+                fdp_actual_min=_coerce_minutes("12:00"),
+                fdp_max_min=_coerce_minutes("14:00"),
+                fdp_actual_str="12:00",
+            ),
+        ],
+    )
+
+    lines = summarize_long_duty_days([snapshot])
+
+    assert lines == ["C-LONG – 15:31 (PIC)"]
 
 
 def test_summarize_long_duty_days_highlight_utilisation():

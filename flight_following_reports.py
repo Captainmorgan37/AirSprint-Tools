@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
+import re
 from typing import (
     Any,
     Callable,
@@ -468,13 +469,79 @@ def _clone_mapping(obj: Any) -> Dict[str, Any]:
     return {}
 
 
+_ISO8601_DURATION_RE = re.compile(
+    r"^P(?:T(?:(?P<hours>\d+)H)?(?:(?P<minutes>\d+)M)?(?:(?P<seconds>\d+)S)?)$",
+    re.IGNORECASE,
+)
+
+
 def _coerce_minutes(value: Any) -> Optional[int]:
     if isinstance(value, (int, float)):
         return int(value)
+
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+
+        try:
+            return int(stripped)
+        except ValueError:
+            pass
+
+        iso_match = _ISO8601_DURATION_RE.fullmatch(stripped)
+        if iso_match:
+            hours = iso_match.group("hours")
+            minutes = iso_match.group("minutes")
+            seconds = iso_match.group("seconds")
+            total = 0
+            if hours:
+                total += int(hours) * 60
+            if minutes:
+                total += int(minutes)
+            if seconds:
+                total += int(seconds) // 60
+            return total if total or hours or minutes or seconds else None
+
+        normalized = stripped.lower()
+        replacements = {
+            "hours": "h",
+            "hour": "h",
+            "hrs": "h",
+            "hr": "h",
+            "minutes": "m",
+            "minute": "m",
+            "mins": "m",
+            "min": "m",
+        }
+        for original, replacement in replacements.items():
+            normalized = normalized.replace(original, replacement)
+        normalized = normalized.replace(" ", "")
+
+        if ":" in normalized:
+            parts = normalized.split(":")
+            if 2 <= len(parts) <= 3 and all(part.isdigit() for part in parts):
+                hours = int(parts[0])
+                minutes = int(parts[1]) if len(parts) >= 2 else 0
+                seconds = int(parts[2]) if len(parts) == 3 else 0
+                return hours * 60 + minutes + seconds // 60
+
+        if "h" in normalized:
+            hours_part, _, remainder = normalized.partition("h")
+            if hours_part.isdigit():
+                minutes_part = remainder
+                if minutes_part.endswith("m"):
+                    minutes_part = minutes_part[:-1]
+                if minutes_part == "" or minutes_part.isdigit():
+                    minutes = int(minutes_part) if minutes_part else 0
+                    return int(hours_part) * 60 + minutes
+
+        if normalized.endswith("m") and normalized[:-1].isdigit():
+            return int(normalized[:-1])
+
     try:
         if value is not None:
-            parsed = int(value)
-            return parsed
+            return int(value)
     except (TypeError, ValueError):
         pass
     return None
