@@ -1166,10 +1166,12 @@ def get_todays_sorted_legs_by_tail(
 def _build_crew_signature(pilots: List[DutySnapshotPilot]) -> Optional[Tuple[Tuple[str, str], ...]]:
     entries: List[Tuple[str, str]] = []
     for pilot in pilots:
-        name = (pilot.name or "").strip()
         seat = pilot.seat or "PIC"
-        if name:
-            entries.append((seat, name))
+        identifier = (pilot.pilot_id or "").strip() if isinstance(pilot.pilot_id, str) else ""
+        if not identifier:
+            identifier = (pilot.name or "").strip()
+        if identifier:
+            entries.append((seat, identifier))
     if not entries:
         return None
     entries.sort()

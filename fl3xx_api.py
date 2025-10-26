@@ -301,13 +301,14 @@ class DutySnapshotPilot:
 
     seat: Literal["PIC", "SIC"]
     name: str
-    fdp_actual_min: Optional[int]
-    fdp_max_min: Optional[int]
-    fdp_actual_str: Optional[str]
-    split_duty: bool
-    split_break_str: Optional[str]
-    rest_after_min: Optional[int]
-    rest_after_str: Optional[str]
+    pilot_id: Optional[str] = None
+    fdp_actual_min: Optional[int] = None
+    fdp_max_min: Optional[int] = None
+    fdp_actual_str: Optional[str] = None
+    split_duty: bool = False
+    split_break_str: Optional[str] = None
+    rest_after_min: Optional[int] = None
+    rest_after_str: Optional[str] = None
 
 
 @dataclass
@@ -370,7 +371,13 @@ def parse_postflight_payload(postflight_payload: Any) -> DutySnapshot:
             tail = maybe_tail.strip()
 
     pilots: List[DutySnapshotPilot] = []
-    dtls2 = postflight_payload.get("dtls2", []) if isinstance(postflight_payload, dict) else []
+    time_block: Dict[str, Any] = {}
+    if isinstance(postflight_payload, dict):
+        maybe_time_block = postflight_payload.get("time")
+        if isinstance(maybe_time_block, dict):
+            time_block = maybe_time_block
+
+    dtls2 = time_block.get("dtls2", []) if time_block else []
     if not isinstance(dtls2, list):
         dtls2 = []
 
@@ -386,6 +393,13 @@ def parse_postflight_payload(postflight_payload: Any) -> DutySnapshot:
             seat = "SIC"
         else:
             seat = "PIC"
+
+        pilot_id_value = pilot_block.get("userId") or pilot_block.get("id")
+        pilot_id: Optional[str]
+        if isinstance(pilot_id_value, (str, int)):
+            pilot_id = str(pilot_id_value)
+        else:
+            pilot_id = None
 
         first = pilot_block.get("firstName") or ""
         last = pilot_block.get("lastName") or ""
@@ -441,6 +455,7 @@ def parse_postflight_payload(postflight_payload: Any) -> DutySnapshot:
             DutySnapshotPilot(
                 seat=seat,
                 name=name,
+                pilot_id=pilot_id,
                 fdp_actual_min=fdp_actual_min,
                 fdp_max_min=fdp_max_min,
                 fdp_actual_str=fdp_actual_str,
