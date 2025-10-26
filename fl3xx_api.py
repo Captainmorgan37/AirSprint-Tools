@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 import hashlib
 import json
-from typing import Any, Dict, Iterable, List, MutableMapping, Optional, Tuple
+from typing import Any, Dict, Iterable, List, MutableMapping, Optional, Tuple, Literal
 
 import requests
 from zoneinfo_compat import ZoneInfo
@@ -295,6 +295,165 @@ def fetch_postflight(
                 pass
 
 
+@dataclass
+class DutySnapshotPilot:
+    """Duty information for a single pilot on a duty period."""
+
+    seat: Literal["PIC", "SIC"]
+    name: str
+    fdp_actual_min: Optional[int]
+    fdp_max_min: Optional[int]
+    fdp_actual_str: Optional[str]
+    split_duty: bool
+    split_break_str: Optional[str]
+    rest_after_min: Optional[int]
+    rest_after_str: Optional[str]
+
+
+@dataclass
+class DutySnapshot:
+    """Summary of duty information for a specific tail/flight."""
+
+    tail: str
+    pilots: List[DutySnapshotPilot]
+
+
+def _minutes_to_hhmm(total_min: Optional[int]) -> Optional[str]:
+    if total_min is None:
+        return None
+    if total_min < 0:
+        return None
+    hours, minutes = divmod(total_min, 60)
+    return f"{hours}:{minutes:02d}"
+
+
+def _extract_break_str(explainer_map: Any) -> Optional[str]:
+    """Return the break duration string from the ACTUAL_FDP explainer map."""
+
+    if not isinstance(explainer_map, dict):
+        return None
+    actual = explainer_map.get("ACTUAL_FDP", {})
+    text_lines = actual.get("text")
+    if not isinstance(text_lines, list):
+        return None
+    for line in text_lines:
+        if not isinstance(line, str):
+            continue
+        if line.strip().lower().startswith("break"):
+            parts = line.split("=")
+            if len(parts) >= 2:
+                return parts[-1].strip()
+    return None
+
+
+def _extract_fdp_actual_str(explainer_map: Any) -> Optional[str]:
+    """Return the formatted FDP string from the ACTUAL_FDP header."""
+
+    if not isinstance(explainer_map, dict):
+        return None
+    header = explainer_map.get("ACTUAL_FDP", {}).get("header")
+    if not isinstance(header, str):
+        return None
+    if "=" in header:
+        return header.split("=", 1)[1].strip()
+    header = header.strip()
+    return header or None
+
+
+def parse_postflight_payload(postflight_payload: Any) -> DutySnapshot:
+    """Normalise a postflight payload into duty data for reporting."""
+
+    tail = ""
+    if isinstance(postflight_payload, dict):
+        maybe_tail = postflight_payload.get("tailNumber") or postflight_payload.get("registrationNumber")
+        if isinstance(maybe_tail, str):
+            tail = maybe_tail.strip()
+
+    pilots: List[DutySnapshotPilot] = []
+    dtls2 = postflight_payload.get("dtls2", []) if isinstance(postflight_payload, dict) else []
+    if not isinstance(dtls2, list):
+        dtls2 = []
+
+    for pilot_block in dtls2:
+        if not isinstance(pilot_block, dict):
+            continue
+
+        role_raw = pilot_block.get("pilotRole") or pilot_block.get("role") or ""
+        role_normalised = str(role_raw).strip().upper()
+        if role_normalised in {"CMD", "PIC", "CAPT", "CAPTAIN"}:
+            seat: Literal["PIC", "SIC"] = "PIC"
+        elif role_normalised in {"FO", "SIC", "FIRST OFFICER"}:
+            seat = "SIC"
+        else:
+            seat = "PIC"
+
+        first = pilot_block.get("firstName") or ""
+        last = pilot_block.get("lastName") or ""
+        name = f"{first} {last}".strip()
+        if not name:
+            for fallback in ("logName", "email", "personnelNumber"):
+                fallback_value = pilot_block.get(fallback)
+                if isinstance(fallback_value, str) and fallback_value.strip():
+                    name = fallback_value.strip()
+                    break
+
+        full_duty_state = pilot_block.get("fullDutyState", {})
+        fdp_info = full_duty_state.get("fdp", {}) if isinstance(full_duty_state, dict) else {}
+        fdp_actual_min = fdp_info.get("actual") if isinstance(fdp_info, dict) else None
+        fdp_max_min = fdp_info.get("max") if isinstance(fdp_info, dict) else None
+        if isinstance(fdp_actual_min, (int, float)):
+            fdp_actual_min = int(fdp_actual_min)
+        else:
+            fdp_actual_min = None
+        if isinstance(fdp_max_min, (int, float)):
+            fdp_max_min = int(fdp_max_min)
+        else:
+            fdp_max_min = None
+
+        explainer_map = full_duty_state.get("explainerMap", {}) if isinstance(full_duty_state, dict) else {}
+        fdp_actual_str = _extract_fdp_actual_str(explainer_map)
+        split_break_str = _extract_break_str(explainer_map)
+
+        split_duty = False
+        if pilot_block.get("splitDutyStart") is True or pilot_block.get("splitDutyType"):
+            split_duty = True
+        if isinstance(full_duty_state, dict) and (
+            full_duty_state.get("splitDutyStart") is True or full_duty_state.get("splitDutyType")
+        ):
+            split_duty = True
+
+        rest_after_min = None
+        rest_block = pilot_block.get("restAfterDuty")
+        if isinstance(rest_block, dict):
+            actual = rest_block.get("actual")
+            if isinstance(actual, (int, float)):
+                rest_after_min = int(actual)
+        if rest_after_min is None and isinstance(full_duty_state, dict):
+            rest_block = full_duty_state.get("restAfterDuty")
+            if isinstance(rest_block, dict):
+                actual = rest_block.get("actual")
+                if isinstance(actual, (int, float)):
+                    rest_after_min = int(actual)
+
+        rest_after_str = _minutes_to_hhmm(rest_after_min)
+
+        pilots.append(
+            DutySnapshotPilot(
+                seat=seat,
+                name=name,
+                fdp_actual_min=fdp_actual_min,
+                fdp_max_min=fdp_max_min,
+                fdp_actual_str=fdp_actual_str,
+                split_duty=split_duty,
+                split_break_str=split_break_str,
+                rest_after_min=rest_after_min,
+                rest_after_str=rest_after_str,
+            )
+        )
+
+    return DutySnapshot(tail=tail, pilots=pilots)
+
+
 def fetch_flight_services(
     config: Fl3xxApiConfig,
     flight_id: Any,
@@ -520,6 +679,7 @@ def enrich_flights_with_crew(
 __all__ = [
     "Fl3xxApiConfig",
     "DEFAULT_FL3XX_BASE_URL",
+    "MOUNTAIN_TIME_ZONE",
     "compute_fetch_dates",
     "compute_flights_digest",
     "fetch_flights",
@@ -530,4 +690,7 @@ __all__ = [
     "fetch_flight_migration",
     "fetch_flight_notification",
     "enrich_flights_with_crew",
+    "DutySnapshot",
+    "DutySnapshotPilot",
+    "parse_postflight_payload",
 ]
