@@ -18,6 +18,7 @@ def _build_flight(
     leg_id: str,
     flight_id: str,
     workflow: str | None = None,
+    account: str | None = None,
 ) -> Dict[str, object]:
     payload: Dict[str, object] = {
         "tailNumber": tail,
@@ -30,6 +31,8 @@ def _build_flight(
     }
     if workflow is not None:
         payload["workflowCustomName"] = workflow
+    if account is not None:
+        payload["accountName"] = account
     return payload
 
 
@@ -52,6 +55,7 @@ def test_summarize_short_turns_formats_expected_text() -> None:
             arr_time="2024-10-23T17:40:00Z",
             leg_id="LEG2",
             flight_id="F2",
+            account="Sevensun Services",
         ),
     ]
 
@@ -61,9 +65,10 @@ def test_summarize_short_turns_formats_expected_text() -> None:
         priority_threshold_min=45,
     )
 
-    assert "SHORT TURNS" in summary_text
+    assert "Short turns:" in summary_text
     assert "C-GABC" in summary_text
-    assert "LEG1/LEG2" in summary_text
+    assert "Sevensun Services" in summary_text
+    assert "35 mins" in summary_text
     assert metadata["turns_detected"] == 1
     assert not short_df.empty
 
@@ -88,6 +93,7 @@ def test_summarize_short_turns_respects_priority_threshold_override() -> None:
             leg_id="A2",
             flight_id="FA2",
             workflow="Priority Mission",
+            account="Priority Account",
         ),
     ]
 
@@ -97,6 +103,7 @@ def test_summarize_short_turns_respects_priority_threshold_override() -> None:
     )
     assert metadata_default["turns_detected"] == 1
     assert "C-GXYZ" in summary_text_default
+    assert "Priority Account" in summary_text_default
     assert not short_df_default.empty
 
     summary_text_override, short_df_override, metadata_override = summarize_short_turns(
@@ -147,6 +154,6 @@ def test_compute_short_turn_summary_for_collection_extracts_flights() -> None:
         local_tz_name="UTC",
     )
 
-    assert "SHORT TURNS" in summary_text
+    assert "Short turns:" in summary_text
     assert count == 1
     assert metadata["turns_detected"] == 1

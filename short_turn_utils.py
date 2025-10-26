@@ -20,6 +20,36 @@ _PRIORITY_TURN_THRESHOLD_MIN = int(os.getenv("PRIORITY_TURN_THRESHOLD_MIN", "90"
 DEFAULT_TURN_THRESHOLD_MIN = _DEFAULT_TURN_THRESHOLD_MIN
 PRIORITY_TURN_THRESHOLD_MIN = _PRIORITY_TURN_THRESHOLD_MIN
 
+_ACCOUNT_NAME_KEYS: Tuple[str, ...] = (
+    "accountName",
+    "account",
+    "account_name",
+    "owner",
+    "ownerName",
+    "customer",
+    "customerName",
+    "client",
+    "clientName",
+    "detail.accountName",
+    "detail.account",
+    "detail.account_name",
+)
+
+_ACCOUNT_NESTED_NAME_KEYS: Tuple[str, ...] = (
+    "name",
+    "accountName",
+    "account",
+    "account_name",
+    "owner",
+    "ownerName",
+    "customer",
+    "customerName",
+    "client",
+    "clientName",
+    "displayName",
+    "label",
+)
+
 
 def _resolve_local_tz(local_tz: Optional[ZoneInfo] = None) -> timezone:
     if local_tz is not None:
@@ -130,6 +160,32 @@ def _extract_datetime(payload: Mapping[str, Any], options: Sequence[str], *, loc
         dt = parse_dt(value, local_tz=local_tz)
         if dt is not pd.NaT:
             return dt
+    return None
+
+
+def _coerce_account_value(value: Any) -> Optional[str]:
+    if isinstance(value, str):
+        candidate = value.strip()
+        return candidate or None
+    if isinstance(value, Mapping):
+        for nested_key in _ACCOUNT_NESTED_NAME_KEYS:
+            nested_value = value.get(nested_key)
+            candidate = _coerce_account_value(nested_value)
+            if candidate:
+                return candidate
+        return None
+    if value is not None:
+        candidate = str(value).strip()
+        return candidate or None
+    return None
+
+
+def _extract_account_name(payload: Mapping[str, Any]) -> Optional[str]:
+    for key in _ACCOUNT_NAME_KEYS:
+        value = _get_nested(payload, key)
+        candidate = _coerce_account_value(value)
+        if candidate:
+            return candidate
     return None
 
 
@@ -314,6 +370,7 @@ def normalise_flights_for_short_turns(
         if not flight_id:
             flight_id = leg_id
         booking_code = _extract_field(flight, booking_code_keys)
+        account_name = _extract_account_name(flight)
         priority_label = _extract_field(flight, priority_label_keys)
         is_priority, priority_text = _detect_priority(priority_label)
         if not is_priority:
@@ -372,6 +429,7 @@ def normalise_flights_for_short_turns(
                 "leg_id": leg_id,
                 "flight_id": flight_id,
                 "booking_code": booking_code,
+                "account_name": account_name,
                 "is_priority": is_priority,
                 "priority_label": priority_text,
             }
@@ -407,6 +465,8 @@ def compute_short_turns(
                 "arr_booking_code",
                 "dep_booking_code",
                 "same_booking_code",
+                "arr_account_name",
+                "dep_account_name",
             ]
         )
 
@@ -436,6 +496,7 @@ def compute_short_turns(
             "leg_id",
             "flight_id",
             "booking_code",
+            "account_name",
             "is_priority",
             "priority_label",
         ]
@@ -444,6 +505,7 @@ def compute_short_turns(
             "leg_id": "arr_leg_id",
             "flight_id": "arr_flight_id",
             "booking_code": "arr_booking_code",
+            "account_name": "arr_account_name",
             "is_priority": "arr_is_priority",
             "priority_label": "arr_priority_label",
         }
@@ -457,6 +519,7 @@ def compute_short_turns(
             "leg_id",
             "flight_id",
             "booking_code",
+            "account_name",
             "is_priority",
             "priority_label",
         ]
@@ -465,6 +528,7 @@ def compute_short_turns(
             "leg_id": "dep_leg_id",
             "flight_id": "dep_flight_id",
             "booking_code": "dep_booking_code",
+            "account_name": "dep_account_name",
             "is_priority": "dep_is_priority",
             "priority_label": "dep_priority_label",
         }
@@ -530,6 +594,8 @@ def compute_short_turns(
                         "same_booking_code": same_booking_code,
                         "arr_is_priority": arr_priority,
                         "dep_is_priority": dep_priority,
+                        "arr_account_name": arr_row.get("arr_account_name"),
+                        "dep_account_name": next_dep.get("dep_account_name"),
                     }
                 )
 
@@ -546,9 +612,8 @@ def build_short_turn_summary_text(
 ) -> str:
     """Return a formatted multi-line short-turn summary text block."""
 
-    lines: List[str] = ["SHORT TURNS:"]
+    lines: List[str] = ["Short turns:"]
     if short_turn_df.empty:
-        lines.append("")
         lines.append("None")
         return "\n".join(lines)
 
@@ -587,28 +652,27 @@ def build_short_turn_summary_text(
             return str(value)
         rounded = round(minutes)
         if abs(minutes - rounded) < 0.05:
-            return f"{int(rounded)} min"
-        return f"{minutes:.1f} min"
+            rounded_int = int(rounded)
+            unit = "min" if rounded_int == 1 else "mins"
+            return f"{rounded_int} {unit}"
+        return f"{minutes:.1f} mins"
 
     display_df["__turn_ts"] = display_df.apply(_extract_turn_timestamp, axis=1)
-    display_df["__turn_date_label"] = display_df["__turn_ts"].apply(
-        lambda ts: ts.strftime("%d%b%y").upper() if isinstance(ts, pd.Timestamp) and ts is not pd.NaT else "Unknown date"
-    )
     display_df = display_df.sort_values(
-        ["__turn_ts", "tail", "station", "arr_leg_id", "dep_leg_id"],
+        ["__turn_ts", "turn_min", "tail", "station", "arr_leg_id", "dep_leg_id"],
         kind="mergesort",
     )
 
-    for date_label, group in display_df.groupby("__turn_date_label", sort=False):
-        lines.append("")
-        lines.append(date_label)
-        for _, row in group.iterrows():
-            tail = _stringify(row.get("tail"), "Unknown tail")
-            arr_leg = _stringify(row.get("arr_leg_id"), "?")
-            dep_leg = _stringify(row.get("dep_leg_id"), "?")
-            station = _stringify(row.get("station"), "Unknown station")
-            turn_text = _format_turn_minutes(row.get("turn_min"))
-            lines.append(f"{tail} - {arr_leg}/{dep_leg} - {station} - {turn_text}")
+    def _format_account(value: Any) -> str:
+        candidate = _coerce_account_value(value)
+        return candidate or "Unknown Account"
+
+    for _, row in display_df.iterrows():
+        tail = _stringify(row.get("tail"), "Unknown tail")
+        station = _stringify(row.get("station"), "Unknown station")
+        turn_text = _format_turn_minutes(row.get("turn_min"))
+        account = _format_account(row.get("dep_account_name") or row.get("arr_account_name"))
+        lines.append(f"{tail} – {turn_text} - {station} - {account}")
 
     return "\n".join(lines)
 
