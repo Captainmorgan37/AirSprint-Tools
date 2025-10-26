@@ -11,6 +11,7 @@ from flight_following_reports import (
     build_flight_following_report,
     build_rest_before_index,
     collect_duty_start_snapshots,
+    compute_short_turn_summary_for_collection,
     summarize_collection_for_display,
     summarize_long_duty_days,
     summarize_split_duty_days,
@@ -26,6 +27,7 @@ except ImportError:  # pragma: no cover - Python <3.9 fallback
 
 _PAGE_STATE_KEY = "_flight_following_report_state"
 _MOUNTAIN_TZ_NAME = "America/Edmonton"
+_SHORT_TURN_THRESHOLD_MIN = 45
 
 
 def _default_target_date() -> date:
@@ -50,11 +52,21 @@ def _load_state() -> Dict[str, Any] | None:
 
 
 def _display_sections(sections: Iterable[Tuple[str, Iterable[str]]]) -> None:
-    for title, lines in sections:
+    for index, (title, lines) in enumerate(sections):
         st.subheader(title)
         normalized = [line for line in lines if isinstance(line, str) and line.strip()]
         if not normalized:
             st.caption("None")
+            continue
+        if len(normalized) == 1 and "\n" in normalized[0]:
+            text = normalized[0]
+            line_count = text.count("\n") + 1
+            st.text_area(
+                f"{title} details",
+                text,
+                height=min(600, max(160, 24 * line_count)),
+                key=f"section_text_{index}",
+            )
             continue
         for line in normalized:
             st.markdown(f"• {line}")
@@ -74,9 +86,14 @@ def _display_report(state: Dict[str, Any]) -> None:
     st.success(f"Report generated for {state.get('target_date', 'the selected date')}")
 
     summary = state.get("collection_summary", {})
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     col1.metric("Duty starts captured", summary.get("duty_start_snapshots", 0))
     col2.metric("Tails processed", summary.get("tails_processed", 0))
+    short_turns_info = summary.get("short_turns", {}) if isinstance(summary, Mapping) else {}
+    col3.metric(
+        "Short turns (<45 min)",
+        short_turns_info.get("turns_detected", state.get("short_turn_count", 0)),
+    )
 
     st.text_area("Report text", report_text, height=260)
     st.download_button(
@@ -144,6 +161,25 @@ if submitted:
                 summarize_tight_turnarounds,
                 next_day_rest_index=next_day_rest_index,
             )
+            report_metadata: Dict[str, Any] = {}
+            short_turn_capture: Dict[str, Any] = {
+                "text": "",
+                "count": 0,
+                "metadata": {},
+            }
+
+            def short_turn_section(collection_input):
+                summary_text, count, metadata = compute_short_turn_summary_for_collection(
+                    collection_input,
+                    threshold_min=_SHORT_TURN_THRESHOLD_MIN,
+                    priority_threshold_min=_SHORT_TURN_THRESHOLD_MIN,
+                    local_tz_name=_MOUNTAIN_TZ_NAME,
+                )
+                short_turn_capture["text"] = summary_text
+                short_turn_capture["count"] = count
+                short_turn_capture["metadata"] = metadata
+                report_metadata["short_turns"] = metadata
+                return [summary_text]
 
             report = build_flight_following_report(
                 collection,
@@ -151,15 +187,26 @@ if submitted:
                     ("Long Duty Days", summarize_long_duty_days),
                     ("Split Duty Days", summarize_split_duty_days),
                     ("Tight Turnarounds (<11h Before Next Duty)", tight_turns_builder),
+                    ("Short Turns (<45 min)", short_turn_section),
                 ),
+                metadata=report_metadata,
             )
+
+            collection_summary = _summarize_collection(collection)
+            short_turn_metadata = dict(short_turn_capture.get("metadata") or {})
+            if "turns_detected" not in short_turn_metadata:
+                short_turn_metadata["turns_detected"] = short_turn_capture.get("count", 0)
+            short_turn_metadata["summary_text"] = short_turn_capture.get("text", "")
+            collection_summary["short_turns"] = short_turn_metadata
 
             state = {
                 "target_date": target_date.isoformat(),
                 "generated_at": report.generated_at.isoformat(),
                 "report_text": report.text_payload(),
                 "sections": [(section.title, section.normalized_lines()) for section in report.sections],
-                "collection_summary": _summarize_collection(collection),
+                "collection_summary": collection_summary,
+                "short_turn_summary_text": short_turn_capture.get("text", ""),
+                "short_turn_count": short_turn_capture.get("count", 0),
             }
             _store_state(state)
             _display_report(state)
