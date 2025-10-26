@@ -13,9 +13,14 @@ import pytz
 
 from fl3xx_api import (
     DEFAULT_FL3XX_BASE_URL,
+    DutySnapshot,
+    DutySnapshotPilot,
     Fl3xxApiConfig,
+    MOUNTAIN_TIME_ZONE,
     enrich_flights_with_crew,
     fetch_flights,
+    fetch_postflight,
+    parse_postflight_payload,
 )
 
 UTC = timezone.utc
@@ -107,6 +112,16 @@ def filter_rows_by_departure_window(
         stats["within_window"] += 1
 
     return filtered, stats
+
+
+def compute_mountain_day_window_utc(target_date: date) -> Tuple[datetime, datetime]:
+    """Return the UTC bounds covering a local Mountain Time calendar day."""
+
+    start_local = datetime.combine(target_date, time(0, 0)).replace(tzinfo=MOUNTAIN_TIME_ZONE)
+    end_local = start_local + timedelta(days=1)
+    start_utc = start_local.astimezone(UTC)
+    end_utc = end_local.astimezone(UTC)
+    return start_utc, end_utc
 
 
 def _airport_tz_path(filename: str = AIRPORT_TZ_FILENAME) -> Path:
@@ -1088,6 +1103,181 @@ def fetch_legs_dataframe(
     return df, metadata, crew_summary
 
 
+def _format_minutes(total_min: Optional[int]) -> Optional[str]:
+    if total_min is None:
+        return None
+    if total_min < 0:
+        return None
+    hours, minutes = divmod(total_min, 60)
+    return f"{hours}:{minutes:02d}"
+
+
+def get_todays_sorted_legs_by_tail(
+    config: Fl3xxApiConfig,
+    target_date: date,
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Return today's legs grouped by tail and ordered by departure time."""
+
+    start_utc, end_utc = compute_mountain_day_window_utc(target_date)
+    df, _metadata, _crew = fetch_legs_dataframe(
+        config,
+        from_date=target_date,
+        to_date=target_date + timedelta(days=1),
+        departure_window=(start_utc, end_utc),
+        fetch_crew=False,
+    )
+
+    legs_by_tail: Dict[str, List[Dict[str, Any]]] = {}
+    if df.empty:
+        return legs_by_tail
+
+    for _, row in df.iterrows():
+        tail = str(row.get("tail") or "").strip()
+        if not tail:
+            continue
+
+        flight_id_raw = row.get("flightId")
+        if flight_id_raw is None or (isinstance(flight_id_raw, float) and pd.isna(flight_id_raw)):
+            continue
+        if isinstance(flight_id_raw, float):
+            flight_id = int(flight_id_raw)
+        else:
+            flight_id = flight_id_raw
+
+        dep_raw = row.get("dep_time")
+        if dep_raw is None or (isinstance(dep_raw, float) and pd.isna(dep_raw)):
+            continue
+        dep_dt = safe_parse_dt(str(dep_raw)).astimezone(UTC)
+
+        legs_by_tail.setdefault(tail, []).append(
+            {
+                "tail": tail,
+                "flightId": flight_id,
+                "dep_dt_utc": dep_dt,
+            }
+        )
+
+    for tail, legs in legs_by_tail.items():
+        legs.sort(key=lambda leg: leg["dep_dt_utc"])
+
+    return legs_by_tail
+
+
+def _build_crew_signature(pilots: List[DutySnapshotPilot]) -> Optional[Tuple[Tuple[str, str], ...]]:
+    entries: List[Tuple[str, str]] = []
+    for pilot in pilots:
+        name = (pilot.name or "").strip()
+        seat = pilot.seat or "PIC"
+        if name:
+            entries.append((seat, name))
+    if not entries:
+        return None
+    entries.sort()
+    return tuple(entries)
+
+
+def build_duty_snapshots_for_today(
+    config: Fl3xxApiConfig,
+    target_date: date,
+) -> List[DutySnapshot]:
+    """Collect duty snapshots for each distinct crew duty start on the target date."""
+
+    legs_by_tail = get_todays_sorted_legs_by_tail(config, target_date)
+    snapshots: List[DutySnapshot] = []
+
+    for tail, legs in legs_by_tail.items():
+        last_signature: Optional[Tuple[Tuple[str, str], ...]] = None
+
+        for leg_info in legs:
+            flight_id = leg_info["flightId"]
+            raw_postflight = fetch_postflight(config, flight_id)
+            snapshot = parse_postflight_payload(raw_postflight)
+            if not snapshot.tail:
+                snapshot.tail = tail
+
+            signature = _build_crew_signature(snapshot.pilots)
+            if signature is None:
+                signature = (("LEG", str(flight_id)),)
+
+            if last_signature is not None and signature == last_signature:
+                continue
+
+            snapshots.append(snapshot)
+            last_signature = signature
+
+    return snapshots
+
+
+def summarize_frms_watch_items(snapshots: List[DutySnapshot]) -> Dict[str, List[str]]:
+    """Return formatted report lines for the FRMS watch items."""
+
+    long_duty_lines: List[str] = []
+    split_duty_lines: List[str] = []
+    tight_turn_lines: List[str] = []
+
+    for snapshot in snapshots:
+        tail = snapshot.tail or "UNKNOWN"
+
+        long_hits: List[Tuple[int, str, str]] = []
+        split_hits: List[Tuple[str, str, str]] = []
+        tight_hits: List[Tuple[int, str, str]] = []
+
+        for pilot in snapshot.pilots:
+            seat = pilot.seat or "PIC"
+
+            if pilot.fdp_actual_min is not None and pilot.fdp_max_min:
+                if pilot.fdp_max_min > 0:
+                    ratio = pilot.fdp_actual_min / pilot.fdp_max_min
+                    if ratio >= 0.90:
+                        fdp_str = pilot.fdp_actual_str or _format_minutes(pilot.fdp_actual_min)
+                        if fdp_str:
+                            long_hits.append((pilot.fdp_actual_min, fdp_str, seat))
+
+            if pilot.split_duty:
+                fdp_str = pilot.fdp_actual_str or _format_minutes(pilot.fdp_actual_min)
+                if fdp_str:
+                    split_hits.append((fdp_str, pilot.split_break_str or "", seat))
+
+            if pilot.rest_after_min is not None and pilot.rest_after_min < 660:
+                rest_str = pilot.rest_after_str or _format_minutes(pilot.rest_after_min)
+                if rest_str:
+                    tight_hits.append((pilot.rest_after_min, rest_str, seat))
+
+        if long_hits:
+            seats = "/".join(sorted({seat for _, _, seat in long_hits}))
+            worst = max(long_hits, key=lambda entry: entry[0])
+            long_duty_lines.append(f"{tail} – {worst[1]} ({seats})")
+
+        if split_hits:
+            seats = "/".join(sorted({seat for _, _, seat in split_hits}))
+            fdp_str, break_str, _ = split_hits[0]
+            if break_str:
+                split_duty_lines.append(f"{tail} – {fdp_str} duty – {break_str} break ({seats} split)")
+            else:
+                split_duty_lines.append(f"{tail} – {fdp_str} duty ({seats} split)")
+
+        if tight_hits:
+            seats = "/".join(sorted({seat for _, _, seat in tight_hits}))
+            worst = min(tight_hits, key=lambda entry: entry[0])
+            tight_turn_lines.append(
+                f"{tail} – {worst[1]} rest before next duty ({seats})"
+            )
+
+    return {
+        "long_duty": long_duty_lines,
+        "split_duty": split_duty_lines,
+        "tight_turn": tight_turn_lines,
+    }
+
+
+def generate_frms_report_for_today(
+    config: Fl3xxApiConfig,
+    today_local_date: date,
+) -> Dict[str, List[str]]:
+    """Convenience helper to fetch duty snapshots and format report sections."""
+
+    snapshots = build_duty_snapshots_for_today(config, today_local_date)
+    return summarize_frms_watch_items(snapshots)
 __all__ = [
     "AIRPORT_TZ_FILENAME",
     "ARRIVAL_AIRPORT_COLUMNS",
@@ -1096,14 +1286,19 @@ __all__ = [
     "FlightDataError",
     "apply_airport_timezones",
     "build_fl3xx_api_config",
+    "build_duty_snapshots_for_today",
     "compute_departure_window_bounds",
+    "compute_mountain_day_window_utc",
     "fetch_legs_dataframe",
     "filter_out_subcharter_rows",
     "filter_rows_by_departure_window",
     "format_utc",
+    "generate_frms_report_for_today",
+    "get_todays_sorted_legs_by_tail",
     "is_customs_leg",
     "load_airport_metadata_lookup",
     "load_airport_tz_lookup",
     "normalize_fl3xx_payload",
+    "summarize_frms_watch_items",
     "safe_parse_dt",
 ]
