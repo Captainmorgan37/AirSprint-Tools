@@ -214,6 +214,7 @@ def collect_duty_start_snapshots(
 
     for tail, tail_flights in grouped.items():
         last_signature: Optional[Tuple[Tuple[str, str], ...]] = None
+        last_snapshot: Optional[DutyStartSnapshot] = None
 
         for flight_info in tail_flights:
             flight_id = flight_info.get("flight_id")
@@ -231,10 +232,13 @@ def collect_duty_start_snapshots(
 
             signature = snapshot.crew_signature()
             if last_signature is not None and signature == last_signature:
+                if last_snapshot is not None:
+                    _merge_split_duty_information(last_snapshot, snapshot)
                 continue
 
             snapshots.append(snapshot)
             last_signature = signature
+            last_snapshot = snapshot
 
     return DutyStartCollection(
         target_date=target_date,
@@ -619,6 +623,61 @@ def _parse_pilot_blocks(postflight_payload: Any) -> List[DutyStartPilotSnapshot]
                         pilots.append(snapshot)
 
     return pilots
+
+
+def _merge_split_duty_information(
+    target_snapshot: Optional[DutyStartSnapshot],
+    source_snapshot: Optional[DutyStartSnapshot],
+) -> None:
+    """Propagate split duty metadata from ``source_snapshot`` to ``target_snapshot``."""
+
+    if not target_snapshot or not source_snapshot:
+        return
+
+    source_pilots = list(source_snapshot.pilots or [])
+    if not source_pilots:
+        return
+
+    for pilot in target_snapshot.pilots or []:
+        match = _find_matching_pilot(pilot, source_pilots)
+        if not match:
+            continue
+
+        if match.split_duty and not pilot.split_duty:
+            pilot.split_duty = True
+
+        if match.split_break_str and match.split_break_str != pilot.split_break_str:
+            pilot.split_break_str = match.split_break_str
+
+        if match.rest_after_min and not pilot.rest_after_min:
+            pilot.rest_after_min = match.rest_after_min
+            pilot.rest_after_str = match.rest_after_str
+
+
+def _find_matching_pilot(
+    pilot: DutyStartPilotSnapshot,
+    candidates: Sequence[DutyStartPilotSnapshot],
+) -> Optional[DutyStartPilotSnapshot]:
+    identifier = _select_identifier(pilot)
+    if identifier:
+        for candidate in candidates:
+            if _select_identifier(candidate) == identifier:
+                return candidate
+
+    seat = _normalise_seat(pilot.seat)
+    name = (pilot.name or "").strip().lower()
+
+    for candidate in candidates:
+        candidate_seat = _normalise_seat(candidate.seat)
+        candidate_name = (candidate.name or "").strip().lower()
+        if candidate_seat == seat and candidate_name == name:
+            return candidate
+
+    for candidate in candidates:
+        if _normalise_seat(candidate.seat) == seat:
+            return candidate
+
+    return None
 
 
 def _pilot_snapshot_from_block(
