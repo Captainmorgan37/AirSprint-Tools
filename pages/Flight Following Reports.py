@@ -103,7 +103,8 @@ def _display_report(state: Dict[str, Any]) -> None:
         mime="text/plain",
     )
 
-    _display_sections(state.get("sections", []))
+    with st.expander("Duty insights", expanded=False):
+        _display_sections(state.get("sections", []))
     _render_metadata(summary)
 
 

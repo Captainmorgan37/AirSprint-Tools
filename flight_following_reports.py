@@ -156,8 +156,8 @@ class FlightFollowingReport:
 
         generated_at_utc = self.generated_at.astimezone(UTC)
         header_lines = [
-            f"Flight Following Duty Report – {self.target_date.isoformat()}",
-            f"Generated at {generated_at_utc.strftime('%Y-%m-%d %H:%M %Z')}",
+            "High Risk Flight Report - "
+            f"{self.target_date.strftime('%d%b%y').upper()}",
         ]
 
         lines: List[str] = header_lines + [""]
@@ -1399,6 +1399,26 @@ def _minutes_to_hhmm(total_min: Optional[int]) -> Optional[str]:
     return f"{hours}:{minutes:02d}"
 
 
+def _format_duration_for_display(
+    duration_str: Optional[str], *, offset_minutes: int = 0
+) -> str:
+    minutes: Optional[int] = None
+    if duration_str is not None:
+        minutes = _coerce_minutes(duration_str)
+
+    if minutes is not None:
+        minutes += offset_minutes
+        formatted = _minutes_to_hhmm(minutes)
+        if formatted:
+            return formatted.replace(":", "H")
+
+    fallback = (duration_str or "Unknown").strip() or "Unknown"
+    normalized = fallback.replace(" ", "")
+    normalized = normalized.replace("h", "H")
+    normalized = normalized.replace(":", "H")
+    return normalized
+
+
 def _extract_rest_components(
     rest_payload: Optional[Mapping[str, Any]],
     full_duty_state: Optional[Mapping[str, Any]],
@@ -1546,10 +1566,13 @@ def summarize_split_duty_days(
                     break_display = pilot.split_break_str
                     break
 
-        duty_display = duty_display or "Unknown"
-        break_display = break_display or "Unknown"
+        duty_display = _format_duration_for_display(duty_display)
+        break_display = _format_duration_for_display(break_display, offset_minutes=120)
 
-        line = f"{tail} – {duty_display} duty – {break_display} break ({seats_display} split)"
+        line = (
+            f"{tail} - {duty_display} duty - {break_display} ground time"
+            f" ({seats_display} split)"
+        )
         lines.append(line)
 
     return lines
@@ -1731,7 +1754,7 @@ def summarize_tight_turnarounds(
         rest_display = rest_values[0] if len(set(rest_values)) == 1 else "/".join(rest_values)
         note_suffix = ""
         if any(note_flags):
-            note_suffix = " – non-flight duties?"
+            note_suffix = " – non-flight duties"
         lines.append(
             f"{tail} – {rest_display} rest before next duty ({seat_display}){note_suffix}"
         )

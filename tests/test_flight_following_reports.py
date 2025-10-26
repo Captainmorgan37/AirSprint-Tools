@@ -4,17 +4,19 @@ from __future__ import annotations
 
 import pathlib
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
 from flight_following_reports import (
+    FlightFollowingReport,
     _merge_split_duty_information,
     _parse_pilot_blocks,
     build_rest_before_index,
     DutyStartCollection,
     DutyStartPilotSnapshot,
     DutyStartSnapshot,
+    summarize_split_duty_days,
     summarize_tight_turnarounds,
 )
 
@@ -232,3 +234,48 @@ def test_summarize_tight_turnarounds_no_note_when_rest_matches() -> None:
 
     assert lines
     assert all("non-flight duties" not in line.lower() for line in lines)
+
+
+def test_summarize_split_duty_days_adds_ground_time_offset() -> None:
+    snapshot = DutyStartSnapshot(
+        tail="C-FSDN",
+        flight_id="F5",
+        block_off_est_utc=None,
+        pilots=[
+            DutyStartPilotSnapshot(
+                seat="PIC",
+                name="Taylor Captain",
+                person_id="P1",
+                split_duty=True,
+                explainer_map={
+                    "ACTUAL_FDP": {
+                        "header": "Actual FDP = 14h02",
+                        "text": ["Break = 4h12"],
+                    }
+                },
+            ),
+            DutyStartPilotSnapshot(
+                seat="SIC",
+                name="Jordan Copilot",
+                person_id="P2",
+                split_duty=True,
+                explainer_map={},
+            ),
+        ],
+    )
+
+    lines = summarize_split_duty_days([snapshot])
+
+    assert lines == ["C-FSDN - 14H02 duty - 6H12 ground time (PIC+SIC split)"]
+
+
+def test_flight_following_report_text_payload_header() -> None:
+    report = FlightFollowingReport(
+        target_date=date(2025, 10, 26),
+        generated_at=datetime(2025, 10, 26, 20, 39, tzinfo=timezone.utc),
+        sections=[],
+    )
+
+    payload = report.text_payload().splitlines()
+
+    assert payload == ["High Risk Flight Report - 26OCT25"]
