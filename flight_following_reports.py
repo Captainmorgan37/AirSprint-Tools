@@ -4,7 +4,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Tuple
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    MutableMapping,
+    Optional,
+    Sequence,
+    Tuple,
+)
 
 from fl3xx_api import Fl3xxApiConfig, fetch_flights, fetch_postflight
 from flight_leg_utils import compute_mountain_day_window_utc, safe_parse_dt
@@ -73,6 +84,99 @@ class DutyStartCollection:
     snapshots: List[DutyStartSnapshot] = field(default_factory=list)
     flights_metadata: Dict[str, Any] = field(default_factory=dict)
     grouped_flights: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
+
+
+@dataclass
+class FlightFollowingReportSection:
+    """Structured representation of a single Flight Following section."""
+
+    title: str
+    lines: List[str] = field(default_factory=list)
+
+    def normalized_lines(self) -> List[str]:
+        """Return sanitized lines with whitespace removed."""
+
+        normalized: List[str] = []
+        for line in self.lines:
+            if line is None:
+                continue
+            if not isinstance(line, str):
+                line = str(line)
+            trimmed = line.strip()
+            if trimmed:
+                normalized.append(trimmed)
+        return normalized
+
+    @property
+    def text(self) -> str:
+        """Return the section body text, falling back to ``"None"``."""
+
+        normalized = self.normalized_lines()
+        if not normalized:
+            return "None"
+        return "\n".join(normalized)
+
+    def render(self) -> str:
+        """Return the formatted section with its header."""
+
+        header = (self.title or "").strip()
+        if not header:
+            return self.text
+        return f"{header}\n{self.text}"
+
+
+@dataclass
+class FlightFollowingReport:
+    """Aggregated Flight Following report with text payload rendering."""
+
+    target_date: date
+    generated_at: datetime
+    sections: List[FlightFollowingReportSection] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def text_payload(self) -> str:
+        """Return a Markdown/plain text payload combining all sections."""
+
+        generated_at_utc = self.generated_at.astimezone(UTC)
+        header_lines = [
+            f"Flight Following Duty Report – {self.target_date.isoformat()}",
+            f"Generated at {generated_at_utc.strftime('%Y-%m-%d %H:%M %Z')}",
+        ]
+
+        lines: List[str] = header_lines + [""]
+
+        for section in self.sections:
+            rendered = section.render()
+            if rendered:
+                lines.append(rendered)
+                lines.append("")
+
+        while lines and lines[-1] == "":
+            lines.pop()
+
+        return "\n".join(lines)
+
+    def message_payload(self) -> Dict[str, Any]:
+        """Return a message-friendly payload for Flight Following consumers."""
+
+        generated_at_utc = self.generated_at.astimezone(UTC)
+        sections_payload = [
+            {
+                "title": section.title,
+                "lines": section.normalized_lines() or ["None"],
+                "text": section.text,
+            }
+            for section in self.sections
+        ]
+
+        payload: Dict[str, Any] = {
+            "target_date": self.target_date.isoformat(),
+            "generated_at": generated_at_utc.isoformat(),
+            "sections": sections_payload,
+            "text": self.text_payload(),
+            "metadata": dict(self.metadata),
+        }
+        return payload
 
 
 def collect_duty_start_snapshots(
@@ -585,11 +689,65 @@ def _seat_sort_key(seat: str) -> Tuple[int, str]:
     return (2, seat_upper)
 
 
+SectionBuilder = Callable[[Iterable[DutyStartSnapshot] | DutyStartCollection], Iterable[str]]
+
+
+def build_flight_following_report(
+    collection: Iterable[DutyStartSnapshot] | DutyStartCollection,
+    *,
+    generated_at: Optional[datetime] = None,
+    target_date: Optional[date] = None,
+    section_builders: Optional[Sequence[Tuple[str, SectionBuilder]]] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+) -> FlightFollowingReport:
+    """Construct a :class:`FlightFollowingReport` from duty start snapshots."""
+
+    if isinstance(collection, DutyStartCollection):
+        resolved_target_date = collection.target_date
+    else:
+        if target_date is None:
+            raise ValueError(
+                "target_date must be provided when collection is not a DutyStartCollection"
+            )
+        resolved_target_date = target_date
+
+    if generated_at is None:
+        generated_at = datetime.now(tz=UTC)
+    elif generated_at.tzinfo is None:
+        generated_at = generated_at.replace(tzinfo=UTC)
+    else:
+        generated_at = generated_at.astimezone(UTC)
+
+    if section_builders is None:
+        section_builders = (
+            ("Split Duty Watchlist", summarize_long_duty_days),
+            ("Insufficient Rest", summarize_insufficient_rest),
+        )
+
+    sections: List[FlightFollowingReportSection] = []
+    for title, builder in section_builders:
+        raw_lines = builder(collection)
+        lines = [line for line in raw_lines if isinstance(line, str)] if raw_lines else []
+        sections.append(FlightFollowingReportSection(title=title, lines=lines))
+
+    report_metadata = dict(metadata or {})
+
+    return FlightFollowingReport(
+        target_date=resolved_target_date,
+        generated_at=generated_at,
+        sections=sections,
+        metadata=report_metadata,
+    )
+
+
 __all__ = [
     "DutyStartPilotSnapshot",
     "DutyStartSnapshot",
     "DutyStartCollection",
+    "FlightFollowingReportSection",
+    "FlightFollowingReport",
     "collect_duty_start_snapshots",
     "summarize_long_duty_days",
     "summarize_insufficient_rest",
+    "build_flight_following_report",
 ]
