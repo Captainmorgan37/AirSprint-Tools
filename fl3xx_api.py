@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 import hashlib
 import json
-from typing import Any, Dict, Iterable, List, MutableMapping, Optional, Tuple, Literal
+from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Tuple, Literal
 
 import requests
 from zoneinfo_compat import ZoneInfo
@@ -361,6 +361,146 @@ def _extract_fdp_actual_str(explainer_map: Any) -> Optional[str]:
     return header or None
 
 
+def _normalise_pilot_seat(role: Any, default: Literal["PIC", "SIC"] = "PIC") -> Literal["PIC", "SIC"]:
+    role_str = str(role or "").strip().upper()
+    if role_str in {"CMD", "PIC", "CAPT", "CAPTAIN"}:
+        return "PIC"
+    if role_str in {"FO", "SIC", "FIRST OFFICER"}:
+        return "SIC"
+    return default
+
+
+def _duty_snapshot_pilot_from_block(
+    pilot_block: Mapping[str, Any],
+    *,
+    default_seat: Literal["PIC", "SIC"] = "PIC",
+) -> DutySnapshotPilot:
+    seat = _normalise_pilot_seat(pilot_block.get("pilotRole") or pilot_block.get("role"), default_seat)
+
+    pilot_id_value = pilot_block.get("userId") or pilot_block.get("id") or pilot_block.get("crewMemberId")
+    pilot_id: Optional[str]
+    if isinstance(pilot_id_value, (str, int)):
+        pilot_id = str(pilot_id_value)
+    else:
+        pilot_id = None
+
+    first = pilot_block.get("firstName") or ""
+    last = pilot_block.get("lastName") or ""
+    name = f"{first} {last}".strip()
+    if not name:
+        for fallback in ("nickname", "logName", "email", "personnelNumber", "trigram"):
+            fallback_value = pilot_block.get(fallback)
+            if isinstance(fallback_value, str) and fallback_value.strip():
+                name = fallback_value.strip()
+                break
+
+    full_duty_state_raw = pilot_block.get("fullDutyState")
+    full_duty_state: Dict[str, Any] = dict(full_duty_state_raw) if isinstance(full_duty_state_raw, Mapping) else {}
+
+    fdp_info_raw: Mapping[str, Any] = {}
+    if full_duty_state:
+        maybe_fdp = full_duty_state.get("fdp")
+        if isinstance(maybe_fdp, Mapping):
+            fdp_info_raw = maybe_fdp
+    if not fdp_info_raw:
+        maybe_direct_fdp = pilot_block.get("fdp")
+        if isinstance(maybe_direct_fdp, Mapping):
+            fdp_info_raw = maybe_direct_fdp
+
+    fdp_actual_min = fdp_info_raw.get("actual") if isinstance(fdp_info_raw, Mapping) else None
+    fdp_max_min = fdp_info_raw.get("max") if isinstance(fdp_info_raw, Mapping) else None
+    if isinstance(fdp_actual_min, (int, float)):
+        fdp_actual_min = int(fdp_actual_min)
+    else:
+        fdp_actual_min = None
+    if isinstance(fdp_max_min, (int, float)):
+        fdp_max_min = int(fdp_max_min)
+    else:
+        fdp_max_min = None
+
+    explainer_source: Mapping[str, Any] = {}
+    if full_duty_state:
+        maybe_explainer = full_duty_state.get("explainerMap")
+        if isinstance(maybe_explainer, Mapping):
+            explainer_source = maybe_explainer
+    if not explainer_source:
+        maybe_direct_explainer = pilot_block.get("explainerMap")
+        if isinstance(maybe_direct_explainer, Mapping):
+            explainer_source = maybe_direct_explainer
+    explainer_map = dict(explainer_source) if isinstance(explainer_source, Mapping) else {}
+
+    fdp_actual_str = _extract_fdp_actual_str(explainer_map)
+    split_break_str = _extract_break_str(explainer_map)
+
+    split_duty = False
+    for candidate in (pilot_block, full_duty_state):
+        if isinstance(candidate, Mapping):
+            if candidate.get("splitDutyType"):
+                split_duty = True
+                break
+            split_value = candidate.get("splitDutyStart")
+            if isinstance(split_value, bool) and split_value:
+                split_duty = True
+                break
+
+    rest_payload_raw = pilot_block.get("restAfterDuty")
+    rest_payload = dict(rest_payload_raw) if isinstance(rest_payload_raw, Mapping) else {}
+    rest_after_min = None
+    if rest_payload:
+        actual = rest_payload.get("actual")
+        if isinstance(actual, (int, float)):
+            rest_after_min = int(actual)
+    if rest_after_min is None and isinstance(full_duty_state, Mapping):
+        rest_block = full_duty_state.get("restAfterDuty")
+        if isinstance(rest_block, Mapping):
+            actual = rest_block.get("actual")
+            if isinstance(actual, (int, float)):
+                rest_after_min = int(actual)
+
+    rest_after_str = _minutes_to_hhmm(rest_after_min)
+
+    return DutySnapshotPilot(
+        seat=seat,
+        name=name,
+        pilot_id=pilot_id,
+        fdp_actual_min=fdp_actual_min,
+        fdp_max_min=fdp_max_min,
+        fdp_actual_str=fdp_actual_str,
+        split_duty=split_duty,
+        split_break_str=split_break_str,
+        rest_after_min=rest_after_min,
+        rest_after_str=rest_after_str,
+    )
+
+
+def _fallback_pilots_from_time_block(time_block: Mapping[str, Any]) -> List[DutySnapshotPilot]:
+    pilots: List[DutySnapshotPilot] = []
+    for key, default_seat in (("cmd", "PIC"), ("fo", "SIC")):
+        pilot_block = time_block.get(key)
+        if isinstance(pilot_block, Mapping):
+            pilots.append(_duty_snapshot_pilot_from_block(pilot_block, default_seat=default_seat))
+    return [pilot for pilot in pilots if pilot is not None]
+
+
+def _fallback_pilots_from_deice(postflight_payload: Mapping[str, Any]) -> List[DutySnapshotPilot]:
+    deice_block = postflight_payload.get("deice")
+    if not isinstance(deice_block, Mapping):
+        return []
+    crew_list = deice_block.get("crew")
+    if not isinstance(crew_list, list):
+        return []
+
+    pilots: List[DutySnapshotPilot] = []
+    for index, member in enumerate(crew_list):
+        if not isinstance(member, Mapping):
+            continue
+        job_title = member.get("jobTitle")
+        default_seat: Literal["PIC", "SIC"] = "PIC" if index == 0 else "SIC"
+        seat = _normalise_pilot_seat(job_title, default_seat)
+        pilots.append(_duty_snapshot_pilot_from_block(member, default_seat=seat))
+    return [pilot for pilot in pilots if pilot is not None]
+
+
 def parse_postflight_payload(postflight_payload: Any) -> DutySnapshot:
     """Normalise a postflight payload into duty data for reporting."""
 
@@ -379,92 +519,21 @@ def parse_postflight_payload(postflight_payload: Any) -> DutySnapshot:
 
     dtls2 = time_block.get("dtls2", []) if time_block else []
     if not isinstance(dtls2, list):
-        dtls2 = []
+        dtls2 = postflight_payload.get("dtls2") if isinstance(postflight_payload, Mapping) else []
+        if not isinstance(dtls2, list):
+            dtls2 = []
 
     for pilot_block in dtls2:
-        if not isinstance(pilot_block, dict):
-            continue
+        if isinstance(pilot_block, Mapping):
+            pilots.append(_duty_snapshot_pilot_from_block(pilot_block))
 
-        role_raw = pilot_block.get("pilotRole") or pilot_block.get("role") or ""
-        role_normalised = str(role_raw).strip().upper()
-        if role_normalised in {"CMD", "PIC", "CAPT", "CAPTAIN"}:
-            seat: Literal["PIC", "SIC"] = "PIC"
-        elif role_normalised in {"FO", "SIC", "FIRST OFFICER"}:
-            seat = "SIC"
-        else:
-            seat = "PIC"
+    if not pilots and time_block:
+        pilots.extend(_fallback_pilots_from_time_block(time_block))
 
-        pilot_id_value = pilot_block.get("userId") or pilot_block.get("id")
-        pilot_id: Optional[str]
-        if isinstance(pilot_id_value, (str, int)):
-            pilot_id = str(pilot_id_value)
-        else:
-            pilot_id = None
+    if not pilots and isinstance(postflight_payload, Mapping):
+        pilots.extend(_fallback_pilots_from_deice(postflight_payload))
 
-        first = pilot_block.get("firstName") or ""
-        last = pilot_block.get("lastName") or ""
-        name = f"{first} {last}".strip()
-        if not name:
-            for fallback in ("logName", "email", "personnelNumber"):
-                fallback_value = pilot_block.get(fallback)
-                if isinstance(fallback_value, str) and fallback_value.strip():
-                    name = fallback_value.strip()
-                    break
-
-        full_duty_state = pilot_block.get("fullDutyState", {})
-        fdp_info = full_duty_state.get("fdp", {}) if isinstance(full_duty_state, dict) else {}
-        fdp_actual_min = fdp_info.get("actual") if isinstance(fdp_info, dict) else None
-        fdp_max_min = fdp_info.get("max") if isinstance(fdp_info, dict) else None
-        if isinstance(fdp_actual_min, (int, float)):
-            fdp_actual_min = int(fdp_actual_min)
-        else:
-            fdp_actual_min = None
-        if isinstance(fdp_max_min, (int, float)):
-            fdp_max_min = int(fdp_max_min)
-        else:
-            fdp_max_min = None
-
-        explainer_map = full_duty_state.get("explainerMap", {}) if isinstance(full_duty_state, dict) else {}
-        fdp_actual_str = _extract_fdp_actual_str(explainer_map)
-        split_break_str = _extract_break_str(explainer_map)
-
-        split_duty = False
-        if pilot_block.get("splitDutyStart") is True or pilot_block.get("splitDutyType"):
-            split_duty = True
-        if isinstance(full_duty_state, dict) and (
-            full_duty_state.get("splitDutyStart") is True or full_duty_state.get("splitDutyType")
-        ):
-            split_duty = True
-
-        rest_after_min = None
-        rest_block = pilot_block.get("restAfterDuty")
-        if isinstance(rest_block, dict):
-            actual = rest_block.get("actual")
-            if isinstance(actual, (int, float)):
-                rest_after_min = int(actual)
-        if rest_after_min is None and isinstance(full_duty_state, dict):
-            rest_block = full_duty_state.get("restAfterDuty")
-            if isinstance(rest_block, dict):
-                actual = rest_block.get("actual")
-                if isinstance(actual, (int, float)):
-                    rest_after_min = int(actual)
-
-        rest_after_str = _minutes_to_hhmm(rest_after_min)
-
-        pilots.append(
-            DutySnapshotPilot(
-                seat=seat,
-                name=name,
-                pilot_id=pilot_id,
-                fdp_actual_min=fdp_actual_min,
-                fdp_max_min=fdp_max_min,
-                fdp_actual_str=fdp_actual_str,
-                split_duty=split_duty,
-                split_break_str=split_break_str,
-                rest_after_min=rest_after_min,
-                rest_after_str=rest_after_str,
-            )
-        )
+    pilots = [pilot for pilot in pilots if isinstance(pilot, DutySnapshotPilot)]
 
     return DutySnapshot(tail=tail, pilots=pilots)
 

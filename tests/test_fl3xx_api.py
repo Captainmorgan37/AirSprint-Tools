@@ -62,3 +62,32 @@ def test_parse_postflight_payload_reads_time_dtls2() -> None:
     assert fo.pilot_id == "765708"
     assert fo.rest_after_min == 540
     assert fo.rest_after_str == "9:00"
+
+
+def test_parse_postflight_payload_falls_back_to_time_commanders() -> None:
+    payload = {
+        "tailNumber": "C-GFSJ",
+        "time": {
+            "cmd": {
+                "pilotRole": "CMD",
+                "firstName": "Alex",
+                "lastName": "Pic",
+                "userId": 111,
+                "restAfterDuty": {"actual": 600},
+            },
+            "fo": {
+                "pilotRole": "FO",
+                "firstName": "Sam",
+                "lastName": "Fo",
+                "userId": 222,
+            },
+        },
+    }
+
+    snapshot = parse_postflight_payload(payload)
+
+    assert snapshot.tail == "C-GFSJ"
+    assert len(snapshot.pilots) == 2
+    identifiers = {pilot.pilot_id for pilot in snapshot.pilots}
+    assert identifiers == {"111", "222"}
+    assert any(pilot.rest_after_min == 600 for pilot in snapshot.pilots)
