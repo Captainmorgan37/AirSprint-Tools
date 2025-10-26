@@ -125,6 +125,9 @@ def test_collect_duty_start_snapshots_groups_by_tail_and_tracks_crew_changes():
     assert collection.start_utc.tzinfo == UTC
     assert collection.end_utc.tzinfo == UTC
     assert len(collection.snapshots) == 3
+    assert collection.ingestion_diagnostics["total_flights"] == len(flights)
+    assert collection.ingestion_diagnostics["accepted_flights"] == 4
+    assert collection.ingestion_diagnostics["tails"] == {"C-FAKE": 3, "C-OTHER": 1}
 
     first_snapshot = collection.snapshots[0]
     assert first_snapshot.tail == "C-FAKE"
@@ -152,6 +155,61 @@ def test_collect_duty_start_snapshots_groups_by_tail_and_tracks_crew_changes():
     assert other_tail_snapshot.flight_id == 4
     assert other_tail_snapshot.pilots[0].name == "Riley Blue"
     assert other_tail_snapshot.crew_signature() == (("PIC", "P3"), ("SIC", "S3"))
+
+
+def test_collect_duty_start_snapshots_records_ingestion_diagnostics_for_skips():
+    target_date = date(2024, 3, 3)
+    flights = [
+        {"id": 1, "blockOffEstUTC": "2024-03-03T08:00:00Z"},
+        {"id": 2, "registrationNumber": "C-LOG"},
+        {
+            "id": 3,
+            "registrationNumber": "C-LOG",
+            "blockOffEstUTC": "not-a-date",
+        },
+        {
+            "registrationNumber": "C-LOG",
+            "blockOffEstUTC": "2024-03-03T09:00:00Z",
+        },
+        {
+            "id": 5,
+            "registrationNumber": "C-LOG",
+            "blockOffEstUTC": "2024-03-03T10:00:00Z",
+        },
+    ]
+
+    postflight_payloads = {
+        5: _make_postflight(
+            "Jordan Blue",
+            "Casey Red",
+            pic_id="PLOG",
+            sic_id="SLOG",
+            tail_number="C-LOG",
+        )
+    }
+
+    def fake_postflight_fetcher(_config, flight_id):
+        return postflight_payloads[flight_id]
+
+    config = Fl3xxApiConfig(api_token="dummy")
+
+    collection = collect_duty_start_snapshots(
+        config,
+        target_date,
+        flights=flights,
+        postflight_fetcher=fake_postflight_fetcher,
+    )
+
+    diagnostics = collection.ingestion_diagnostics
+    assert diagnostics["total_flights"] == len(flights)
+    assert diagnostics["accepted_flights"] == 1
+    assert diagnostics["tails"] == {"C-LOG": 1}
+
+    skipped = diagnostics["skipped"]
+    assert skipped["missing_tail"]["count"] == 1
+    assert skipped["missing_block_off"]["count"] == 1
+    assert skipped["invalid_block_off"]["count"] == 1
+    assert skipped["missing_flight_id"]["count"] == 1
 
 
 def test_collect_duty_start_snapshots_detects_string_split_duty_flags():

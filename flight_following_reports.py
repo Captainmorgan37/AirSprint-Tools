@@ -85,6 +85,7 @@ class DutyStartCollection:
     snapshots: List[DutyStartSnapshot] = field(default_factory=list)
     flights_metadata: Dict[str, Any] = field(default_factory=dict)
     grouped_flights: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
+    ingestion_diagnostics: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -204,7 +205,9 @@ def collect_duty_start_snapshots(
     else:
         fetched_flights = list(flights)
 
-    grouped = _group_flights_by_tail(fetched_flights, start_utc, end_utc)
+    grouped, ingestion_diagnostics = _group_flights_by_tail(
+        fetched_flights, start_utc, end_utc
+    )
 
     fetcher = postflight_fetcher or fetch_postflight
     snapshots: List[DutyStartSnapshot] = []
@@ -240,6 +243,7 @@ def collect_duty_start_snapshots(
         snapshots=snapshots,
         flights_metadata=flights_metadata,
         grouped_flights=grouped,
+        ingestion_diagnostics=ingestion_diagnostics,
     )
 
 
@@ -247,11 +251,15 @@ def _group_flights_by_tail(
     flights: Iterable[Dict[str, Any]],
     start_utc: datetime,
     end_utc: datetime,
-) -> Dict[str, List[Dict[str, Any]]]:
+) -> Tuple[Dict[str, List[Dict[str, Any]]], Dict[str, Any]]:
     grouped: Dict[str, List[Dict[str, Any]]] = {}
+    diagnostics = _init_ingestion_diagnostics()
 
     for flight in flights:
+        diagnostics["total_flights"] += 1
+
         if not isinstance(flight, MutableMapping):
+            _record_skip(diagnostics, "non_mapping", flight)
             continue
 
         tail = _clean_str(
@@ -261,6 +269,7 @@ def _group_flights_by_tail(
             or flight.get("aircraft")
         )
         if not tail:
+            _record_skip(diagnostics, "missing_tail", flight)
             continue
 
         block_off_raw = _extract_first(
@@ -276,16 +285,26 @@ def _group_flights_by_tail(
             "scheduledDeparture",
         )
         if not block_off_raw:
+            _record_skip(diagnostics, "missing_block_off", flight)
             continue
         try:
             block_off_dt = safe_parse_dt(str(block_off_raw))
         except Exception:
+            _record_skip(diagnostics, "invalid_block_off", flight, extra={"value": block_off_raw})
             continue
         if block_off_dt.tzinfo is None:
             block_off_dt = block_off_dt.replace(tzinfo=UTC)
         else:
             block_off_dt = block_off_dt.astimezone(UTC)
         if block_off_dt < start_utc or block_off_dt >= end_utc:
+            _record_skip(
+                diagnostics,
+                "outside_window",
+                flight,
+                extra={
+                    "block_off_est_utc": block_off_dt.isoformat(),
+                },
+            )
             continue
 
         flight_id = _extract_first(
@@ -299,6 +318,7 @@ def _group_flights_by_tail(
             "externalId",
         )
         if flight_id is None:
+            _record_skip(diagnostics, "missing_flight_id", flight)
             continue
 
         entry = {
@@ -307,11 +327,69 @@ def _group_flights_by_tail(
             "flight_payload": dict(flight),
         }
         grouped.setdefault(tail, []).append(entry)
+        diagnostics["accepted_flights"] += 1
+        diagnostics.setdefault("tails", {}).setdefault(tail, 0)
+        diagnostics["tails"][tail] += 1
 
     for tail, tail_flights in grouped.items():
         tail_flights.sort(key=lambda item: item["block_off_est_utc"] or datetime.max.replace(tzinfo=UTC))
 
-    return grouped
+    return grouped, diagnostics
+
+
+def _init_ingestion_diagnostics() -> Dict[str, Any]:
+    return {
+        "total_flights": 0,
+        "accepted_flights": 0,
+        "tails": {},
+        "skipped": {},
+    }
+
+
+def _record_skip(
+    diagnostics: Dict[str, Any],
+    reason: str,
+    flight: Any,
+    *,
+    extra: Optional[Dict[str, Any]] = None,
+    sample_limit: int = 5,
+) -> None:
+    skipped = diagnostics.setdefault("skipped", {})
+    bucket = skipped.setdefault(reason, {"count": 0, "samples": []})
+    bucket["count"] += 1
+    samples: List[Any] = bucket["samples"]
+    if len(samples) >= sample_limit:
+        return
+    samples.append(_summarize_flight_sample(flight, extra=extra))
+
+
+def _summarize_flight_sample(
+    flight: Any,
+    *,
+    extra: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    sample: Dict[str, Any] = {}
+    if isinstance(flight, MutableMapping):
+        keys_to_capture = (
+            "flightId",
+            "id",
+            "legId",
+            "registrationNumber",
+            "tailNumber",
+            "blockOffEstUTC",
+            "blockOffUtc",
+            "blockOffActualUTC",
+        )
+        for key in keys_to_capture:
+            if key in flight:
+                sample[key] = flight.get(key)
+    else:
+        sample["repr"] = repr(flight)
+
+    if extra:
+        sample.update(extra)
+
+    return sample
 
 
 def _build_snapshot_from_postflight(
