@@ -613,6 +613,55 @@ def _summarise_period(period: Dict[str, Any]) -> List[Tuple[str, str]]:
         if value:
             summary.append((label, value))
 
+    tempo_blocks = period.get("tempo", [])
+    for tempo in tempo_blocks:
+        start_dt = tempo.get("start")
+        end_dt = tempo.get("end")
+        if isinstance(start_dt, datetime):
+            start_text = _format_local(start_dt)
+        else:
+            start_text = "—"
+        if isinstance(end_dt, datetime):
+            end_text = _format_local(end_dt)
+        else:
+            end_text = "—"
+
+        if start_text == "—" and end_text == "—":
+            window_text = "temporary window"
+        else:
+            window_text = f"{start_text} – {end_text}"
+
+        prob_prefix = tempo.get("prob") or "TEMPO"
+        tempo_detail_map = {label: value for label, value in tempo.get("details", [])}
+
+        tempo_bits: List[str] = []
+        visibility = _coerce(tempo_detail_map.get("Visibility"))
+        weather = _coerce(tempo_detail_map.get("Weather"))
+        clouds = _coerce(tempo_detail_map.get("Clouds"))
+        wind_dir_t = _coerce(tempo_detail_map.get("Wind Dir (°)"))
+        wind_spd_t = _coerce(tempo_detail_map.get("Wind Speed (kt)"))
+        wind_gust_t = _coerce(tempo_detail_map.get("Wind Gust (kt)"))
+
+        wind_parts_t: List[str] = []
+        if wind_dir_t:
+            wind_parts_t.append(wind_dir_t)
+        if wind_spd_t:
+            wind_parts_t.append(f"{wind_spd_t}kt")
+        if wind_gust_t:
+            wind_parts_t.append(f"G{wind_gust_t}")
+        if wind_parts_t:
+            tempo_bits.append("Wind " + " ".join(wind_parts_t))
+
+        if visibility:
+            tempo_bits.append(f"Vis {visibility}")
+        if weather:
+            tempo_bits.append(weather)
+        if clouds:
+            tempo_bits.append(clouds)
+
+        if tempo_bits:
+            summary.append((f"{prob_prefix} {window_text}", "; ".join(tempo_bits)))
+
     return summary
 
 

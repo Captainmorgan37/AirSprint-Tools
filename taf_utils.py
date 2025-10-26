@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import calendar
+import json
+import re
+
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, MutableMapping, Sequence, Tuple
 
-import json
-import re
 import requests
 
 
@@ -373,8 +375,6 @@ def _fallback_parse_raw_taf(
     if idx < len(tokens) and re.match(r"^\d{4}/\d{4}$", tokens[idx]):
         idx += 1
 
-    CONTROL_TOKENS = ("TEMPO", "PROB", "BECMG")
-
     def _parse_fm(token: str) -> datetime | None:
         match = re.match(r"FM(\d{2})(\d{2})(\d{2})", token)
         if not match or not issue_dt:
@@ -393,77 +393,53 @@ def _fallback_parse_raw_taf(
 
         return datetime(year, month, day, hour, minute, tzinfo=timezone.utc)
 
-    segs_raw: List[Tuple[datetime, List[str]]] = []
-    cur_start = valid_from_dt
-    cur_tokens: List[str] = []
+    def _parse_range_ddhh_ddhh(token: str) -> tuple[datetime | None, datetime | None]:
+        match = re.match(r"^(\d{2})(\d{2})/(\d{2})(\d{2})$", token)
+        if not match or not issue_dt:
+            return (None, None)
 
-    i = idx
-    while i < len(tokens):
-        token = tokens[i]
+        start_day = int(match.group(1))
+        start_hour = int(match.group(2))
+        end_day = int(match.group(3))
+        end_hour = int(match.group(4))
 
-        fm_dt = _parse_fm(token)
-        if fm_dt:
-            if cur_tokens and cur_start:
-                segs_raw.append((cur_start, list(cur_tokens)))
-            cur_start = fm_dt
-            cur_tokens = []
-            i += 1
-            continue
+        def _mk(day: int, hour: int) -> datetime:
+            year = issue_dt.year
+            month = issue_dt.month
+            if day < issue_dt.day - 15:
+                month += 1
+                if month > 12:
+                    month = 1
+                    year += 1
 
-        if token == "TEMPO":
-            i += 1
-            if i < len(tokens) and re.match(r"^\d{4}/\d{4}$", tokens[i]):
-                i += 1
-            while i < len(tokens):
-                peek = tokens[i]
-                if peek in CONTROL_TOKENS or _parse_fm(peek):
-                    break
-                i += 1
-            continue
+            if hour == 24:
+                hour = 0
+                day += 1
 
-        if token.startswith("PROB") and re.match(r"^PROB\d{2}$", token):
-            i += 1
-            if i < len(tokens) and tokens[i] == "TEMPO":
-                i += 1
-                if i < len(tokens) and re.match(r"^\d{4}/\d{4}$", tokens[i]):
-                    i += 1
-            while i < len(tokens):
-                peek = tokens[i]
-                if peek in CONTROL_TOKENS or _parse_fm(peek):
-                    break
-                i += 1
-            continue
+            while True:
+                try:
+                    return datetime(year, month, day, hour, 0, tzinfo=timezone.utc)
+                except ValueError:
+                    # handle month rollover when the day exceeds the length of the month
+                    days_in_month = calendar.monthrange(year, month)[1]
+                    day -= days_in_month
+                    month += 1
+                    if month > 12:
+                        month = 1
+                        year += 1
 
-        if token.startswith("BECMG"):
-            i += 1
-            if i < len(tokens) and re.match(r"^\d{4}/\d{4}$", tokens[i]):
-                i += 1
-            continue
+        return (_mk(start_day, start_hour), _mk(end_day, end_hour))
 
-        if cur_start:
-            cur_tokens.append(token)
-        i += 1
-
-    if cur_tokens and cur_start:
-        segs_raw.append((cur_start, list(cur_tokens)))
-
-    wind_re = re.compile(r"^(?P<dir>\d{3}|VRB)(?P<spd>\d{2,3})(G(?P<gst>\d{2,3}))?KT$")
-    cloud_re = re.compile(r"^(FEW|SCT|BKN|OVC)(\d{3})([A-Z]{2,3})?$")
-
-    segments: List[Dict[str, Any]] = []
-
-    for index, (segment_start, segment_tokens) in enumerate(segs_raw):
-        if index + 1 < len(segs_raw):
-            segment_end = segs_raw[index + 1][0]
-        else:
-            segment_end = valid_to_dt
+    def _extract_conditions_from_tokens(tokens_list: List[str]) -> List[Tuple[str, str]]:
+        wind_re = re.compile(r"^(?P<dir>\d{3}|VRB)(?P<spd>\d{2,3})(G(?P<gst>\d{2,3}))?KT$")
+        cloud_re = re.compile(r"^(FEW|SCT|BKN|OVC)(\d{3})([A-Z]{2,3})?$")
 
         wind_dir = wind_spd = wind_gust = None
         visibility = None
         weather_codes: List[str] = []
         cloud_layers: List[str] = []
 
-        for token in segment_tokens:
+        for token in tokens_list:
             wind_match = wind_re.match(token)
             if wind_match and wind_spd is None:
                 wind_dir = wind_match.group("dir")
@@ -487,7 +463,7 @@ def _fallback_parse_raw_taf(
             if re.match(r"^[-+A-Z]{2,}$", token) and not token.endswith("KT"):
                 weather_codes.append(token)
 
-        details: List[Tuple[str, Any]] = []
+        details: List[Tuple[str, str]] = []
         if wind_dir or wind_spd or wind_gust:
             if wind_dir:
                 details.append(("Wind Dir (°)", wind_dir))
@@ -502,13 +478,128 @@ def _fallback_parse_raw_taf(
         if cloud_layers:
             details.append(("Clouds", ", ".join(cloud_layers)))
 
+        return details
+
+    segs_raw: List[Tuple[datetime, List[str], List[Dict[str, Any]]]] = []
+    cur_start = valid_from_dt
+    cur_tokens: List[str] = []
+    cur_tempo: List[Dict[str, Any]] = []
+
+    i = idx
+    while i < len(tokens):
+        token = tokens[i]
+
+        fm_dt = _parse_fm(token)
+        if fm_dt:
+            if cur_start:
+                segs_raw.append((cur_start, list(cur_tokens), list(cur_tempo)))
+            cur_start = fm_dt
+            cur_tokens = []
+            cur_tempo = []
+            i += 1
+            continue
+
+        if token == "TEMPO":
+            i += 1
+            tempo_start = tempo_end = None
+            if i < len(tokens) and re.match(r"^\d{4}/\d{4}$", tokens[i]):
+                tempo_start, tempo_end = _parse_range_ddhh_ddhh(tokens[i])
+                i += 1
+
+            tempo_tokens: List[str] = []
+            while i < len(tokens):
+                peek = tokens[i]
+                if peek in ("TEMPO", "BECMG") or peek.startswith("PROB") or _parse_fm(peek):
+                    break
+                tempo_tokens.append(peek)
+                i += 1
+
+            tempo_details = _extract_conditions_from_tokens(tempo_tokens)
+            cur_tempo.append(
+                {
+                    "start": tempo_start or cur_start,
+                    "end": tempo_end or valid_to_dt,
+                    "prob": None,
+                    "details": tempo_details,
+                }
+            )
+            continue
+
+        if token.startswith("PROB") and re.match(r"^PROB\d{2}$", token):
+            prob_token = token
+            i += 1
+
+            if i < len(tokens) and tokens[i] == "TEMPO":
+                i += 1
+
+            tempo_start = tempo_end = None
+            if i < len(tokens) and re.match(r"^\d{4}/\d{4}$", tokens[i]):
+                tempo_start, tempo_end = _parse_range_ddhh_ddhh(tokens[i])
+                i += 1
+
+            tempo_tokens: List[str] = []
+            while i < len(tokens):
+                peek = tokens[i]
+                if peek in ("TEMPO", "BECMG") or peek.startswith("PROB") or _parse_fm(peek):
+                    break
+                tempo_tokens.append(peek)
+                i += 1
+
+            tempo_details = _extract_conditions_from_tokens(tempo_tokens)
+            cur_tempo.append(
+                {
+                    "start": tempo_start or cur_start,
+                    "end": tempo_end or valid_to_dt,
+                    "prob": prob_token,
+                    "details": tempo_details,
+                }
+            )
+            continue
+
+        if token.startswith("BECMG"):
+            i += 1
+            if i < len(tokens) and re.match(r"^\d{4}/\d{4}$", tokens[i]):
+                i += 1
+            continue
+
+        if cur_start:
+            cur_tokens.append(token)
+        i += 1
+
+    if cur_start:
+        segs_raw.append((cur_start, list(cur_tokens), list(cur_tempo)))
+
+    segments: List[Dict[str, Any]] = []
+
+    for index, (segment_start, segment_tokens, segment_tempo) in enumerate(segs_raw):
+        if index + 1 < len(segs_raw):
+            segment_end = segs_raw[index + 1][0]
+        else:
+            segment_end = valid_to_dt
+
+        prevailing_details = _extract_conditions_from_tokens(segment_tokens)
+
+        tempo_blocks: List[Dict[str, Any]] = []
+        for tempo_block in segment_tempo:
+            block_start = tempo_block.get("start") or segment_start
+            block_end = tempo_block.get("end") or segment_end
+            tempo_blocks.append(
+                {
+                    "start": block_start,
+                    "end": block_end,
+                    "prob": tempo_block.get("prob"),
+                    "details": tempo_block.get("details", []),
+                }
+            )
+
         segments.append(
             {
                 "from_display": segment_start.strftime("%b %d %Y, %H:%MZ"),
                 "from_time": segment_start,
                 "to_display": segment_end.strftime("%b %d %Y, %H:%MZ") if segment_end else "N/A",
                 "to_time": segment_end,
-                "details": details,
+                "details": prevailing_details,
+                "tempo": tempo_blocks,
             }
         )
 
