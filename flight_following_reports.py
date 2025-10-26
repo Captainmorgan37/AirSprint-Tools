@@ -20,6 +20,16 @@ from typing import (
 
 from fl3xx_api import Fl3xxApiConfig, fetch_flights, fetch_postflight
 from flight_leg_utils import compute_mountain_day_window_utc, safe_parse_dt
+from short_turn_utils import (
+    DEFAULT_TURN_THRESHOLD_MIN as _SHORT_TURN_THRESHOLD_MINUTES,
+    PRIORITY_TURN_THRESHOLD_MIN as _SHORT_TURN_PRIORITY_THRESHOLD_MINUTES,
+    summarize_short_turns,
+)
+
+try:  # pragma: no cover - Python <3.9 fallback
+    from zoneinfo import ZoneInfo
+except ImportError:  # pragma: no cover - Python <3.9 fallback
+    ZoneInfo = None  # type: ignore[assignment]
 
 UTC = timezone.utc
 
@@ -283,6 +293,67 @@ def summarize_collection_for_display(collection: DutyStartCollection) -> Dict[st
     summary["crew_summary"] = _summarize_snapshots_for_metadata(collection.snapshots)
 
     return summary
+
+
+def _collect_flights_for_short_turns(
+    collection: Iterable[DutyStartSnapshot] | DutyStartCollection,
+) -> List[Mapping[str, Any]]:
+    if not isinstance(collection, DutyStartCollection):
+        return []
+
+    grouped = collection.grouped_flights or {}
+    flights: List[Mapping[str, Any]] = []
+    for tail_entries in grouped.values():
+        for entry in tail_entries:
+            if not isinstance(entry, Mapping):
+                continue
+            payload = entry.get("flight_payload")
+            if isinstance(payload, Mapping):
+                flights.append(payload)
+    return flights
+
+
+def compute_short_turn_summary_for_collection(
+    collection: Iterable[DutyStartSnapshot] | DutyStartCollection,
+    *,
+    threshold_min: int = _SHORT_TURN_THRESHOLD_MINUTES,
+    priority_threshold_min: int = _SHORT_TURN_PRIORITY_THRESHOLD_MINUTES,
+    local_tz_name: str = "America/Edmonton",
+) -> Tuple[str, int, Dict[str, Any]]:
+    """Return the formatted summary text, count, and metadata for short turns."""
+
+    flights = _collect_flights_for_short_turns(collection)
+    local_tz = ZoneInfo(local_tz_name) if ZoneInfo else None
+    summary_text, short_df, metadata = summarize_short_turns(
+        flights,
+        threshold_min=threshold_min,
+        priority_threshold_min=priority_threshold_min,
+        local_tz=local_tz,
+    )
+    count = 0 if short_df.empty else int(len(short_df))
+    normalized_metadata = dict(metadata or {})
+    normalized_metadata["turns_detected"] = count
+    return summary_text, count, normalized_metadata
+
+
+def summarize_short_turns_for_collection(
+    collection: Iterable[DutyStartSnapshot] | DutyStartCollection,
+    *,
+    threshold_min: int = _SHORT_TURN_THRESHOLD_MINUTES,
+    priority_threshold_min: int = _SHORT_TURN_PRIORITY_THRESHOLD_MINUTES,
+    local_tz_name: str = "America/Edmonton",
+) -> List[str]:
+    """Return a list containing the formatted short-turn summary text."""
+
+    summary_text, _count, _metadata = compute_short_turn_summary_for_collection(
+        collection,
+        threshold_min=threshold_min,
+        priority_threshold_min=priority_threshold_min,
+        local_tz_name=local_tz_name,
+    )
+    if not summary_text:
+        return []
+    return [summary_text]
 
 
 def build_rest_before_index(
@@ -1401,5 +1472,7 @@ __all__ = [
     "summarize_long_duty_days",
     "summarize_tight_turnarounds",
     "summarize_insufficient_rest",
+    "compute_short_turn_summary_for_collection",
+    "summarize_short_turns_for_collection",
     "build_flight_following_report",
 ]
