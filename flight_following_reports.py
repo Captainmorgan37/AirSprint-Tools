@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone, tzinfo
 import re
 from typing import (
     Any,
@@ -20,6 +20,16 @@ from typing import (
 
 from fl3xx_api import Fl3xxApiConfig, fetch_flights, fetch_postflight
 from flight_leg_utils import compute_mountain_day_window_utc, safe_parse_dt
+from short_turn_utils import (
+    DEFAULT_TURN_THRESHOLD_MIN as _SHORT_TURN_THRESHOLD_MINUTES,
+    PRIORITY_TURN_THRESHOLD_MIN as _SHORT_TURN_PRIORITY_THRESHOLD_MINUTES,
+    summarize_short_turns,
+)
+
+try:  # pragma: no cover - Python <3.9 fallback
+    from zoneinfo import ZoneInfo
+except ImportError:  # pragma: no cover - Python <3.9 fallback
+    ZoneInfo = None  # type: ignore[assignment]
 
 UTC = timezone.utc
 
@@ -38,15 +48,20 @@ class DutyStartPilotSnapshot:
     trigram: Optional[str] = None
     full_duty_state: Dict[str, Any] = field(default_factory=dict)
     explainer_map: Dict[str, Any] = field(default_factory=dict)
-    rest_payload: Dict[str, Any] = field(default_factory=dict)
+    rest_after_payload: Dict[str, Any] = field(default_factory=dict)
+    rest_before_payload: Dict[str, Any] = field(default_factory=dict)
     raw_payload: Dict[str, Any] = field(default_factory=dict)
     fdp_actual_min: Optional[int] = None
     fdp_max_min: Optional[int] = None
     fdp_actual_str: Optional[str] = None
     split_duty: bool = False
     split_break_str: Optional[str] = None
-    rest_after_min: Optional[int] = None
-    rest_after_str: Optional[str] = None
+    rest_after_actual_min: Optional[int] = None
+    rest_after_required_min: Optional[int] = None
+    rest_after_actual_str: Optional[str] = None
+    rest_before_actual_min: Optional[int] = None
+    rest_before_required_min: Optional[int] = None
+    rest_before_actual_str: Optional[str] = None
 
 
 @dataclass
@@ -141,8 +156,8 @@ class FlightFollowingReport:
 
         generated_at_utc = self.generated_at.astimezone(UTC)
         header_lines = [
-            f"Flight Following Duty Report – {self.target_date.isoformat()}",
-            f"Generated at {generated_at_utc.strftime('%Y-%m-%d %H:%M %Z')}",
+            "High Risk Flight Report - "
+            f"{self.target_date.strftime('%d%b%y').upper()}",
         ]
 
         lines: List[str] = header_lines + [""]
@@ -214,6 +229,7 @@ def collect_duty_start_snapshots(
 
     for tail, tail_flights in grouped.items():
         last_signature: Optional[Tuple[Tuple[str, str], ...]] = None
+        last_snapshot: Optional[DutyStartSnapshot] = None
 
         for flight_info in tail_flights:
             flight_id = flight_info.get("flight_id")
@@ -231,10 +247,13 @@ def collect_duty_start_snapshots(
 
             signature = snapshot.crew_signature()
             if last_signature is not None and signature == last_signature:
+                if last_snapshot is not None:
+                    _merge_split_duty_information(last_snapshot, snapshot)
                 continue
 
             snapshots.append(snapshot)
             last_signature = signature
+            last_snapshot = snapshot
 
     return DutyStartCollection(
         target_date=target_date,
@@ -245,6 +264,491 @@ def collect_duty_start_snapshots(
         grouped_flights=grouped,
         ingestion_diagnostics=ingestion_diagnostics,
     )
+
+
+def summarize_collection_for_display(collection: DutyStartCollection) -> Dict[str, Any]:
+    """Return a structured summary highlighting duty and crew diagnostics."""
+
+    tails = sorted(collection.grouped_flights.keys()) if collection.grouped_flights else []
+    flights_metadata = {
+        str(key): value for key, value in (collection.flights_metadata or {}).items()
+    }
+
+    summary: Dict[str, Any] = {
+        "target_date": collection.target_date.isoformat(),
+        "window_start_utc": collection.start_utc.isoformat(),
+        "window_end_utc": collection.end_utc.isoformat(),
+        "duty_start_snapshots": len(collection.snapshots),
+        "tails_processed": len(tails),
+        "tails": tails,
+        "flights_metadata": flights_metadata,
+    }
+
+    ingestion = collection.ingestion_diagnostics or {}
+    if ingestion:
+        summary["ingestion_diagnostics"] = _normalize_ingestion_diagnostics(ingestion)
+    else:
+        summary["ingestion_diagnostics"] = {}
+
+    summary["crew_summary"] = _summarize_snapshots_for_metadata(collection.snapshots)
+
+    return summary
+
+
+def _collect_flights_for_short_turns(
+    collection: Iterable[DutyStartSnapshot] | DutyStartCollection,
+) -> List[Mapping[str, Any]]:
+    if not isinstance(collection, DutyStartCollection):
+        return []
+
+    grouped = collection.grouped_flights or {}
+    flights: List[Mapping[str, Any]] = []
+    for tail_entries in grouped.values():
+        for entry in tail_entries:
+            if not isinstance(entry, Mapping):
+                continue
+            payload = entry.get("flight_payload")
+            if isinstance(payload, Mapping):
+                flights.append(payload)
+    return flights
+
+
+def compute_short_turn_summary_for_collection(
+    collection: Iterable[DutyStartSnapshot] | DutyStartCollection,
+    *,
+    threshold_min: int = _SHORT_TURN_THRESHOLD_MINUTES,
+    priority_threshold_min: int = _SHORT_TURN_PRIORITY_THRESHOLD_MINUTES,
+    local_tz_name: str = "America/Edmonton",
+) -> Tuple[str, int, Dict[str, Any]]:
+    """Return the formatted summary text, count, and metadata for short turns."""
+
+    flights = _collect_flights_for_short_turns(collection)
+    local_tz = ZoneInfo(local_tz_name) if ZoneInfo else None
+    summary_text, short_df, metadata = summarize_short_turns(
+        flights,
+        threshold_min=threshold_min,
+        priority_threshold_min=priority_threshold_min,
+        local_tz=local_tz,
+    )
+    count = 0 if short_df.empty else int(len(short_df))
+    normalized_metadata = dict(metadata or {})
+    normalized_metadata["turns_detected"] = count
+    return summary_text, count, normalized_metadata
+
+
+def summarize_short_turns_for_collection(
+    collection: Iterable[DutyStartSnapshot] | DutyStartCollection,
+    *,
+    threshold_min: int = _SHORT_TURN_THRESHOLD_MINUTES,
+    priority_threshold_min: int = _SHORT_TURN_PRIORITY_THRESHOLD_MINUTES,
+    local_tz_name: str = "America/Edmonton",
+) -> List[str]:
+    """Return a list containing the formatted short-turn summary text."""
+
+    summary_text, _count, _metadata = compute_short_turn_summary_for_collection(
+        collection,
+        threshold_min=threshold_min,
+        priority_threshold_min=priority_threshold_min,
+        local_tz_name=local_tz_name,
+    )
+    if not summary_text:
+        return []
+    return [summary_text]
+
+
+_CYYZ_AIRPORT_CODE = "CYYZ"
+_CYYZ_LOCAL_TZ_NAME = "America/Toronto"
+_CYYZ_NIGHT_START_MINUTES = 23 * 60
+_CYYZ_NIGHT_END_MINUTES = 6 * 60 + 29
+
+_CYYZ_DEPARTURE_AIRPORT_KEYS = (
+    "departureAirportIcao",
+    "departureAirport.icao",
+    "departure.airportIcao",
+    "departure.airport.icao",
+    "departureAirport",
+    "departure.icao",
+    "departure.airport",
+    "departureStation",
+    "airportFrom",
+    "fromAirport",
+    "realAirportFrom",
+)
+
+_CYYZ_ARRIVAL_AIRPORT_KEYS = (
+    "arrivalAirportIcao",
+    "arrivalAirport.icao",
+    "arrival.airportIcao",
+    "arrival.airport.icao",
+    "arrivalAirport",
+    "arrival.icao",
+    "arrival.airport",
+    "arrivalStation",
+    "airportTo",
+    "toAirport",
+    "realAirportTo",
+)
+
+_CYYZ_DEPARTURE_TIME_KEYS = (
+    "blockOffEstUTC",
+    "blockOffActualUTC",
+    "blockOffEstLocal",
+    "blockOffTimeUtc",
+    "scheduledOffBlockUtc",
+    "departureScheduledUtc",
+    "departureActualUtc",
+    "departureTimeUtc",
+    "departureTimeScheduled",
+    "departureTimeActual",
+    "departure.scheduledUtc",
+    "departure.actualUtc",
+    "departure.scheduledTime",
+    "departure.actualTime",
+    "departure.scheduled",
+    "departure.actual",
+    "times.departure.scheduled",
+    "times.departure.actual",
+    "times.offBlock.scheduled",
+    "times.offBlock.actual",
+    "scheduledOut",
+    "actualOut",
+    "outScheduled",
+    "outActual",
+    "offBlock",
+    "offBlockActual",
+    "offBlockScheduled",
+)
+
+_CYYZ_ARRIVAL_TIME_KEYS = (
+    "blockOnEstUTC",
+    "blockOnActualUTC",
+    "blockOnEstLocal",
+    "blocksonestimated",
+    "arrivalScheduledUtc",
+    "arrivalActualUtc",
+    "arrivalTimeUtc",
+    "arrivalTimeScheduled",
+    "arrivalTimeActual",
+    "arrival.scheduledUtc",
+    "arrival.actualUtc",
+    "arrival.scheduledTime",
+    "arrival.actualTime",
+    "arrival.scheduled",
+    "arrival.actual",
+    "times.arrival.scheduled",
+    "times.arrival.actual",
+    "times.onBlock.scheduled",
+    "times.onBlock.actual",
+    "scheduledIn",
+    "actualIn",
+    "inScheduled",
+    "inActual",
+    "onBlock",
+    "onBlockActual",
+    "onBlockScheduled",
+)
+
+_CYYZ_TAIL_KEYS = (
+    "tailNumber",
+    "registrationNumber",
+    "aircraftRegistration",
+    "aircraft.registration",
+    "aircraft.registrationNumber",
+    "aircraft.tailNumber",
+    "aircraft.name",
+    "tail",
+    "aircraft",
+)
+
+_CYYZ_ACCOUNT_KEYS = (
+    "accountName",
+    "account",
+    "account_name",
+    "owner",
+    "ownerName",
+    "customer",
+    "customerName",
+    "client",
+    "clientName",
+    "detail.accountName",
+    "detail.account",
+    "detail.account_name",
+)
+
+_ACCOUNT_NESTED_NAME_KEYS = (
+    "name",
+    "accountName",
+    "account",
+    "account_name",
+    "owner",
+    "ownerName",
+    "customer",
+    "customerName",
+    "client",
+    "clientName",
+    "displayName",
+    "label",
+)
+
+
+def summarize_cyyz_night_operations(
+    collection: Iterable[DutyStartSnapshot] | DutyStartCollection,
+    *,
+    local_tz_name: str = _CYYZ_LOCAL_TZ_NAME,
+    airport_code: str = _CYYZ_AIRPORT_CODE,
+) -> List[str]:
+    """Return formatted lines identifying CYYZ flights in the night window."""
+
+    zone = ZoneInfo(local_tz_name) if ZoneInfo else None
+    if zone is None:
+        return _format_cyyz_group("CYYZ Late Arrivals", []) + _format_cyyz_group(
+            "CYYZ Late Departures", []
+        )
+
+    flights = _collect_flights_for_short_turns(collection)
+    if not flights:
+        return _format_cyyz_group("CYYZ Late Arrivals", []) + _format_cyyz_group(
+            "CYYZ Late Departures", []
+        )
+
+    arrivals: List[Tuple[datetime, str, str]] = []
+    departures: List[Tuple[datetime, str, str]] = []
+    seen: set[Tuple[str, str, datetime, str]] = set()
+
+    for flight in flights:
+        if not isinstance(flight, Mapping):
+            continue
+
+        tail = _extract_tail_value(flight)
+        if not tail:
+            continue
+
+        account = _extract_account_name(flight) or "Unknown Account"
+        account_display = account if account.strip() else "Unknown Account"
+
+        dep_airport = _extract_airport_code(flight, _CYYZ_DEPARTURE_AIRPORT_KEYS)
+        arr_airport = _extract_airport_code(flight, _CYYZ_ARRIVAL_AIRPORT_KEYS)
+
+        if dep_airport == airport_code:
+            dep_dt = _extract_datetime_field(flight, _CYYZ_DEPARTURE_TIME_KEYS)
+            local_dep = _convert_to_timezone(dep_dt, zone)
+            if local_dep and _is_within_cyyz_night_window(local_dep):
+                key = ("dep", tail, _truncate_dt(local_dep), account_display)
+                if key not in seen:
+                    seen.add(key)
+                    departures.append((local_dep, tail, account_display))
+
+        if arr_airport == airport_code:
+            arr_dt = _extract_datetime_field(flight, _CYYZ_ARRIVAL_TIME_KEYS)
+            local_arr = _convert_to_timezone(arr_dt, zone)
+            if local_arr and _is_within_cyyz_night_window(local_arr):
+                key = ("arr", tail, _truncate_dt(local_arr), account_display)
+                if key not in seen:
+                    seen.add(key)
+                    arrivals.append((local_arr, tail, account_display))
+
+    arrivals.sort(key=lambda item: (item[0], item[1]))
+    departures.sort(key=lambda item: (item[0], item[1]))
+
+    lines: List[str] = []
+    lines.extend(_format_cyyz_group("CYYZ Late Arrivals", arrivals))
+    lines.append("")
+    lines.extend(_format_cyyz_group("CYYZ Late Departures", departures))
+    return ["\n".join(lines)]
+
+
+def _format_cyyz_group(
+    title: str, entries: Sequence[Tuple[datetime, str, str]]
+) -> List[str]:
+    if not entries:
+        return [f"{title}:", "None currently scheduled"]
+
+    lines = [f"{title}:"]
+    for local_dt, tail, account in entries:
+        lines.append(_format_night_operation_line(tail, local_dt, account))
+    return lines
+
+
+def _truncate_dt(value: datetime) -> datetime:
+    return value.replace(second=0, microsecond=0)
+
+
+def _format_night_operation_line(tail: str, local_dt: datetime, account: str) -> str:
+    display_tail = tail or "UNKNOWN"
+    time_str = local_dt.strftime("%H%M")
+    account_display = account.strip() or "Unknown Account"
+    return f"{display_tail} – {time_str} – {account_display}"
+
+
+def _extract_tail_value(flight: Mapping[str, Any]) -> Optional[str]:
+    for key in _CYYZ_TAIL_KEYS:
+        value = _get_nested_value(flight, key)
+        if isinstance(value, str):
+            candidate = value.strip().upper()
+        elif value is not None:
+            candidate = str(value).strip().upper()
+        else:
+            candidate = ""
+        if candidate:
+            return candidate
+    return None
+
+
+def _extract_account_name(flight: Mapping[str, Any]) -> Optional[str]:
+    for key in _CYYZ_ACCOUNT_KEYS:
+        value = _get_nested_value(flight, key)
+        candidate = _coerce_account_value(value)
+        if candidate:
+            return candidate
+    return None
+
+
+def _coerce_account_value(value: Any) -> Optional[str]:
+    if isinstance(value, str):
+        candidate = value.strip()
+        return candidate or None
+    if isinstance(value, Mapping):
+        for nested_key in _ACCOUNT_NESTED_NAME_KEYS:
+            nested_value = value.get(nested_key)
+            candidate = _coerce_account_value(nested_value)
+            if candidate:
+                return candidate
+        return None
+    if value is not None:
+        candidate = str(value).strip()
+        return candidate or None
+    return None
+
+
+def _extract_airport_code(
+    flight: Mapping[str, Any], keys: Sequence[str]
+) -> Optional[str]:
+    for key in keys:
+        value = _get_nested_value(flight, key)
+        if isinstance(value, str):
+            candidate = value.strip().upper()
+        elif value is not None:
+            candidate = str(value).strip().upper()
+        else:
+            candidate = ""
+        if candidate:
+            return candidate
+    return None
+
+
+def _extract_datetime_field(
+    flight: Mapping[str, Any], keys: Sequence[str]
+) -> Optional[datetime]:
+    for key in keys:
+        value = _get_nested_value(flight, key)
+        dt = _coerce_datetime(value)
+        if dt is not None:
+            return dt
+    return None
+
+
+def _coerce_datetime(value: Any) -> Optional[datetime]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        dt = value
+    elif hasattr(value, "to_pydatetime"):
+        dt = value.to_pydatetime()
+    elif isinstance(value, (int, float)):
+        try:
+            seconds = float(value)
+            if seconds > 1e12:
+                seconds /= 1000.0
+            dt = datetime.fromtimestamp(seconds, tz=UTC)
+        except Exception:
+            return None
+    else:
+        text = str(value).strip()
+        if not text:
+            return None
+        try:
+            dt = safe_parse_dt(text)
+        except Exception:
+            return None
+
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    else:
+        dt = dt.astimezone(UTC)
+    return dt
+
+
+def _convert_to_timezone(dt: Optional[datetime], zone: tzinfo) -> Optional[datetime]:
+    if dt is None:
+        return None
+    try:
+        return dt.astimezone(zone)
+    except Exception:
+        return dt
+
+
+def _is_within_cyyz_night_window(local_dt: datetime) -> bool:
+    minutes = local_dt.hour * 60 + local_dt.minute
+    if minutes >= _CYYZ_NIGHT_START_MINUTES:
+        return True
+    if minutes <= _CYYZ_NIGHT_END_MINUTES:
+        return True
+    return False
+
+
+def _get_nested_value(mapping: Mapping[str, Any], key_path: str) -> Any:
+    if not isinstance(mapping, Mapping):
+        return None
+    parts = key_path.split(".") if key_path else []
+    current: Any = mapping
+    for part in parts:
+        if not isinstance(current, Mapping):
+            return None
+        current = current.get(part)
+        if current is None:
+            return None
+    return current
+
+
+def build_rest_before_index(
+    collection: Iterable[DutyStartSnapshot] | DutyStartCollection,
+) -> Dict[str, Dict[str, Any]]:
+    """Return a mapping of pilot identifiers to next-day rest-before metrics."""
+
+    if isinstance(collection, DutyStartCollection):
+        snapshots: Iterable[DutyStartSnapshot] = collection.snapshots
+    else:
+        snapshots = collection
+
+    index: Dict[str, Dict[str, Any]] = {}
+
+    for snapshot in snapshots:
+        for pilot in snapshot.pilots:
+            identifier = _select_identifier(pilot)
+            if not identifier:
+                continue
+
+            entry = index.setdefault(identifier, {"pilot": pilot})
+
+            if entry.get("rest_before_actual_min") is None:
+                rest_actual = pilot.rest_before_actual_min
+                if rest_actual is None and pilot.rest_before_payload:
+                    rest_actual = _coerce_minutes(
+                        pilot.rest_before_payload.get("actual")
+                    )
+                if rest_actual is not None:
+                    entry["rest_before_actual_min"] = rest_actual
+
+            if entry.get("rest_before_required_min") is None:
+                rest_required = pilot.rest_before_required_min
+                if rest_required is None and pilot.rest_before_payload:
+                    rest_required = _coerce_minutes(
+                        pilot.rest_before_payload.get("min")
+                    )
+                if rest_required is not None:
+                    entry["rest_before_required_min"] = rest_required
+
+    return index
 
 
 def _group_flights_by_tail(
@@ -392,6 +896,132 @@ def _summarize_flight_sample(
     return sample
 
 
+def _normalize_ingestion_diagnostics(data: Mapping[str, Any]) -> Dict[str, Any]:
+    normalized: Dict[str, Any] = {}
+    for key, value in data.items():
+        if isinstance(value, dict):
+            normalized[key] = _normalize_ingestion_diagnostics(value)
+        elif isinstance(value, list):
+            normalized[key] = [
+                _normalize_ingestion_diagnostics(item)
+                if isinstance(item, Mapping)
+                else item
+                for item in value
+            ]
+        else:
+            normalized[key] = value
+    return normalized
+
+
+def _summarize_snapshots_for_metadata(
+    snapshots: Iterable[DutyStartSnapshot],
+) -> Dict[str, Any]:
+    total_snapshots = 0
+    signature_map: Dict[Tuple[Tuple[str, str], ...], Dict[str, Any]] = {}
+    pilot_map: Dict[str, Dict[str, Any]] = {}
+
+    for snapshot in snapshots:
+        total_snapshots += 1
+
+        signature = snapshot.crew_signature()
+        signature_entry = signature_map.setdefault(
+            signature,
+            {
+                "signature": _format_signature_display(signature),
+                "count": 0,
+                "tails": set(),
+                "sample_duties": [],
+            },
+        )
+        signature_entry["count"] += 1
+        signature_entry["tails"].add(snapshot.tail or "UNKNOWN")
+        if len(signature_entry["sample_duties"]) < 3:
+            signature_entry["sample_duties"].append(
+                {
+                    "tail": snapshot.tail or "UNKNOWN",
+                    "flight_id": snapshot.flight_id,
+                    "crew": _snapshot_crew_display(snapshot),
+                }
+            )
+
+        for pilot in snapshot.pilots:
+            identifier_value = _select_identifier(pilot)
+            primary_identifier = identifier_value or pilot.name or "UNKNOWN"
+            pilot_entry = pilot_map.setdefault(
+                primary_identifier,
+                {
+                    "identifier": identifier_value,
+                    "name": pilot.name or primary_identifier,
+                    "count": 0,
+                    "seats": set(),
+                },
+            )
+            pilot_entry["count"] += 1
+            pilot_entry["seats"].add(_normalise_seat(pilot.seat))
+
+    crews = []
+    for entry in signature_map.values():
+        crews.append(
+            {
+                "signature": entry["signature"],
+                "count": entry["count"],
+                "tails": sorted(entry["tails"]),
+                "sample_duties": entry["sample_duties"],
+            }
+        )
+    crews.sort(key=lambda item: (-item["count"], item["signature"]))
+
+    pilots = []
+    for entry in pilot_map.values():
+        seats = sorted(entry["seats"], key=_seat_sort_key)
+        pilots.append(
+            {
+                "identifier": entry["identifier"],
+                "name": entry["name"],
+                "count": entry["count"],
+                "seats": seats,
+            }
+        )
+    pilots.sort(
+        key=lambda item: (
+            -item["count"],
+            item["name"] or "",
+            item["identifier"] or "",
+        )
+    )
+
+    return {
+        "total_snapshots": total_snapshots,
+        "unique_crews": len(signature_map),
+        "unique_pilots": len(pilot_map),
+        "crews": crews,
+        "pilots": pilots,
+    }
+
+
+def _format_signature_display(signature: Tuple[Tuple[str, str], ...]) -> str:
+    if not signature:
+        return "Unknown crew"
+    parts = []
+    for seat, identifier in signature:
+        seat_display = (seat or "PIC").upper()
+        parts.append(f"{seat_display}: {identifier}")
+    return " + ".join(parts)
+
+
+def _snapshot_crew_display(snapshot: DutyStartSnapshot) -> List[Dict[str, Any]]:
+    crew: List[Dict[str, Any]] = []
+    for pilot in snapshot.pilots:
+        crew.append(
+            {
+                "seat": _normalise_seat(pilot.seat),
+                "name": pilot.name,
+                "identifier": _select_identifier(pilot),
+            }
+        )
+    return crew
+
+
 def _build_snapshot_from_postflight(
     postflight_payload: Any,
     *,
@@ -423,73 +1053,196 @@ def _build_snapshot_from_postflight(
 
 
 def _parse_pilot_blocks(postflight_payload: Any) -> List[DutyStartPilotSnapshot]:
-    if isinstance(postflight_payload, MutableMapping):
-        dtls2 = postflight_payload.get("dtls2")
-    else:
-        dtls2 = None
-
-    if not isinstance(dtls2, list):
+    if not isinstance(postflight_payload, MutableMapping):
         return []
+
+    time_block = postflight_payload.get("time")
+    if not isinstance(time_block, Mapping):
+        time_block = {}
+
+    dtls2 = time_block.get("dtls2")
+    if not isinstance(dtls2, list):
+        dtls2 = postflight_payload.get("dtls2")
+    if not isinstance(dtls2, list):
+        dtls2 = []
 
     pilots: List[DutyStartPilotSnapshot] = []
     for pilot_block in dtls2:
-        if not isinstance(pilot_block, MutableMapping):
-            continue
+        snapshot = _pilot_snapshot_from_block(pilot_block)
+        if snapshot:
+            pilots.append(snapshot)
 
-        seat = _normalise_seat(pilot_block.get("pilotRole") or pilot_block.get("role"))
-        name = _derive_name(pilot_block)
+    if not pilots and time_block:
+        for key, seat in (("cmd", "PIC"), ("fo", "SIC")):
+            snapshot = _pilot_snapshot_from_block(time_block.get(key), default_seat=seat)
+            if snapshot:
+                pilots.append(snapshot)
 
-        full_duty_state = _clone_mapping(pilot_block.get("fullDutyState"))
-        explainer_map = _clone_mapping(full_duty_state.get("explainerMap")) if full_duty_state else {}
-        rest_payload = _clone_mapping(pilot_block.get("restAfterDuty"))
-
-        fdp_info = _clone_mapping(full_duty_state.get("fdp")) if full_duty_state else {}
-        fdp_actual_min = _coerce_minutes(fdp_info.get("actual")) if fdp_info else None
-        fdp_max_min = _coerce_minutes(fdp_info.get("max")) if fdp_info else None
-
-        fdp_actual_str = _extract_fdp_actual_str(explainer_map)
-        split_break_str = _extract_break_str(explainer_map)
-
-        split_duty = False
-        if _is_truthy(pilot_block.get("splitDutyStart")) or pilot_block.get("splitDutyType"):
-            split_duty = True
-        if isinstance(full_duty_state, dict):
-            if _is_truthy(full_duty_state.get("splitDutyStart")) or full_duty_state.get(
-                "splitDutyType"
-            ):
-                split_duty = True
-
-        rest_after_min = _extract_rest_minutes(rest_payload, full_duty_state)
-        rest_after_str = _minutes_to_hhmm(rest_after_min)
-
-        pilot_snapshot = DutyStartPilotSnapshot(
-            seat=seat,
-            name=name,
-            person_id=_clean_str(
-                pilot_block.get("personId")
-                or pilot_block.get("personnelId")
-                or pilot_block.get("crewPersonId")
-            ),
-            crew_member_id=_clean_str(pilot_block.get("crewMemberId") or pilot_block.get("crewId")),
-            personnel_number=_clean_str(pilot_block.get("personnelNumber")),
-            log_name=_clean_str(pilot_block.get("logName")),
-            email=_clean_str(pilot_block.get("email")),
-            trigram=_clean_str(pilot_block.get("trigram")),
-            full_duty_state=full_duty_state,
-            explainer_map=explainer_map,
-            rest_payload=rest_payload,
-            raw_payload=dict(pilot_block),
-            fdp_actual_min=fdp_actual_min,
-            fdp_max_min=fdp_max_min,
-            fdp_actual_str=fdp_actual_str,
-            split_duty=split_duty,
-            split_break_str=split_break_str,
-            rest_after_min=rest_after_min,
-            rest_after_str=rest_after_str,
-        )
-        pilots.append(pilot_snapshot)
+    if not pilots:
+        deice_block = postflight_payload.get("deice")
+        if isinstance(deice_block, Mapping):
+            crew_list = deice_block.get("crew")
+            if isinstance(crew_list, list):
+                for index, member in enumerate(crew_list):
+                    default_seat = "PIC" if index == 0 else "SIC"
+                    seat_hint = member.get("jobTitle") or member.get("role")
+                    snapshot = _pilot_snapshot_from_block(
+                        member,
+                        default_seat=_normalise_seat(seat_hint or default_seat),
+                    )
+                    if snapshot:
+                        pilots.append(snapshot)
 
     return pilots
+
+
+def _merge_split_duty_information(
+    target_snapshot: Optional[DutyStartSnapshot],
+    source_snapshot: Optional[DutyStartSnapshot],
+) -> None:
+    """Propagate split duty metadata from ``source_snapshot`` to ``target_snapshot``."""
+
+    if not target_snapshot or not source_snapshot:
+        return
+
+    source_pilots = list(source_snapshot.pilots or [])
+    if not source_pilots:
+        return
+
+    for pilot in target_snapshot.pilots or []:
+        match = _find_matching_pilot(pilot, source_pilots)
+        if not match:
+            continue
+
+        if match.split_duty and not pilot.split_duty:
+            pilot.split_duty = True
+
+        if match.split_break_str and match.split_break_str != pilot.split_break_str:
+            pilot.split_break_str = match.split_break_str
+
+        if match.rest_after_actual_min and not pilot.rest_after_actual_min:
+            pilot.rest_after_actual_min = match.rest_after_actual_min
+            pilot.rest_after_actual_str = match.rest_after_actual_str
+
+        if match.rest_after_required_min and not pilot.rest_after_required_min:
+            pilot.rest_after_required_min = match.rest_after_required_min
+
+        if match.rest_before_actual_min and not pilot.rest_before_actual_min:
+            pilot.rest_before_actual_min = match.rest_before_actual_min
+            pilot.rest_before_actual_str = match.rest_before_actual_str
+
+        if match.rest_before_required_min and not pilot.rest_before_required_min:
+            pilot.rest_before_required_min = match.rest_before_required_min
+
+
+def _find_matching_pilot(
+    pilot: DutyStartPilotSnapshot,
+    candidates: Sequence[DutyStartPilotSnapshot],
+) -> Optional[DutyStartPilotSnapshot]:
+    identifier = _select_identifier(pilot)
+    if identifier:
+        for candidate in candidates:
+            if _select_identifier(candidate) == identifier:
+                return candidate
+
+    seat = _normalise_seat(pilot.seat)
+    name = (pilot.name or "").strip().lower()
+
+    for candidate in candidates:
+        candidate_seat = _normalise_seat(candidate.seat)
+        candidate_name = (candidate.name or "").strip().lower()
+        if candidate_seat == seat and candidate_name == name:
+            return candidate
+
+    for candidate in candidates:
+        if _normalise_seat(candidate.seat) == seat:
+            return candidate
+
+    return None
+
+
+def _pilot_snapshot_from_block(
+    pilot_block: Any,
+    *,
+    default_seat: str = "PIC",
+) -> Optional[DutyStartPilotSnapshot]:
+    if not isinstance(pilot_block, Mapping):
+        return None
+
+    seat = _normalise_seat(pilot_block.get("pilotRole") or pilot_block.get("role") or default_seat)
+    name = _derive_name(pilot_block)
+
+    full_duty_state = _clone_mapping(pilot_block.get("fullDutyState"))
+    explainer_map = _clone_mapping(full_duty_state.get("explainerMap")) if full_duty_state else {}
+    if not explainer_map:
+        explainer_map = _clone_mapping(pilot_block.get("explainerMap"))
+    rest_after_payload = _clone_mapping(pilot_block.get("restAfterDuty"))
+    rest_before_payload = _clone_mapping(pilot_block.get("restBeforeDuty"))
+
+    fdp_info = _clone_mapping(full_duty_state.get("fdp")) if full_duty_state else {}
+    if not fdp_info:
+        fdp_info = _clone_mapping(pilot_block.get("fdp"))
+    fdp_actual_min = _coerce_minutes(fdp_info.get("actual")) if fdp_info else None
+    fdp_max_min = _coerce_minutes(fdp_info.get("max")) if fdp_info else None
+
+    fdp_actual_str = _extract_fdp_actual_str(explainer_map)
+    split_break_str = _extract_break_str(explainer_map)
+
+    split_duty = False
+    for candidate in (pilot_block, full_duty_state):
+        if isinstance(candidate, Mapping):
+            if _is_truthy(candidate.get("splitDutyStart")) or candidate.get("splitDutyType"):
+                split_duty = True
+                break
+
+    rest_after_actual_min, rest_after_required_min = _extract_rest_components(
+        rest_after_payload, full_duty_state, "restAfterDuty"
+    )
+    rest_after_str = _minutes_to_hhmm(rest_after_actual_min)
+
+    rest_before_actual_min, rest_before_required_min = _extract_rest_components(
+        rest_before_payload, full_duty_state, "restBeforeDuty"
+    )
+    rest_before_str = _minutes_to_hhmm(rest_before_actual_min)
+
+    person_identifier = _clean_str(
+        _extract_first(
+            pilot_block,
+            "personId",
+            "personnelId",
+            "crewPersonId",
+            "userId",
+            "id",
+        )
+    )
+
+    pilot_snapshot = DutyStartPilotSnapshot(
+        seat=seat,
+        name=name,
+        person_id=person_identifier,
+        crew_member_id=_clean_str(_extract_first(pilot_block, "crewMemberId", "crewId")),
+        personnel_number=_clean_str(pilot_block.get("personnelNumber")),
+        log_name=_clean_str(pilot_block.get("logName")),
+        email=_clean_str(pilot_block.get("email")),
+        trigram=_clean_str(pilot_block.get("trigram")),
+        full_duty_state=full_duty_state,
+        explainer_map=explainer_map,
+        rest_after_payload=rest_after_payload,
+        rest_before_payload=rest_before_payload,
+        raw_payload=dict(pilot_block),
+        fdp_actual_min=fdp_actual_min,
+        fdp_max_min=fdp_max_min,
+        fdp_actual_str=fdp_actual_str,
+        split_duty=split_duty,
+        split_break_str=split_break_str,
+        rest_after_actual_min=rest_after_actual_min,
+        rest_after_required_min=rest_after_required_min,
+        rest_after_actual_str=rest_after_str,
+        rest_before_actual_min=rest_before_actual_min,
+        rest_before_required_min=rest_before_required_min,
+        rest_before_actual_str=rest_before_str,
+    )
+    return pilot_snapshot
 
 
 def _select_identifier(pilot: DutyStartPilotSnapshot) -> Optional[str]:
@@ -651,23 +1404,55 @@ def _minutes_to_hhmm(total_min: Optional[int]) -> Optional[str]:
     return f"{hours}:{minutes:02d}"
 
 
+def _format_duration_for_display(
+    duration_str: Optional[str], *, offset_minutes: int = 0
+) -> str:
+    minutes: Optional[int] = None
+    if duration_str is not None:
+        minutes = _coerce_minutes(duration_str)
+
+    if minutes is not None:
+        minutes += offset_minutes
+        formatted = _minutes_to_hhmm(minutes)
+        if formatted:
+            return formatted.replace(":", "H")
+
+    fallback = (duration_str or "Unknown").strip() or "Unknown"
+    normalized = fallback.replace(" ", "")
+    normalized = normalized.replace("h", "H")
+    normalized = normalized.replace(":", "H")
+    return normalized
+
+
+def _extract_rest_components(
+    rest_payload: Optional[Mapping[str, Any]],
+    full_duty_state: Optional[Mapping[str, Any]],
+    duty_key: str,
+) -> Tuple[Optional[int], Optional[int]]:
+    actual: Optional[int] = None
+    minimum: Optional[int] = None
+
+    if isinstance(rest_payload, Mapping):
+        actual = _coerce_minutes(rest_payload.get("actual"))
+        minimum = _coerce_minutes(rest_payload.get("min"))
+
+    if isinstance(full_duty_state, Mapping):
+        rest_block = full_duty_state.get(duty_key)
+        if isinstance(rest_block, Mapping):
+            if actual is None:
+                actual = _coerce_minutes(rest_block.get("actual"))
+            if minimum is None:
+                minimum = _coerce_minutes(rest_block.get("min"))
+
+    return actual, minimum
+
+
 def _extract_rest_minutes(
     rest_payload: Optional[Mapping[str, Any]],
     full_duty_state: Optional[Mapping[str, Any]],
 ) -> Optional[int]:
-    if isinstance(rest_payload, Mapping):
-        actual = rest_payload.get("actual")
-        minutes = _coerce_minutes(actual)
-        if minutes is not None:
-            return minutes
-    if isinstance(full_duty_state, Mapping):
-        rest_block = full_duty_state.get("restAfterDuty")
-        if isinstance(rest_block, Mapping):
-            actual = rest_block.get("actual")
-            minutes = _coerce_minutes(actual)
-            if minutes is not None:
-                return minutes
-    return None
+    actual, _ = _extract_rest_components(rest_payload, full_duty_state, "restAfterDuty")
+    return actual
 
 
 def _parse_actual_fdp_details(
@@ -786,10 +1571,13 @@ def summarize_split_duty_days(
                     break_display = pilot.split_break_str
                     break
 
-        duty_display = duty_display or "Unknown"
-        break_display = break_display or "Unknown"
+        duty_display = _format_duration_for_display(duty_display)
+        break_display = _format_duration_for_display(break_display, offset_minutes=120)
 
-        line = f"{tail} – {duty_display} duty – {break_display} break ({seats_display} split)"
+        line = (
+            f"{tail} - {duty_display} duty - {break_display} ground time"
+            f" ({seats_display} split)"
+        )
         lines.append(line)
 
     return lines
@@ -859,10 +1647,43 @@ def summarize_long_duty_days(
 
 
 _REST_THRESHOLD_MINUTES = 11 * 60
+_REST_MATCH_TOLERANCE_MINUTES = 5
+
+
+def _requires_non_flight_note(
+    pilot: DutyStartPilotSnapshot,
+    rest_minutes: int,
+    next_day_rest_index: Mapping[str, Dict[str, Any]],
+    *,
+    tolerance: int,
+) -> bool:
+    identifier = _select_identifier(pilot)
+    if not identifier:
+        return True
+
+    entry = next_day_rest_index.get(identifier)
+    if not isinstance(entry, Mapping):
+        return True
+
+    next_actual = entry.get("rest_before_actual_min")
+    if next_actual is None:
+        return True
+
+    after_actual = pilot.rest_after_actual_min if pilot.rest_after_actual_min is not None else rest_minutes
+    if after_actual is None:
+        return True
+
+    if abs(int(next_actual) - int(after_actual)) <= max(tolerance, 0):
+        return False
+
+    return True
 
 
 def summarize_tight_turnarounds(
     collection: Iterable[DutyStartSnapshot] | DutyStartCollection,
+    *,
+    next_day_rest_index: Optional[Mapping[str, Dict[str, Any]]] = None,
+    rest_match_tolerance_min: int = _REST_MATCH_TOLERANCE_MINUTES,
 ) -> List[str]:
     """Return formatted lines listing crew whose rest falls below the threshold."""
 
@@ -871,29 +1692,51 @@ def summarize_tight_turnarounds(
     else:
         snapshots = collection
 
-    tail_map: Dict[str, Dict[str, Tuple[int, str]]] = {}
+    tail_map: Dict[str, Dict[str, Tuple[int, str, bool]]] = {}
 
     for snapshot in snapshots:
         tail = snapshot.tail or "UNKNOWN"
         seat_map = tail_map.setdefault(tail, {})
 
         for pilot in snapshot.pilots:
-            rest_minutes = pilot.rest_after_min
-            if rest_minutes is None and pilot.rest_payload:
-                rest_minutes = _coerce_minutes(pilot.rest_payload.get("actual"))
+            rest_minutes = pilot.rest_after_actual_min
+            if rest_minutes is None and pilot.rest_after_payload:
+                rest_minutes = _coerce_minutes(pilot.rest_after_payload.get("actual"))
             if rest_minutes is None:
                 continue
             if rest_minutes >= _REST_THRESHOLD_MINUTES:
                 continue
 
-            rest_display = pilot.rest_after_str or _minutes_to_hhmm(rest_minutes)
+            rest_display = (
+                pilot.rest_after_actual_str or _minutes_to_hhmm(rest_minutes)
+            )
             if not rest_display:
                 continue
 
             seat = (pilot.seat or "PIC").upper()
+            note_required = False
+            if next_day_rest_index is not None:
+                note_required = _requires_non_flight_note(
+                    pilot,
+                    rest_minutes,
+                    next_day_rest_index,
+                    tolerance=rest_match_tolerance_min,
+                )
+
             existing = seat_map.get(seat)
-            if existing is None or rest_minutes < existing[0]:
-                seat_map[seat] = (rest_minutes, rest_display)
+            candidate = (rest_minutes, rest_display, note_required)
+            if existing is None:
+                seat_map[seat] = candidate
+            else:
+                existing_minutes, existing_display, existing_note = existing
+                if rest_minutes < existing_minutes:
+                    seat_map[seat] = candidate
+                elif (
+                    rest_minutes == existing_minutes
+                    and note_required
+                    and not existing_note
+                ):
+                    seat_map[seat] = candidate
 
     lines: List[str] = []
     for tail in sorted(tail_map):
@@ -908,12 +1751,18 @@ def summarize_tight_turnarounds(
 
         seats = [seat for seat, _ in sorted_entries]
         rest_values = [value[1] for _, value in sorted_entries]
+        note_flags = [value[2] for _, value in sorted_entries]
         if not seats:
             continue
 
         seat_display = _format_seat_display(seats)
         rest_display = rest_values[0] if len(set(rest_values)) == 1 else "/".join(rest_values)
-        lines.append(f"{tail} – {rest_display} rest before next duty ({seat_display})")
+        note_suffix = ""
+        if any(note_flags):
+            note_suffix = " – non-flight duties"
+        lines.append(
+            f"{tail} – {rest_display} rest before next duty ({seat_display}){note_suffix}"
+        )
 
     return lines
 
@@ -969,6 +1818,7 @@ def build_flight_following_report(
             ("Long Duty Days", summarize_long_duty_days),
             ("Split Duty Days", summarize_split_duty_days),
             ("Tight Turnarounds (<11h Before Next Duty)", summarize_tight_turnarounds),
+            ("", summarize_cyyz_night_operations),
         )
 
     sections: List[FlightFollowingReportSection] = []
@@ -994,9 +1844,14 @@ __all__ = [
     "FlightFollowingReportSection",
     "FlightFollowingReport",
     "collect_duty_start_snapshots",
+    "summarize_collection_for_display",
+    "build_rest_before_index",
     "summarize_split_duty_days",
     "summarize_long_duty_days",
     "summarize_tight_turnarounds",
     "summarize_insufficient_rest",
+    "compute_short_turn_summary_for_collection",
+    "summarize_short_turns_for_collection",
+    "summarize_cyyz_night_operations",
     "build_flight_following_report",
 ]

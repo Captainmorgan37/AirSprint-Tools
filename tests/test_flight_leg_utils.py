@@ -7,7 +7,8 @@ import sys
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
-from flight_leg_utils import normalize_fl3xx_payload
+from fl3xx_api import DutySnapshotPilot
+from flight_leg_utils import _build_crew_signature, normalize_fl3xx_payload
 
 
 def test_normalize_infers_arrival_time_from_multiple_sources() -> None:
@@ -51,3 +52,14 @@ def test_normalize_infers_arrival_time_from_multiple_sources() -> None:
     assert rows[0]["arrival_time"] == "2024-07-01T15:00:00Z"
     assert rows[1]["arrival_time"] == "2024-07-02T15:30:00Z"
     assert rows[2]["arrival_time"] == "2024-07-03T16:45:00Z"
+
+
+def test_build_crew_signature_prefers_ids_over_names() -> None:
+    pilots = [
+        DutySnapshotPilot(seat="PIC", name="Kyle Roxburgh", pilot_id="395627"),
+        DutySnapshotPilot(seat="SIC", name="Ryan Kawa", pilot_id="765708"),
+    ]
+
+    signature = _build_crew_signature(pilots)
+
+    assert signature == (("PIC", "395627"), ("SIC", "765708"))

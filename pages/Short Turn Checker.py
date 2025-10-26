@@ -1043,8 +1043,6 @@ if not legs_df.empty:
                 "Departure Booking",
                 help="Booking identifier for the departure leg",
             ),
-            "arr_onblock": st.column_config.DatetimeColumn(format="YYYY-MM-DD HH:mm"),
-            "dep_offblock": st.column_config.DatetimeColumn(format="YYYY-MM-DD HH:mm"),
             "turn_min": st.column_config.NumberColumn(
                 "Turn (min)",
                 help="Minutes between ARR on-block and next DEP off-block at the same station",
@@ -1062,11 +1060,6 @@ if not legs_df.empty:
                 "Required Min",
                 help="Minimum minutes required for this turn",
                 step=5,
-            )
-        if "arr_priority_label" in short_df.columns:
-            col_config["arr_priority_label"] = st.column_config.TextColumn(
-                "Arrival Priority Detail",
-                help="Priority metadata tied to the arrival leg",
             )
         if "dep_priority_label" in short_df.columns:
             col_config["dep_priority_label"] = st.column_config.TextColumn(
@@ -1089,10 +1082,7 @@ if not legs_df.empty:
             "turn_min",
             "required_threshold_min",
             "priority_flag",
-            "arr_priority_label",
             "dep_priority_label",
-            "arr_onblock",
-            "dep_offblock",
         ]
         display_short_df = short_df.drop(
             columns=["arr_booking_code", "dep_booking_code"], errors="ignore"
@@ -1254,7 +1244,7 @@ if not legs_df.empty:
         )
 
     if evaluated_total:
-        st.subheader("Priority duty-start validation")
+        st.subheader("Priority Duty Starts")
         if priority_warnings.empty:
             st.success(
                 "All first priority departures meet the required 90-minute crew check-in window."
@@ -1278,18 +1268,6 @@ if not legs_df.empty:
                     "Priority Detail",
                     help="Priority metadata associated with the departure",
                 ),
-                "departure_time": st.column_config.DatetimeColumn(
-                    format="YYYY-MM-DD HH:mm",
-                    help="Scheduled/actual departure time for the priority leg",
-                ),
-                "earliest_checkin": st.column_config.DatetimeColumn(
-                    format="YYYY-MM-DD HH:mm",
-                    help="Earliest crew check-in returned by FL3XX",
-                ),
-                "latest_checkin": st.column_config.DatetimeColumn(
-                    format="YYYY-MM-DD HH:mm",
-                    help="Latest crew check-in returned by FL3XX",
-                ),
                 "minutes_before_departure": st.column_config.NumberColumn(
                     "Minutes Before Departure",
                     help="Actual gap between earliest check-in and departure",
@@ -1304,10 +1282,6 @@ if not legs_df.empty:
                     "Check-ins",
                     help="Number of crew check-in entries returned",
                 ),
-                "checkin_times": st.column_config.TextColumn(
-                    "Check-in Times",
-                    help="Crew check-in timestamps returned by FL3XX",
-                ),
             }
 
             priority_order = [
@@ -1316,13 +1290,9 @@ if not legs_df.empty:
                 "dep_airport",
                 "dep_leg_id",
                 "priority_label",
-                "departure_time",
-                "earliest_checkin",
-                "latest_checkin",
                 "minutes_before_departure",
                 "required_threshold_min",
                 "checkin_count",
-                "checkin_times",
             ]
             display_priority_warnings = priority_warnings.drop(
                 columns=["flight_id"], errors="ignore"
