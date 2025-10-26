@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any, Dict, Iterable, Tuple
+from typing import Any, Dict, Iterable, Mapping, Tuple
 
 import streamlit as st
 
@@ -107,7 +107,10 @@ st.caption(
 )
 
 fl3xx_settings_raw = get_secret("fl3xx_api", {})
-fl3xx_settings = dict(fl3xx_settings_raw) if isinstance(fl3xx_settings_raw, dict) else {}
+if isinstance(fl3xx_settings_raw, Mapping):
+    fl3xx_settings = dict(fl3xx_settings_raw)
+else:
+    fl3xx_settings = {}
 
 with st.form("flight_following_reports_form"):
     target_date = st.date_input(
