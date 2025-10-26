@@ -98,6 +98,8 @@ def test_summarize_cyyz_night_operations_handles_empty_matches():
     lines = summarize_cyyz_night_operations(collection)
 
     assert lines == [
-        "CYYZ Late Arrivals: None",
-        "CYYZ Late Departures: None",
+        "CYYZ Late Arrivals:",
+        "None currently scheduled",
+        "CYYZ Late Departures:",
+        "None currently scheduled",
     ]
