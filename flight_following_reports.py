@@ -501,11 +501,15 @@ def summarize_cyyz_night_operations(
 
     zone = ZoneInfo(local_tz_name) if ZoneInfo else None
     if zone is None:
-        return ["CYYZ Late Arrivals: None", "CYYZ Late Departures: None"]
+        return _format_cyyz_group("CYYZ Late Arrivals", []) + _format_cyyz_group(
+            "CYYZ Late Departures", []
+        )
 
     flights = _collect_flights_for_short_turns(collection)
     if not flights:
-        return ["CYYZ Late Arrivals: None", "CYYZ Late Departures: None"]
+        return _format_cyyz_group("CYYZ Late Arrivals", []) + _format_cyyz_group(
+            "CYYZ Late Departures", []
+        )
 
     arrivals: List[Tuple[datetime, str, str]] = []
     departures: List[Tuple[datetime, str, str]] = []
@@ -556,7 +560,7 @@ def _format_cyyz_group(
     title: str, entries: Sequence[Tuple[datetime, str, str]]
 ) -> List[str]:
     if not entries:
-        return [f"{title}: None"]
+        return [f"{title}:", "None currently scheduled"]
 
     lines = [f"{title}:"]
     for local_dt, tail, account in entries:
