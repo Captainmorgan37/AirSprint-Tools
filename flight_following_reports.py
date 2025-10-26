@@ -38,15 +38,20 @@ class DutyStartPilotSnapshot:
     trigram: Optional[str] = None
     full_duty_state: Dict[str, Any] = field(default_factory=dict)
     explainer_map: Dict[str, Any] = field(default_factory=dict)
-    rest_payload: Dict[str, Any] = field(default_factory=dict)
+    rest_after_payload: Dict[str, Any] = field(default_factory=dict)
+    rest_before_payload: Dict[str, Any] = field(default_factory=dict)
     raw_payload: Dict[str, Any] = field(default_factory=dict)
     fdp_actual_min: Optional[int] = None
     fdp_max_min: Optional[int] = None
     fdp_actual_str: Optional[str] = None
     split_duty: bool = False
     split_break_str: Optional[str] = None
-    rest_after_min: Optional[int] = None
-    rest_after_str: Optional[str] = None
+    rest_after_actual_min: Optional[int] = None
+    rest_after_required_min: Optional[int] = None
+    rest_after_actual_str: Optional[str] = None
+    rest_before_actual_min: Optional[int] = None
+    rest_before_required_min: Optional[int] = None
+    rest_before_actual_str: Optional[str] = None
 
 
 @dataclass
@@ -278,6 +283,47 @@ def summarize_collection_for_display(collection: DutyStartCollection) -> Dict[st
     summary["crew_summary"] = _summarize_snapshots_for_metadata(collection.snapshots)
 
     return summary
+
+
+def build_rest_before_index(
+    collection: Iterable[DutyStartSnapshot] | DutyStartCollection,
+) -> Dict[str, Dict[str, Any]]:
+    """Return a mapping of pilot identifiers to next-day rest-before metrics."""
+
+    if isinstance(collection, DutyStartCollection):
+        snapshots: Iterable[DutyStartSnapshot] = collection.snapshots
+    else:
+        snapshots = collection
+
+    index: Dict[str, Dict[str, Any]] = {}
+
+    for snapshot in snapshots:
+        for pilot in snapshot.pilots:
+            identifier = _select_identifier(pilot)
+            if not identifier:
+                continue
+
+            entry = index.setdefault(identifier, {"pilot": pilot})
+
+            if entry.get("rest_before_actual_min") is None:
+                rest_actual = pilot.rest_before_actual_min
+                if rest_actual is None and pilot.rest_before_payload:
+                    rest_actual = _coerce_minutes(
+                        pilot.rest_before_payload.get("actual")
+                    )
+                if rest_actual is not None:
+                    entry["rest_before_actual_min"] = rest_actual
+
+            if entry.get("rest_before_required_min") is None:
+                rest_required = pilot.rest_before_required_min
+                if rest_required is None and pilot.rest_before_payload:
+                    rest_required = _coerce_minutes(
+                        pilot.rest_before_payload.get("min")
+                    )
+                if rest_required is not None:
+                    entry["rest_before_required_min"] = rest_required
+
+    return index
 
 
 def _group_flights_by_tail(
@@ -649,9 +695,19 @@ def _merge_split_duty_information(
         if match.split_break_str and match.split_break_str != pilot.split_break_str:
             pilot.split_break_str = match.split_break_str
 
-        if match.rest_after_min and not pilot.rest_after_min:
-            pilot.rest_after_min = match.rest_after_min
-            pilot.rest_after_str = match.rest_after_str
+        if match.rest_after_actual_min and not pilot.rest_after_actual_min:
+            pilot.rest_after_actual_min = match.rest_after_actual_min
+            pilot.rest_after_actual_str = match.rest_after_actual_str
+
+        if match.rest_after_required_min and not pilot.rest_after_required_min:
+            pilot.rest_after_required_min = match.rest_after_required_min
+
+        if match.rest_before_actual_min and not pilot.rest_before_actual_min:
+            pilot.rest_before_actual_min = match.rest_before_actual_min
+            pilot.rest_before_actual_str = match.rest_before_actual_str
+
+        if match.rest_before_required_min and not pilot.rest_before_required_min:
+            pilot.rest_before_required_min = match.rest_before_required_min
 
 
 def _find_matching_pilot(
@@ -695,7 +751,8 @@ def _pilot_snapshot_from_block(
     explainer_map = _clone_mapping(full_duty_state.get("explainerMap")) if full_duty_state else {}
     if not explainer_map:
         explainer_map = _clone_mapping(pilot_block.get("explainerMap"))
-    rest_payload = _clone_mapping(pilot_block.get("restAfterDuty"))
+    rest_after_payload = _clone_mapping(pilot_block.get("restAfterDuty"))
+    rest_before_payload = _clone_mapping(pilot_block.get("restBeforeDuty"))
 
     fdp_info = _clone_mapping(full_duty_state.get("fdp")) if full_duty_state else {}
     if not fdp_info:
@@ -713,8 +770,15 @@ def _pilot_snapshot_from_block(
                 split_duty = True
                 break
 
-    rest_after_min = _extract_rest_minutes(rest_payload, full_duty_state)
-    rest_after_str = _minutes_to_hhmm(rest_after_min)
+    rest_after_actual_min, rest_after_required_min = _extract_rest_components(
+        rest_after_payload, full_duty_state, "restAfterDuty"
+    )
+    rest_after_str = _minutes_to_hhmm(rest_after_actual_min)
+
+    rest_before_actual_min, rest_before_required_min = _extract_rest_components(
+        rest_before_payload, full_duty_state, "restBeforeDuty"
+    )
+    rest_before_str = _minutes_to_hhmm(rest_before_actual_min)
 
     person_identifier = _clean_str(
         _extract_first(
@@ -738,15 +802,20 @@ def _pilot_snapshot_from_block(
         trigram=_clean_str(pilot_block.get("trigram")),
         full_duty_state=full_duty_state,
         explainer_map=explainer_map,
-        rest_payload=rest_payload,
+        rest_after_payload=rest_after_payload,
+        rest_before_payload=rest_before_payload,
         raw_payload=dict(pilot_block),
         fdp_actual_min=fdp_actual_min,
         fdp_max_min=fdp_max_min,
         fdp_actual_str=fdp_actual_str,
         split_duty=split_duty,
         split_break_str=split_break_str,
-        rest_after_min=rest_after_min,
-        rest_after_str=rest_after_str,
+        rest_after_actual_min=rest_after_actual_min,
+        rest_after_required_min=rest_after_required_min,
+        rest_after_actual_str=rest_after_str,
+        rest_before_actual_min=rest_before_actual_min,
+        rest_before_required_min=rest_before_required_min,
+        rest_before_actual_str=rest_before_str,
     )
     return pilot_snapshot
 
@@ -910,23 +979,35 @@ def _minutes_to_hhmm(total_min: Optional[int]) -> Optional[str]:
     return f"{hours}:{minutes:02d}"
 
 
+def _extract_rest_components(
+    rest_payload: Optional[Mapping[str, Any]],
+    full_duty_state: Optional[Mapping[str, Any]],
+    duty_key: str,
+) -> Tuple[Optional[int], Optional[int]]:
+    actual: Optional[int] = None
+    minimum: Optional[int] = None
+
+    if isinstance(rest_payload, Mapping):
+        actual = _coerce_minutes(rest_payload.get("actual"))
+        minimum = _coerce_minutes(rest_payload.get("min"))
+
+    if isinstance(full_duty_state, Mapping):
+        rest_block = full_duty_state.get(duty_key)
+        if isinstance(rest_block, Mapping):
+            if actual is None:
+                actual = _coerce_minutes(rest_block.get("actual"))
+            if minimum is None:
+                minimum = _coerce_minutes(rest_block.get("min"))
+
+    return actual, minimum
+
+
 def _extract_rest_minutes(
     rest_payload: Optional[Mapping[str, Any]],
     full_duty_state: Optional[Mapping[str, Any]],
 ) -> Optional[int]:
-    if isinstance(rest_payload, Mapping):
-        actual = rest_payload.get("actual")
-        minutes = _coerce_minutes(actual)
-        if minutes is not None:
-            return minutes
-    if isinstance(full_duty_state, Mapping):
-        rest_block = full_duty_state.get("restAfterDuty")
-        if isinstance(rest_block, Mapping):
-            actual = rest_block.get("actual")
-            minutes = _coerce_minutes(actual)
-            if minutes is not None:
-                return minutes
-    return None
+    actual, _ = _extract_rest_components(rest_payload, full_duty_state, "restAfterDuty")
+    return actual
 
 
 def _parse_actual_fdp_details(
@@ -1118,10 +1199,43 @@ def summarize_long_duty_days(
 
 
 _REST_THRESHOLD_MINUTES = 11 * 60
+_REST_MATCH_TOLERANCE_MINUTES = 5
+
+
+def _requires_non_flight_note(
+    pilot: DutyStartPilotSnapshot,
+    rest_minutes: int,
+    next_day_rest_index: Mapping[str, Dict[str, Any]],
+    *,
+    tolerance: int,
+) -> bool:
+    identifier = _select_identifier(pilot)
+    if not identifier:
+        return True
+
+    entry = next_day_rest_index.get(identifier)
+    if not isinstance(entry, Mapping):
+        return True
+
+    next_actual = entry.get("rest_before_actual_min")
+    if next_actual is None:
+        return True
+
+    after_actual = pilot.rest_after_actual_min if pilot.rest_after_actual_min is not None else rest_minutes
+    if after_actual is None:
+        return True
+
+    if abs(int(next_actual) - int(after_actual)) <= max(tolerance, 0):
+        return False
+
+    return True
 
 
 def summarize_tight_turnarounds(
     collection: Iterable[DutyStartSnapshot] | DutyStartCollection,
+    *,
+    next_day_rest_index: Optional[Mapping[str, Dict[str, Any]]] = None,
+    rest_match_tolerance_min: int = _REST_MATCH_TOLERANCE_MINUTES,
 ) -> List[str]:
     """Return formatted lines listing crew whose rest falls below the threshold."""
 
@@ -1130,29 +1244,51 @@ def summarize_tight_turnarounds(
     else:
         snapshots = collection
 
-    tail_map: Dict[str, Dict[str, Tuple[int, str]]] = {}
+    tail_map: Dict[str, Dict[str, Tuple[int, str, bool]]] = {}
 
     for snapshot in snapshots:
         tail = snapshot.tail or "UNKNOWN"
         seat_map = tail_map.setdefault(tail, {})
 
         for pilot in snapshot.pilots:
-            rest_minutes = pilot.rest_after_min
-            if rest_minutes is None and pilot.rest_payload:
-                rest_minutes = _coerce_minutes(pilot.rest_payload.get("actual"))
+            rest_minutes = pilot.rest_after_actual_min
+            if rest_minutes is None and pilot.rest_after_payload:
+                rest_minutes = _coerce_minutes(pilot.rest_after_payload.get("actual"))
             if rest_minutes is None:
                 continue
             if rest_minutes >= _REST_THRESHOLD_MINUTES:
                 continue
 
-            rest_display = pilot.rest_after_str or _minutes_to_hhmm(rest_minutes)
+            rest_display = (
+                pilot.rest_after_actual_str or _minutes_to_hhmm(rest_minutes)
+            )
             if not rest_display:
                 continue
 
             seat = (pilot.seat or "PIC").upper()
+            note_required = False
+            if next_day_rest_index is not None:
+                note_required = _requires_non_flight_note(
+                    pilot,
+                    rest_minutes,
+                    next_day_rest_index,
+                    tolerance=rest_match_tolerance_min,
+                )
+
             existing = seat_map.get(seat)
-            if existing is None or rest_minutes < existing[0]:
-                seat_map[seat] = (rest_minutes, rest_display)
+            candidate = (rest_minutes, rest_display, note_required)
+            if existing is None:
+                seat_map[seat] = candidate
+            else:
+                existing_minutes, existing_display, existing_note = existing
+                if rest_minutes < existing_minutes:
+                    seat_map[seat] = candidate
+                elif (
+                    rest_minutes == existing_minutes
+                    and note_required
+                    and not existing_note
+                ):
+                    seat_map[seat] = candidate
 
     lines: List[str] = []
     for tail in sorted(tail_map):
@@ -1167,12 +1303,18 @@ def summarize_tight_turnarounds(
 
         seats = [seat for seat, _ in sorted_entries]
         rest_values = [value[1] for _, value in sorted_entries]
+        note_flags = [value[2] for _, value in sorted_entries]
         if not seats:
             continue
 
         seat_display = _format_seat_display(seats)
         rest_display = rest_values[0] if len(set(rest_values)) == 1 else "/".join(rest_values)
-        lines.append(f"{tail} – {rest_display} rest before next duty ({seat_display})")
+        note_suffix = ""
+        if any(note_flags):
+            note_suffix = " – non-flight duties?"
+        lines.append(
+            f"{tail} – {rest_display} rest before next duty ({seat_display}){note_suffix}"
+        )
 
     return lines
 
@@ -1254,6 +1396,7 @@ __all__ = [
     "FlightFollowingReport",
     "collect_duty_start_snapshots",
     "summarize_collection_for_display",
+    "build_rest_before_index",
     "summarize_split_duty_days",
     "summarize_long_duty_days",
     "summarize_tight_turnarounds",

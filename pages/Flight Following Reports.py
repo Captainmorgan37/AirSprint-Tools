@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
+from functools import partial
 from typing import Any, Dict, Iterable, Mapping, Tuple
 
 import streamlit as st
@@ -8,6 +9,7 @@ import streamlit as st
 from Home import configure_page, get_secret, password_gate, render_sidebar
 from flight_following_reports import (
     build_flight_following_report,
+    build_rest_before_index,
     collect_duty_start_snapshots,
     summarize_collection_for_display,
     summarize_long_duty_days,
@@ -122,16 +124,35 @@ if submitted:
         except FlightDataError as exc:
             st.error(str(exc))
         else:
-            with st.spinner("Collecting flights and duty snapshots…"):
+            with st.spinner("Collecting flights, postflights, and rest data…"):
                 collection = collect_duty_start_snapshots(config, target_date)
-                report = build_flight_following_report(
-                    collection,
-                    section_builders=(
-                        ("Long Duty Days", summarize_long_duty_days),
-                        ("Split Duty Days", summarize_split_duty_days),
-                        ("Tight Turnarounds (<11h Before Next Duty)", summarize_tight_turnarounds),
-                    ),
+                try:
+                    next_day_collection = collect_duty_start_snapshots(
+                        config, target_date + timedelta(days=1)
+                    )
+                except Exception:  # pragma: no cover - network/runtime issues
+                    next_day_collection = None
+
+            if next_day_collection is None:
+                next_day_rest_index = {}
+                st.warning(
+                    "Next-day rest data could not be retrieved. Positioning notes will be omitted.",
                 )
+            else:
+                next_day_rest_index = build_rest_before_index(next_day_collection)
+            tight_turns_builder = partial(
+                summarize_tight_turnarounds,
+                next_day_rest_index=next_day_rest_index,
+            )
+
+            report = build_flight_following_report(
+                collection,
+                section_builders=(
+                    ("Long Duty Days", summarize_long_duty_days),
+                    ("Split Duty Days", summarize_split_duty_days),
+                    ("Tight Turnarounds (<11h Before Next Duty)", tight_turns_builder),
+                ),
+            )
 
             state = {
                 "target_date": target_date.isoformat(),

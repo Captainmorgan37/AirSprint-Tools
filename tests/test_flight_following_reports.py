@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import pathlib
 import sys
+from datetime import datetime, timezone
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
 from flight_following_reports import (
     _merge_split_duty_information,
     _parse_pilot_blocks,
+    build_rest_before_index,
+    DutyStartCollection,
     DutyStartPilotSnapshot,
     DutyStartSnapshot,
+    summarize_tight_turnarounds,
 )
 
 
@@ -111,8 +115,8 @@ def test_merge_split_duty_information_updates_existing_snapshot() -> None:
                 person_id="P1",
                 split_duty=True,
                 split_break_str="Break = 01:00",
-                rest_after_min=600,
-                rest_after_str="10:00",
+                rest_after_actual_min=600,
+                rest_after_actual_str="10:00",
             ),
             DutyStartPilotSnapshot(
                 seat="SIC",
@@ -130,8 +134,101 @@ def test_merge_split_duty_information_updates_existing_snapshot() -> None:
     updated_pic = pilot_lookup["P1"]
     assert updated_pic.split_duty is True
     assert updated_pic.split_break_str == "Break = 01:00"
-    assert updated_pic.rest_after_min == 600
-    assert updated_pic.rest_after_str == "10:00"
+    assert updated_pic.rest_after_actual_min == 600
+    assert updated_pic.rest_after_actual_str == "10:00"
 
     updated_sic = pilot_lookup["P2"]
     assert updated_sic.split_duty is True
+
+
+def _build_collection_with_snapshot(snapshot: DutyStartSnapshot) -> DutyStartCollection:
+    return DutyStartCollection(
+        target_date=datetime(2024, 1, 1, tzinfo=timezone.utc).date(),
+        start_utc=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        end_utc=datetime(2024, 1, 2, tzinfo=timezone.utc),
+        snapshots=[snapshot],
+    )
+
+
+def test_summarize_tight_turnarounds_flags_non_flight_when_no_next_day_match() -> None:
+    today_snapshot = DutyStartSnapshot(
+        tail="C-GASK",
+        flight_id="F1",
+        block_off_est_utc=None,
+        pilots=[
+            DutyStartPilotSnapshot(
+                seat="PIC",
+                name="Taylor Captain",
+                person_id="P1",
+                rest_after_actual_min=520,
+                rest_after_actual_str="8:40",
+                rest_after_required_min=600,
+            )
+        ],
+    )
+    collection_today = _build_collection_with_snapshot(today_snapshot)
+
+    tomorrow_snapshot = DutyStartSnapshot(
+        tail="C-GASK",
+        flight_id="F2",
+        block_off_est_utc=None,
+        pilots=[
+            DutyStartPilotSnapshot(
+                seat="PIC",
+                name="Jordan Copilot",
+                person_id="P2",
+                rest_before_actual_min=700,
+                rest_before_required_min=600,
+            )
+        ],
+    )
+    next_index = build_rest_before_index([tomorrow_snapshot])
+
+    lines = summarize_tight_turnarounds(
+        collection_today, next_day_rest_index=next_index
+    )
+
+    assert lines
+    assert any("non-flight duties" in line.lower() for line in lines)
+
+
+def test_summarize_tight_turnarounds_no_note_when_rest_matches() -> None:
+    today_snapshot = DutyStartSnapshot(
+        tail="C-GKPR",
+        flight_id="F3",
+        block_off_est_utc=None,
+        pilots=[
+            DutyStartPilotSnapshot(
+                seat="SIC",
+                name="Jordan Copilot",
+                person_id="P2",
+                rest_after_actual_min=600,
+                rest_after_actual_str="10:00",
+                rest_after_required_min=600,
+            )
+        ],
+    )
+    collection_today = _build_collection_with_snapshot(today_snapshot)
+
+    tomorrow_snapshot = DutyStartSnapshot(
+        tail="C-GKPR",
+        flight_id="F4",
+        block_off_est_utc=None,
+        pilots=[
+            DutyStartPilotSnapshot(
+                seat="SIC",
+                name="Jordan Copilot",
+                person_id="P2",
+                rest_before_actual_min=600,
+                rest_before_required_min=600,
+            )
+        ],
+    )
+    next_index = build_rest_before_index([tomorrow_snapshot])
+
+    lines = summarize_tight_turnarounds(
+        collection_today, next_day_rest_index=next_index
+    )
+
+    assert lines
+    assert all("non-flight duties" not in line.lower() for line in lines)
