@@ -562,10 +562,22 @@ def _extract_first(mapping: Mapping[str, Any], *keys: str) -> Any:
     return None
 
 
-def summarize_long_duty_days(
+def _format_seat_display(seats: Iterable[str]) -> str:
+    ordered = []
+    seen = set()
+    for seat in sorted({(seat or "PIC").upper() for seat in seats if seat}, key=_seat_sort_key):
+        if seat not in seen:
+            ordered.append(seat)
+            seen.add(seat)
+    if not ordered:
+        return "Crew"
+    return "+".join(ordered)
+
+
+def summarize_split_duty_days(
     collection: Iterable[DutyStartSnapshot] | DutyStartCollection,
 ) -> List[str]:
-    """Return formatted lines for the Split Duty section."""
+    """Return formatted lines for the Split Duty Days section."""
 
     if isinstance(collection, DutyStartCollection):
         snapshots: Iterable[DutyStartSnapshot] = collection.snapshots
@@ -580,8 +592,7 @@ def summarize_long_duty_days(
         if not split_pilots:
             continue
 
-        seats = sorted({(pilot.seat or "PIC").upper() for pilot in split_pilots if pilot.seat})
-        seats_display = "/".join(seats) if seats else "CREW"
+        seats_display = _format_seat_display(pilot.seat for pilot in split_pilots)
 
         duty_display: Optional[str] = None
         break_display: Optional[str] = None
@@ -614,8 +625,71 @@ def summarize_long_duty_days(
         duty_display = duty_display or "Unknown"
         break_display = break_display or "Unknown"
 
-        line = f"{tail} – Duty {duty_display} Break {break_display} ({seats_display})"
+        line = f"{tail} – {duty_display} duty – {break_display} break ({seats_display} split)"
         lines.append(line)
+
+    return lines
+
+
+_LONG_DUTY_THRESHOLD_RATIO = 0.90
+
+
+def summarize_long_duty_days(
+    collection: Iterable[DutyStartSnapshot] | DutyStartCollection,
+) -> List[str]:
+    """Return formatted lines for the Long Duty Days section."""
+
+    if isinstance(collection, DutyStartCollection):
+        snapshots: Iterable[DutyStartSnapshot] = collection.snapshots
+    else:
+        snapshots = collection
+
+    tail_entries: Dict[str, List[Tuple[str, float, str]]] = {}
+
+    for snapshot in snapshots:
+        tail = snapshot.tail or "UNKNOWN"
+
+        for pilot in snapshot.pilots:
+            actual = pilot.fdp_actual_min
+            max_allowed = pilot.fdp_max_min
+            if actual is None or max_allowed in (None, 0):
+                continue
+
+            utilisation = actual / max_allowed
+            if utilisation < _LONG_DUTY_THRESHOLD_RATIO:
+                continue
+
+            seat = (pilot.seat or "PIC").upper()
+            display = pilot.fdp_actual_str or _minutes_to_hhmm(actual)
+            if not display:
+                display = f"{actual} min"
+
+            tail_entries.setdefault(tail, []).append((seat, utilisation, display))
+
+    lines: List[str] = []
+    for tail in sorted(tail_entries):
+        entries = tail_entries[tail]
+        if not entries:
+            continue
+
+        ordered_entries = sorted(entries, key=lambda item: (_seat_sort_key(item[0]), -item[1]))
+        seats = [entry[0] for entry in ordered_entries]
+        displays = [entry[2] for entry in ordered_entries]
+
+        seat_display = _format_seat_display(seats)
+        if not seat_display:
+            seat_display = "Crew"
+
+        unique_displays = []
+        seen_displays = set()
+        for display in displays:
+            if display not in seen_displays:
+                unique_displays.append(display)
+                seen_displays.add(display)
+
+        duty_display = unique_displays[0] if len(unique_displays) == 1 else "/".join(unique_displays)
+
+        lines.append(f"{tail} – {duty_display} ({seat_display})")
 
     return lines
 
@@ -623,7 +697,7 @@ def summarize_long_duty_days(
 _REST_THRESHOLD_MINUTES = 11 * 60
 
 
-def summarize_insufficient_rest(
+def summarize_tight_turnarounds(
     collection: Iterable[DutyStartSnapshot] | DutyStartCollection,
 ) -> List[str]:
     """Return formatted lines listing crew whose rest falls below the threshold."""
@@ -673,11 +747,19 @@ def summarize_insufficient_rest(
         if not seats:
             continue
 
-        seat_display = "/".join(seats)
-        rest_display = "/".join(rest_values)
-        lines.append(f"{tail} – Rest {seat_display} {rest_display}")
+        seat_display = _format_seat_display(seats)
+        rest_display = rest_values[0] if len(set(rest_values)) == 1 else "/".join(rest_values)
+        lines.append(f"{tail} – {rest_display} rest before next duty ({seat_display})")
 
     return lines
+
+
+def summarize_insufficient_rest(
+    collection: Iterable[DutyStartSnapshot] | DutyStartCollection,
+) -> List[str]:
+    """Compatibility wrapper for the previous function name."""
+
+    return summarize_tight_turnarounds(collection)
 
 
 def _seat_sort_key(seat: str) -> Tuple[int, str]:
@@ -720,8 +802,9 @@ def build_flight_following_report(
 
     if section_builders is None:
         section_builders = (
-            ("Split Duty Watchlist", summarize_long_duty_days),
-            ("Insufficient Rest", summarize_insufficient_rest),
+            ("Long Duty Days", summarize_long_duty_days),
+            ("Split Duty Days", summarize_split_duty_days),
+            ("Tight Turnarounds (<11h Before Next Duty)", summarize_tight_turnarounds),
         )
 
     sections: List[FlightFollowingReportSection] = []
@@ -747,7 +830,9 @@ __all__ = [
     "FlightFollowingReportSection",
     "FlightFollowingReport",
     "collect_duty_start_snapshots",
+    "summarize_split_duty_days",
     "summarize_long_duty_days",
+    "summarize_tight_turnarounds",
     "summarize_insufficient_rest",
     "build_flight_following_report",
 ]

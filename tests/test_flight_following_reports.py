@@ -15,6 +15,8 @@ from flight_following_reports import (
     collect_duty_start_snapshots,
     summarize_insufficient_rest,
     summarize_long_duty_days,
+    summarize_split_duty_days,
+    summarize_tight_turnarounds,
 )
 
 
@@ -151,7 +153,7 @@ def test_collect_duty_start_snapshots_groups_by_tail_and_tracks_crew_changes():
     assert other_tail_snapshot.crew_signature() == (("PIC", "P3"), ("SIC", "S3"))
 
 
-def test_summarize_long_duty_days_lists_split_duty_details():
+def test_summarize_long_duty_days_highlight_utilisation():
     snapshot = DutyStartSnapshot(
         tail="C-FAKE",
         flight_id=1,
@@ -160,28 +162,25 @@ def test_summarize_long_duty_days_lists_split_duty_details():
             DutyStartPilotSnapshot(
                 seat="PIC",
                 name="Jane Doe",
-                split_duty=True,
-                explainer_map={
-                    "ACTUAL_FDP": {"header": "FDP = 9:00", "text": ["Break = 3:00"]}
-                },
+                fdp_actual_min=540,
+                fdp_max_min=600,
+                fdp_actual_str="9:00",
             ),
             DutyStartPilotSnapshot(
                 seat="SIC",
                 name="John Smith",
-                split_duty=True,
-                explainer_map={
-                    "ACTUAL_FDP": {"header": "FDP = 9:00", "text": ["Break = 3:00"]}
-                },
+                fdp_actual_min=400,
+                fdp_max_min=600,
             ),
         ],
     )
 
     lines = summarize_long_duty_days([snapshot])
 
-    assert lines == ["C-FAKE – Duty 9:00 Break 3:00 (PIC/SIC)"]
+    assert lines == ["C-FAKE – 9:00 (PIC)"]
 
 
-def test_summarize_long_duty_days_uses_fallback_break_and_filters_roles():
+def test_summarize_long_duty_days_combines_multiple_seats():
     snapshot = DutyStartSnapshot(
         tail="C-BOTH",
         flight_id=99,
@@ -190,15 +189,16 @@ def test_summarize_long_duty_days_uses_fallback_break_and_filters_roles():
             DutyStartPilotSnapshot(
                 seat="PIC",
                 name="Riley Blue",
-                split_duty=True,
-                explainer_map={"ACTUAL_FDP": {"header": "FDP = 8:30", "text": []}},
-                split_break_str="2:00",
+                fdp_actual_min=540,
+                fdp_max_min=600,
+                fdp_actual_str="9:00",
             ),
             DutyStartPilotSnapshot(
                 seat="SIC",
                 name="Mason Gray",
-                split_duty=False,
-                explainer_map={"ACTUAL_FDP": {"header": "FDP = 7:45", "text": ["Break = 1:30"]}},
+                fdp_actual_min=550,
+                fdp_max_min=600,
+                fdp_actual_str="9:10",
             ),
         ],
     )
@@ -212,10 +212,58 @@ def test_summarize_long_duty_days_uses_fallback_break_and_filters_roles():
 
     lines = summarize_long_duty_days(collection)
 
-    assert lines == ["C-BOTH – Duty 8:30 Break 2:00 (PIC)"]
+    assert lines == ["C-BOTH – 9:00/9:10 (PIC+SIC)"]
 
 
-def test_summarize_long_duty_days_skips_snapshots_without_split_duty():
+def test_summarize_long_duty_days_skips_when_below_threshold():
+    snapshot = DutyStartSnapshot(
+        tail="C-NORMAL",
+        flight_id=55,
+        block_off_est_utc=None,
+        pilots=[
+            DutyStartPilotSnapshot(
+                seat="PIC",
+                name="Jordan Sky",
+                fdp_actual_min=300,
+                fdp_max_min=600,
+            )
+        ],
+    )
+
+    assert summarize_long_duty_days([snapshot]) == []
+
+
+def test_summarize_split_duty_days_formats_details():
+    snapshot = DutyStartSnapshot(
+        tail="C-FAKE",
+        flight_id=1,
+        block_off_est_utc=None,
+        pilots=[
+            DutyStartPilotSnapshot(
+                seat="PIC",
+                name="Jane Doe",
+                split_duty=True,
+                explainer_map={
+                    "ACTUAL_FDP": {"header": "Actual FDP = 9:00", "text": ["Break = 3:00"]}
+                },
+            ),
+            DutyStartPilotSnapshot(
+                seat="SIC",
+                name="John Smith",
+                split_duty=True,
+                explainer_map={
+                    "ACTUAL_FDP": {"header": "Actual FDP = 9:00", "text": ["Break = 3:00"]}
+                },
+            ),
+        ],
+    )
+
+    lines = summarize_split_duty_days([snapshot])
+
+    assert lines == ["C-FAKE – 9:00 duty – 3:00 break (PIC+SIC split)"]
+
+
+def test_summarize_split_duty_days_skips_when_not_flagged():
     snapshot = DutyStartSnapshot(
         tail="C-NORMAL",
         flight_id=55,
@@ -225,15 +273,14 @@ def test_summarize_long_duty_days_skips_snapshots_without_split_duty():
                 seat="PIC",
                 name="Jordan Sky",
                 split_duty=False,
-                explainer_map={"ACTUAL_FDP": {"header": "FDP = 7:00", "text": []}},
             )
         ],
     )
 
-    assert summarize_long_duty_days([snapshot]) == []
+    assert summarize_split_duty_days([snapshot]) == []
 
 
-def test_summarize_insufficient_rest_merges_seats_and_tails():
+def test_summarize_tight_turnarounds_merges_seats_and_tails():
     snapshots = [
         DutyStartSnapshot(
             tail="C-FAKE",
@@ -249,8 +296,8 @@ def test_summarize_insufficient_rest_merges_seats_and_tails():
                 DutyStartPilotSnapshot(
                     seat="SIC",
                     name="John Smith",
-                    rest_after_min=700,
-                    rest_after_str="11:40",
+                    rest_after_min=630,
+                    rest_after_str="10:30",
                 ),
             ],
         ),
@@ -262,8 +309,8 @@ def test_summarize_insufficient_rest_merges_seats_and_tails():
                 DutyStartPilotSnapshot(
                     seat="SIC",
                     name="Alex Shaw",
-                    rest_after_min=630,
-                    rest_after_str="10:30",
+                    rest_after_min=620,
+                    rest_after_str="10:20",
                 ),
             ],
         ),
@@ -279,21 +326,41 @@ def test_summarize_insufficient_rest_merges_seats_and_tails():
                     rest_after_str="10:50",
                 ),
                 DutyStartPilotSnapshot(
-                    seat="SIC",
-                    name="Mason Gray",
-                    rest_after_min=640,
-                    rest_after_str="10:40",
-                ),
-            ],
-        ),
+                seat="SIC",
+                name="Mason Gray",
+                rest_after_min=640,
+                rest_after_str="10:40",
+            ),
+        ],
+    ),
     ]
 
-    lines = summarize_insufficient_rest(snapshots)
+    lines = summarize_tight_turnarounds(snapshots)
 
     assert lines == [
-        "C-FAKE – Rest PIC/SIC 10:00/10:30",
-        "C-OTHER – Rest PIC/SIC 10:50/10:40",
+        "C-FAKE – 10:00/10:20 rest before next duty (PIC+SIC)",
+        "C-OTHER – 10:50/10:40 rest before next duty (PIC+SIC)",
     ]
+
+
+def test_summarize_insufficient_rest_alias():
+    snapshots = [
+        DutyStartSnapshot(
+            tail="C-ALIAS",
+            flight_id=1,
+            block_off_est_utc=None,
+            pilots=[
+                DutyStartPilotSnapshot(
+                    seat="PIC",
+                    name="Jane Doe",
+                    rest_after_min=600,
+                    rest_after_str="10:00",
+                ),
+            ],
+        )
+    ]
+
+    assert summarize_insufficient_rest(snapshots) == summarize_tight_turnarounds(snapshots)
 
 
 def test_build_flight_following_report_compiles_payload_and_text():
@@ -307,6 +374,9 @@ def test_build_flight_following_report_compiles_payload_and_text():
                 name="Jane Doe",
                 split_duty=True,
                 explainer_map={"ACTUAL_FDP": {"header": "FDP = 9:00", "text": ["Break = 3:00"]}},
+                fdp_actual_min=540,
+                fdp_max_min=600,
+                fdp_actual_str="9:00",
                 rest_after_min=700,
                 rest_after_str="11:40",
             ),
@@ -315,6 +385,9 @@ def test_build_flight_following_report_compiles_payload_and_text():
                 name="John Smith",
                 split_duty=True,
                 explainer_map={"ACTUAL_FDP": {"header": "FDP = 9:00", "text": ["Break = 3:00"]}},
+                fdp_actual_min=540,
+                fdp_max_min=600,
+                fdp_actual_str="9:00",
                 rest_after_min=700,
                 rest_after_str="11:40",
             ),
@@ -335,18 +408,23 @@ def test_build_flight_following_report_compiles_payload_and_text():
 
     text_payload = report.text_payload()
     assert "Flight Following Duty Report – 2024-01-01" in text_payload
-    assert "Split Duty Watchlist" in text_payload
-    assert "C-FAKE – Duty 9:00 Break 3:00 (PIC/SIC)" in text_payload
-    assert "Insufficient Rest" in text_payload
+    assert "Long Duty Days" in text_payload
+    assert "Split Duty Days" in text_payload
+    assert "Tight Turnarounds (<11h Before Next Duty)" in text_payload
+    assert "C-FAKE – 9:00 (PIC+SIC)" in text_payload
+    assert "C-FAKE – 9:00 duty – 3:00 break (PIC+SIC split)" in text_payload
     assert text_payload.endswith("None")
 
     message_payload = report.message_payload()
     assert message_payload["target_date"] == "2024-01-01"
     assert message_payload["text"] == text_payload
     assert message_payload["sections"][0]["lines"] == [
-        "C-FAKE – Duty 9:00 Break 3:00 (PIC/SIC)"
+        "C-FAKE – 9:00 (PIC+SIC)"
     ]
-    assert message_payload["sections"][1]["lines"] == ["None"]
+    assert message_payload["sections"][1]["lines"] == [
+        "C-FAKE – 9:00 duty – 3:00 break (PIC+SIC split)"
+    ]
+    assert message_payload["sections"][2]["lines"] == ["None"]
 
 
 def test_build_flight_following_report_handles_custom_sections_and_dates():
