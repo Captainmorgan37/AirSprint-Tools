@@ -578,7 +578,9 @@ def _match_period(
     return sorted_periods[0]
 
 
-def _summarise_period(period: Dict[str, Any]) -> List[Tuple[str, str]]:
+def _summarise_period(
+    period: Dict[str, Any], arrival_dt: Optional[datetime]
+) -> List[Tuple[str, str]]:
     details_map = {label: value for label, value in period.get("details", [])}
 
     def _coerce(value: Any) -> Optional[str]:
@@ -588,6 +590,7 @@ def _summarise_period(period: Dict[str, Any]) -> List[Tuple[str, str]]:
 
     summary: List[Tuple[str, str]] = []
 
+    # prevailing conditions
     wind_dir = _coerce(details_map.get("Wind Dir (°)"))
     wind_speed = _coerce(details_map.get("Wind Speed (kt)"))
     wind_gust = _coerce(details_map.get("Wind Gust (kt)"))
@@ -605,62 +608,75 @@ def _summarise_period(period: Dict[str, Any]) -> List[Tuple[str, str]]:
         ("Visibility", "Visibility"),
         ("Weather", "Weather"),
         ("Clouds", "Clouds"),
-        ("Probability (%)", "Probability"),
-        ("Icing", "Icing"),
-        ("Turbulence", "Turbulence"),
     ):
         value = _coerce(details_map.get(detail_key))
         if value:
             summary.append((label, value))
 
+    # --- NEW: include only relevant TEMPO / PROB windows ---
     tempo_blocks = period.get("tempo", [])
-    for tempo in tempo_blocks:
-        start_dt = tempo.get("start")
-        end_dt = tempo.get("end")
-        if isinstance(start_dt, datetime):
-            start_text = _format_local(start_dt)
-        else:
-            start_text = "—"
-        if isinstance(end_dt, datetime):
-            end_text = _format_local(end_dt)
-        else:
-            end_text = "—"
 
-        if start_text == "—" and end_text == "—":
-            window_text = "temporary window"
+    # normalize arrival to UTC so comparisons are sane
+    arr_utc = _ensure_utc(arrival_dt)
+
+    for tempo in tempo_blocks:
+        tb_start = tempo.get("start")
+        tb_end = tempo.get("end")
+
+        # both of these may already be tz-aware UTC from the parser,
+        # but normalize anyway for safety
+        tb_start_utc = _ensure_utc(tb_start)
+        tb_end_utc = _ensure_utc(tb_end)
+
+        # Decide if this tempo/probability window is relevant.
+        # We'll show it if:
+        #   - we don't know arrival_dt (arr_utc is None), OR
+        #   - arrival is inside [tb_start, tb_end)
+        overlaps_arrival = False
+        if arr_utc is None:
+            overlaps_arrival = True
         else:
-            window_text = f"{start_text} – {end_text}"
+            # handle open-endeds gracefully
+            start_ok = (tb_start_utc is None) or (arr_utc >= tb_start_utc)
+            end_ok = (tb_end_utc is None) or (arr_utc < tb_end_utc)
+            overlaps_arrival = start_ok and end_ok
+
+        if not overlaps_arrival:
+            # skip this tempo block, it's nowhere near our arrival time
+            continue
+
+        # Build human-readable text for the tempo window
+        if isinstance(tb_start, datetime):
+            tb_start_txt = _format_local(tb_start)
+        else:
+            tb_start_txt = "—"
+        if isinstance(tb_end, datetime):
+            tb_end_txt = _format_local(tb_end)
+        else:
+            tb_end_txt = "—"
+        window_txt = (
+            f"{tb_start_txt} – {tb_end_txt}"
+            if tb_start_txt != "—" or tb_end_txt != "—"
+            else "temporary window"
+        )
 
         prob_prefix = tempo.get("prob") or "TEMPO"
+
+        # flatten tempo details similar to prevailing
         tempo_detail_map = {label: value for label, value in tempo.get("details", [])}
-
         tempo_bits: List[str] = []
-        visibility = _coerce(tempo_detail_map.get("Visibility"))
-        weather = _coerce(tempo_detail_map.get("Weather"))
-        clouds = _coerce(tempo_detail_map.get("Clouds"))
-        wind_dir_t = _coerce(tempo_detail_map.get("Wind Dir (°)"))
-        wind_spd_t = _coerce(tempo_detail_map.get("Wind Speed (kt)"))
-        wind_gust_t = _coerce(tempo_detail_map.get("Wind Gust (kt)"))
-
-        wind_parts_t: List[str] = []
-        if wind_dir_t:
-            wind_parts_t.append(wind_dir_t)
-        if wind_spd_t:
-            wind_parts_t.append(f"{wind_spd_t}kt")
-        if wind_gust_t:
-            wind_parts_t.append(f"G{wind_gust_t}")
-        if wind_parts_t:
-            tempo_bits.append("Wind " + " ".join(wind_parts_t))
-
-        if visibility:
-            tempo_bits.append(f"Vis {visibility}")
-        if weather:
-            tempo_bits.append(weather)
-        if clouds:
-            tempo_bits.append(clouds)
+        vis_t = _coerce(tempo_detail_map.get("Visibility"))
+        wx_t = _coerce(tempo_detail_map.get("Weather"))
+        clouds_t = _coerce(tempo_detail_map.get("Clouds"))
+        if vis_t:
+            tempo_bits.append(f"Vis {vis_t}")
+        if wx_t:
+            tempo_bits.append(wx_t)
+        if clouds_t:
+            tempo_bits.append(clouds_t)
 
         if tempo_bits:
-            summary.append((f"{prob_prefix} {window_text}", "; ".join(tempo_bits)))
+            summary.append((f"{prob_prefix} {window_txt}", "; ".join(tempo_bits)))
 
     return summary
 
@@ -682,7 +698,7 @@ def _format_period_window(period: Dict[str, Any]) -> str:
 def _build_taf_html(
     report: Optional[Dict[str, Any]],
     period: Optional[Dict[str, Any]],
-    arrival_dt: Optional[datetime] = None,
+    arrival_dt: Optional[datetime],
 ) -> str:
     if report is None:
         return "<div class='taf taf-missing'>No TAF segment matched the arrival window.</div>"
@@ -734,7 +750,7 @@ def _build_taf_html(
             f"{html.escape(end_local_text)} ({html.escape(diff_text)} before arrival"
             f" at {html.escape(arrival_local_text)}).</div>"
         )
-    summary_items = _summarise_period(period)
+    summary_items = _summarise_period(period, arrival_dt)
 
     lines = [f"<div><strong>Forecast window:</strong> {html.escape(window_text)}</div>"]
     if warning_html:
