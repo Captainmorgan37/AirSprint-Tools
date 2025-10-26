@@ -105,39 +105,40 @@ def _sidebar_links() -> list[dict[str, Any]]:
             "label": "✈️ Flight Ops Tools",
             "expanded": True,
             "links": [
+                {"path": "pages/ASP CYYC Tracking.py", "label": "ASP CYYC Tracking"},                
                 {"path": "pages/Duty Calculator.py", "label": "Duty & Rest Calculator"},
                 {"path": "pages/Short Turn Checker.py", "label": "Short Turn Checker"},
                 {"path": "pages/Task_Splitter.py", "label": "Night Shift Task Splitter"},
                 {"path": "pages/OCS Slot Checker.py", "label": "OCS Slot Checker"},
                 {"path": "pages/Arrival Weather Outlook.py", "label": "Arrival Weather Outlook"},
-                {"path": "pages/Reserve Calendar Day Checker.py", "label": "Reserve Calendar Checker"},
-            ],
-        },
-        {
-            "label": "🧾 Compliance & Audits",
-            "expanded": False,
-            "links": [
                 {"path": "pages/NOTAM Checker.py", "label": "NOTAM Checker"},
                 {"path": "pages/Jeppesen ITP Required Flight Check.py", "label": "Jeppesen ITP Checker"},
                 {"path": "pages/Max ZFW Checker.py", "label": "Max ZFW Checker"},
                 {"path": "pages/_Customs Dashboard.py", "label": "Customs Dashboard"},
+                {"path": "pages/Operations Lead Morning Reports.py", "label": "Morning Reports"},
+                {"path": "pages/FBO Disconnect Report.py", "label": "FBO Disconnect Report"},      
             ],
         },
         {
-            "label": "📊 Reporting & Tracking",
+            "label": "🧾 Audit Tools",
             "expanded": False,
             "links": [
-                {"path": "pages/Operations Lead Morning Reports.py", "label": "Morning Reports"},
-                {"path": "pages/FBO Disconnect Report.py", "label": "FBO Disconnect Report"},
-                {"path": "pages/ASP CYYC Tracking.py", "label": "ASP CYYC Tracking"},
+                {"path": "pages/Reserve Calendar Day Checker.py", "label": "Reserve Calendar Checker"},
             ],
         },
         {
             "label": "🛎️ Owner Services",
             "expanded": False,
             "links": [
+
                 {"path": "pages/Owner Services Dashboard.py", "label": "Owner Services Dashboard"},
                 {"path": "pages/Cargo Juggler.py", "label": "Cargo Juggler"},
+            ],
+        },
+        {
+            "label": "In Progress",
+            "expanded": False,
+            "links": [
             ],
         },
     ]
