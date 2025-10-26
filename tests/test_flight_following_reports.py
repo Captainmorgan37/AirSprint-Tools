@@ -10,6 +10,7 @@ from flight_following_reports import (
     DutyStartPilotSnapshot,
     DutyStartSnapshot,
     collect_duty_start_snapshots,
+    summarize_insufficient_rest,
     summarize_long_duty_days,
 )
 
@@ -227,3 +228,66 @@ def test_summarize_long_duty_days_skips_snapshots_without_split_duty():
     )
 
     assert summarize_long_duty_days([snapshot]) == []
+
+
+def test_summarize_insufficient_rest_merges_seats_and_tails():
+    snapshots = [
+        DutyStartSnapshot(
+            tail="C-FAKE",
+            flight_id=1,
+            block_off_est_utc=None,
+            pilots=[
+                DutyStartPilotSnapshot(
+                    seat="PIC",
+                    name="Jane Doe",
+                    rest_after_min=600,
+                    rest_after_str="10:00",
+                ),
+                DutyStartPilotSnapshot(
+                    seat="SIC",
+                    name="John Smith",
+                    rest_after_min=700,
+                    rest_after_str="11:40",
+                ),
+            ],
+        ),
+        DutyStartSnapshot(
+            tail="C-FAKE",
+            flight_id=2,
+            block_off_est_utc=None,
+            pilots=[
+                DutyStartPilotSnapshot(
+                    seat="SIC",
+                    name="Alex Shaw",
+                    rest_after_min=630,
+                    rest_after_str="10:30",
+                ),
+            ],
+        ),
+        DutyStartSnapshot(
+            tail="C-OTHER",
+            flight_id=3,
+            block_off_est_utc=None,
+            pilots=[
+                DutyStartPilotSnapshot(
+                    seat="PIC",
+                    name="Riley Blue",
+                    rest_after_min=650,
+                    rest_after_str="10:50",
+                ),
+                DutyStartPilotSnapshot(
+                    seat="SIC",
+                    name="Mason Gray",
+                    rest_after_min=640,
+                    rest_after_str="10:40",
+                ),
+            ],
+        ),
+    ]
+
+    lines = summarize_insufficient_rest(snapshots)
+
+    assert lines == [
+        "C-FAKE – Rest PIC/SIC 10:00/10:30",
+        "C-OTHER – Rest PIC/SIC 10:50/10:40",
+    ]
