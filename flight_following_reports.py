@@ -516,10 +516,80 @@ def summarize_long_duty_days(
     return lines
 
 
+_REST_THRESHOLD_MINUTES = 11 * 60
+
+
+def summarize_insufficient_rest(
+    collection: Iterable[DutyStartSnapshot] | DutyStartCollection,
+) -> List[str]:
+    """Return formatted lines listing crew whose rest falls below the threshold."""
+
+    if isinstance(collection, DutyStartCollection):
+        snapshots: Iterable[DutyStartSnapshot] = collection.snapshots
+    else:
+        snapshots = collection
+
+    tail_map: Dict[str, Dict[str, Tuple[int, str]]] = {}
+
+    for snapshot in snapshots:
+        tail = snapshot.tail or "UNKNOWN"
+        seat_map = tail_map.setdefault(tail, {})
+
+        for pilot in snapshot.pilots:
+            rest_minutes = pilot.rest_after_min
+            if rest_minutes is None and pilot.rest_payload:
+                rest_minutes = _coerce_minutes(pilot.rest_payload.get("actual"))
+            if rest_minutes is None:
+                continue
+            if rest_minutes >= _REST_THRESHOLD_MINUTES:
+                continue
+
+            rest_display = pilot.rest_after_str or _minutes_to_hhmm(rest_minutes)
+            if not rest_display:
+                continue
+
+            seat = (pilot.seat or "PIC").upper()
+            existing = seat_map.get(seat)
+            if existing is None or rest_minutes < existing[0]:
+                seat_map[seat] = (rest_minutes, rest_display)
+
+    lines: List[str] = []
+    for tail in sorted(tail_map):
+        seat_map = tail_map[tail]
+        if not seat_map:
+            continue
+
+        sorted_entries = sorted(
+            seat_map.items(),
+            key=lambda item: _seat_sort_key(item[0]),
+        )
+
+        seats = [seat for seat, _ in sorted_entries]
+        rest_values = [value[1] for _, value in sorted_entries]
+        if not seats:
+            continue
+
+        seat_display = "/".join(seats)
+        rest_display = "/".join(rest_values)
+        lines.append(f"{tail} – Rest {seat_display} {rest_display}")
+
+    return lines
+
+
+def _seat_sort_key(seat: str) -> Tuple[int, str]:
+    seat_upper = (seat or "").upper()
+    if seat_upper == "PIC":
+        return (0, seat_upper)
+    if seat_upper == "SIC":
+        return (1, seat_upper)
+    return (2, seat_upper)
+
+
 __all__ = [
     "DutyStartPilotSnapshot",
     "DutyStartSnapshot",
     "DutyStartCollection",
     "collect_duty_start_snapshots",
     "summarize_long_duty_days",
+    "summarize_insufficient_rest",
 ]
