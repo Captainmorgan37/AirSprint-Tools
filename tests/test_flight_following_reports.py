@@ -153,6 +153,65 @@ def test_collect_duty_start_snapshots_groups_by_tail_and_tracks_crew_changes():
     assert other_tail_snapshot.crew_signature() == (("PIC", "P3"), ("SIC", "S3"))
 
 
+def test_collect_duty_start_snapshots_detects_string_split_duty_flags():
+    target_date = date(2024, 2, 2)
+    flights = [
+        {
+            "id": 11,
+            "registrationNumber": "C-SPLT",
+            "blockOffEstUTC": "2024-02-02T08:00:00Z",
+        }
+    ]
+
+    postflight_payloads = {
+        11: {
+            "tailNumber": "C-SPLT",
+            "dtls2": [
+                {
+                    "pilotRole": "PIC",
+                    "firstName": "Alex",
+                    "lastName": "Morgan",
+                    "personId": "P11",
+                    "splitDutyStart": "true",
+                    "fullDutyState": {
+                        "fdp": {"actual": 300, "max": 600},
+                        "splitDutyStart": "TRUE",
+                        "explainerMap": {},
+                    },
+                },
+                {
+                    "pilotRole": "SIC",
+                    "firstName": "Riley",
+                    "lastName": "Stone",
+                    "personId": "S11",
+                    "splitDutyStart": "false",
+                    "fullDutyState": {
+                        "fdp": {"actual": 300, "max": 600},
+                        "explainerMap": {},
+                    },
+                },
+            ],
+        }
+    }
+
+    def fake_postflight_fetcher(_config, flight_id):
+        return postflight_payloads[flight_id]
+
+    config = Fl3xxApiConfig(api_token="dummy")
+
+    collection = collect_duty_start_snapshots(
+        config,
+        target_date,
+        flights=flights,
+        postflight_fetcher=fake_postflight_fetcher,
+    )
+
+    assert len(collection.snapshots) == 1
+    snapshot = collection.snapshots[0]
+    assert any(pilot.split_duty for pilot in snapshot.pilots)
+    assert snapshot.pilots[1].split_duty is False
+
+
 def test_summarize_long_duty_days_highlight_utilisation():
     snapshot = DutyStartSnapshot(
         tail="C-FAKE",
