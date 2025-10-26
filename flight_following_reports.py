@@ -372,10 +372,12 @@ def _parse_pilot_blocks(postflight_payload: Any) -> List[DutyStartPilotSnapshot]
         split_break_str = _extract_break_str(explainer_map)
 
         split_duty = False
-        if pilot_block.get("splitDutyStart") is True or pilot_block.get("splitDutyType"):
+        if _is_truthy(pilot_block.get("splitDutyStart")) or pilot_block.get("splitDutyType"):
             split_duty = True
         if isinstance(full_duty_state, dict):
-            if full_duty_state.get("splitDutyStart") is True or full_duty_state.get("splitDutyType"):
+            if _is_truthy(full_duty_state.get("splitDutyStart")) or full_duty_state.get(
+                "splitDutyType"
+            ):
                 split_duty = True
 
         rest_after_min = _extract_rest_minutes(rest_payload, full_duty_state)
@@ -476,6 +478,23 @@ def _coerce_minutes(value: Any) -> Optional[int]:
     except (TypeError, ValueError):
         pass
     return None
+
+
+def _is_truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"", "0", "false", "f", "no", "n", "off"}:
+            return False
+        if lowered in {"1", "true", "t", "yes", "y", "on"}:
+            return True
+        return False
+    return False
 
 
 def _minutes_to_hhmm(total_min: Optional[int]) -> Optional[str]:
