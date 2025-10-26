@@ -65,7 +65,10 @@ def test_summarize_short_turns_formats_expected_text() -> None:
         priority_threshold_min=45,
     )
 
-    assert "Short turns:" in summary_text
+    assert "Short turns:" not in summary_text
+    lines = summary_text.splitlines()
+    assert lines
+    assert lines[0].startswith("C-GABC")
     assert "C-GABC" in summary_text
     assert "Sevensun Services" in summary_text
     assert "35 mins" in summary_text
@@ -154,6 +157,7 @@ def test_compute_short_turn_summary_for_collection_extracts_flights() -> None:
         local_tz_name="UTC",
     )
 
-    assert "Short turns:" in summary_text
+    assert "Short turns:" not in summary_text
+    assert summary_text.startswith("C-GABC")
     assert count == 1
     assert metadata["turns_detected"] == 1
