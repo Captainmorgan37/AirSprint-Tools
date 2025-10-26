@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import calendar
+import json
+import re
+
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, MutableMapping, Sequence, Tuple
 
-import json
-import re
 import requests
 
 
@@ -409,7 +411,22 @@ def _fallback_parse_raw_taf(
                 if month > 12:
                     month = 1
                     year += 1
-            return datetime(year, month, day, hour, 0, tzinfo=timezone.utc)
+
+            if hour == 24:
+                hour = 0
+                day += 1
+
+            while True:
+                try:
+                    return datetime(year, month, day, hour, 0, tzinfo=timezone.utc)
+                except ValueError:
+                    # handle month rollover when the day exceeds the length of the month
+                    days_in_month = calendar.monthrange(year, month)[1]
+                    day -= days_in_month
+                    month += 1
+                    if month > 12:
+                        month = 1
+                        year += 1
 
         return (_mk(start_day, start_hour), _mk(end_day, end_hour))
 
