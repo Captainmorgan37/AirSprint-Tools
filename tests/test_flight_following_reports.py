@@ -14,6 +14,7 @@ from flight_following_reports import (
     _coerce_minutes,
     build_flight_following_report,
     collect_duty_start_snapshots,
+    summarize_collection_for_display,
     summarize_insufficient_rest,
     summarize_long_duty_days,
     summarize_split_duty_days,
@@ -505,6 +506,61 @@ def test_summarize_tight_turnarounds_merges_seats_and_tails():
         "C-FAKE – 10:00/10:20 rest before next duty (PIC+SIC)",
         "C-OTHER – 10:50/10:40 rest before next duty (PIC+SIC)",
     ]
+
+
+def test_summarize_collection_for_display_surfaces_diagnostics_and_crew_details():
+    snapshot = DutyStartSnapshot(
+        tail="C-FAKE",
+        flight_id="LEG-1",
+        block_off_est_utc=datetime(2025, 10, 27, 13, 0, tzinfo=UTC),
+        pilots=[
+            DutyStartPilotSnapshot(seat="PIC", name="Jane Doe", person_id="P1"),
+            DutyStartPilotSnapshot(seat="SIC", name="John Smith", crew_member_id="S2"),
+        ],
+    )
+
+    collection = DutyStartCollection(
+        target_date=date(2025, 10, 27),
+        start_utc=datetime(2025, 10, 27, 6, 0, tzinfo=UTC),
+        end_utc=datetime(2025, 10, 28, 6, 0, tzinfo=UTC),
+        snapshots=[snapshot],
+        flights_metadata={"source": "test"},
+        grouped_flights={
+            "C-FAKE": [
+                {
+                    "flight_id": "LEG-1",
+                    "block_off_est_utc": snapshot.block_off_est_utc,
+                    "flight_payload": {},
+                }
+            ]
+        },
+        ingestion_diagnostics={
+            "total_flights": 2,
+            "accepted_flights": 1,
+            "tails": {"C-FAKE": 1},
+            "skipped": {"outside_window": {"count": 1, "samples": []}},
+        },
+    )
+
+    summary = summarize_collection_for_display(collection)
+
+    assert summary["duty_start_snapshots"] == 1
+    assert summary["ingestion_diagnostics"]["tails"] == {"C-FAKE": 1}
+
+    crew_summary = summary["crew_summary"]
+    assert crew_summary["total_snapshots"] == 1
+    assert crew_summary["unique_crews"] == 1
+
+    crew_entry = crew_summary["crews"][0]
+    assert crew_entry["signature"] == "PIC: P1 + SIC: S2"
+    assert crew_entry["tails"] == ["C-FAKE"]
+    assert crew_entry["sample_duties"][0]["crew"][0]["seat"] == "PIC"
+
+    pilot_names = {pilot["name"] for pilot in crew_summary["pilots"]}
+    assert {"Jane Doe", "John Smith"} <= pilot_names
+
+    pic_entry = next(p for p in crew_summary["pilots"] if p["name"] == "Jane Doe")
+    assert pic_entry["seats"] == ["PIC"]
 
 
 def test_summarize_insufficient_rest_alias():

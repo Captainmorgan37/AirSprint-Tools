@@ -247,6 +247,35 @@ def collect_duty_start_snapshots(
     )
 
 
+def summarize_collection_for_display(collection: DutyStartCollection) -> Dict[str, Any]:
+    """Return a structured summary highlighting duty and crew diagnostics."""
+
+    tails = sorted(collection.grouped_flights.keys()) if collection.grouped_flights else []
+    flights_metadata = {
+        str(key): value for key, value in (collection.flights_metadata or {}).items()
+    }
+
+    summary: Dict[str, Any] = {
+        "target_date": collection.target_date.isoformat(),
+        "window_start_utc": collection.start_utc.isoformat(),
+        "window_end_utc": collection.end_utc.isoformat(),
+        "duty_start_snapshots": len(collection.snapshots),
+        "tails_processed": len(tails),
+        "tails": tails,
+        "flights_metadata": flights_metadata,
+    }
+
+    ingestion = collection.ingestion_diagnostics or {}
+    if ingestion:
+        summary["ingestion_diagnostics"] = _normalize_ingestion_diagnostics(ingestion)
+    else:
+        summary["ingestion_diagnostics"] = {}
+
+    summary["crew_summary"] = _summarize_snapshots_for_metadata(collection.snapshots)
+
+    return summary
+
+
 def _group_flights_by_tail(
     flights: Iterable[Dict[str, Any]],
     start_utc: datetime,
@@ -390,6 +419,132 @@ def _summarize_flight_sample(
         sample.update(extra)
 
     return sample
+
+
+def _normalize_ingestion_diagnostics(data: Mapping[str, Any]) -> Dict[str, Any]:
+    normalized: Dict[str, Any] = {}
+    for key, value in data.items():
+        if isinstance(value, dict):
+            normalized[key] = _normalize_ingestion_diagnostics(value)
+        elif isinstance(value, list):
+            normalized[key] = [
+                _normalize_ingestion_diagnostics(item)
+                if isinstance(item, Mapping)
+                else item
+                for item in value
+            ]
+        else:
+            normalized[key] = value
+    return normalized
+
+
+def _summarize_snapshots_for_metadata(
+    snapshots: Iterable[DutyStartSnapshot],
+) -> Dict[str, Any]:
+    total_snapshots = 0
+    signature_map: Dict[Tuple[Tuple[str, str], ...], Dict[str, Any]] = {}
+    pilot_map: Dict[str, Dict[str, Any]] = {}
+
+    for snapshot in snapshots:
+        total_snapshots += 1
+
+        signature = snapshot.crew_signature()
+        signature_entry = signature_map.setdefault(
+            signature,
+            {
+                "signature": _format_signature_display(signature),
+                "count": 0,
+                "tails": set(),
+                "sample_duties": [],
+            },
+        )
+        signature_entry["count"] += 1
+        signature_entry["tails"].add(snapshot.tail or "UNKNOWN")
+        if len(signature_entry["sample_duties"]) < 3:
+            signature_entry["sample_duties"].append(
+                {
+                    "tail": snapshot.tail or "UNKNOWN",
+                    "flight_id": snapshot.flight_id,
+                    "crew": _snapshot_crew_display(snapshot),
+                }
+            )
+
+        for pilot in snapshot.pilots:
+            identifier_value = _select_identifier(pilot)
+            primary_identifier = identifier_value or pilot.name or "UNKNOWN"
+            pilot_entry = pilot_map.setdefault(
+                primary_identifier,
+                {
+                    "identifier": identifier_value,
+                    "name": pilot.name or primary_identifier,
+                    "count": 0,
+                    "seats": set(),
+                },
+            )
+            pilot_entry["count"] += 1
+            pilot_entry["seats"].add(_normalise_seat(pilot.seat))
+
+    crews = []
+    for entry in signature_map.values():
+        crews.append(
+            {
+                "signature": entry["signature"],
+                "count": entry["count"],
+                "tails": sorted(entry["tails"]),
+                "sample_duties": entry["sample_duties"],
+            }
+        )
+    crews.sort(key=lambda item: (-item["count"], item["signature"]))
+
+    pilots = []
+    for entry in pilot_map.values():
+        seats = sorted(entry["seats"], key=_seat_sort_key)
+        pilots.append(
+            {
+                "identifier": entry["identifier"],
+                "name": entry["name"],
+                "count": entry["count"],
+                "seats": seats,
+            }
+        )
+    pilots.sort(
+        key=lambda item: (
+            -item["count"],
+            item["name"] or "",
+            item["identifier"] or "",
+        )
+    )
+
+    return {
+        "total_snapshots": total_snapshots,
+        "unique_crews": len(signature_map),
+        "unique_pilots": len(pilot_map),
+        "crews": crews,
+        "pilots": pilots,
+    }
+
+
+def _format_signature_display(signature: Tuple[Tuple[str, str], ...]) -> str:
+    if not signature:
+        return "Unknown crew"
+    parts = []
+    for seat, identifier in signature:
+        seat_display = (seat or "PIC").upper()
+        parts.append(f"{seat_display}: {identifier}")
+    return " + ".join(parts)
+
+
+def _snapshot_crew_display(snapshot: DutyStartSnapshot) -> List[Dict[str, Any]]:
+    crew: List[Dict[str, Any]] = []
+    for pilot in snapshot.pilots:
+        crew.append(
+            {
+                "seat": _normalise_seat(pilot.seat),
+                "name": pilot.name,
+                "identifier": _select_identifier(pilot),
+            }
+        )
+    return crew
 
 
 def _build_snapshot_from_postflight(
@@ -994,6 +1149,7 @@ __all__ = [
     "FlightFollowingReportSection",
     "FlightFollowingReport",
     "collect_duty_start_snapshots",
+    "summarize_collection_for_display",
     "summarize_split_duty_days",
     "summarize_long_duty_days",
     "summarize_tight_turnarounds",

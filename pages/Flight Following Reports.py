@@ -9,6 +9,7 @@ from Home import configure_page, get_secret, password_gate, render_sidebar
 from flight_following_reports import (
     build_flight_following_report,
     collect_duty_start_snapshots,
+    summarize_collection_for_display,
     summarize_long_duty_days,
     summarize_split_duty_days,
     summarize_tight_turnarounds,
@@ -63,17 +64,7 @@ def _render_metadata(collection_summary: Dict[str, Any]) -> None:
 
 
 def _summarize_collection(collection) -> Dict[str, Any]:
-    tails = sorted(collection.grouped_flights.keys()) if collection.grouped_flights else []
-    metadata = {str(k): v for k, v in (collection.flights_metadata or {}).items()}
-    return {
-        "target_date": collection.target_date.isoformat(),
-        "window_start_utc": collection.start_utc.isoformat(),
-        "window_end_utc": collection.end_utc.isoformat(),
-        "duty_start_snapshots": len(collection.snapshots),
-        "tails_processed": len(tails),
-        "tails": tails,
-        "flights_metadata": metadata,
-    }
+    return summarize_collection_for_display(collection)
 
 
 def _display_report(state: Dict[str, Any]) -> None:
