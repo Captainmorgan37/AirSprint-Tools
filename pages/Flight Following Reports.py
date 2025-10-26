@@ -13,6 +13,7 @@ from flight_following_reports import (
     collect_duty_start_snapshots,
     compute_short_turn_summary_for_collection,
     summarize_collection_for_display,
+    summarize_cyyz_night_operations,
     summarize_long_duty_days,
     summarize_split_duty_days,
     summarize_tight_turnarounds,
@@ -185,6 +186,7 @@ if submitted:
             report = build_flight_following_report(
                 collection,
                 section_builders=(
+                    ("CYYZ Night Operations", summarize_cyyz_night_operations),
                     ("Long Duty Days", summarize_long_duty_days),
                     ("Split Duty Days", summarize_split_duty_days),
                     ("Tight Turnarounds (<11h Before Next Duty)", tight_turns_builder),
