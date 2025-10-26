@@ -612,10 +612,10 @@ def build_short_turn_summary_text(
 ) -> str:
     """Return a formatted multi-line short-turn summary text block."""
 
-    lines: List[str] = ["Short turns:"]
     if short_turn_df.empty:
-        lines.append("None")
-        return "\n".join(lines)
+        return "None"
+
+    lines: List[str] = []
 
     display_df = short_turn_df.copy()
     display_df["arr_onblock"] = display_df["arr_onblock"].apply(
