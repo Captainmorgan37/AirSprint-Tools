@@ -4,11 +4,14 @@ import sys
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
+import pytest
+
 from fl3xx_api import Fl3xxApiConfig
 from flight_following_reports import (
     DutyStartCollection,
     DutyStartPilotSnapshot,
     DutyStartSnapshot,
+    build_flight_following_report,
     collect_duty_start_snapshots,
     summarize_insufficient_rest,
     summarize_long_duty_days,
@@ -291,3 +294,91 @@ def test_summarize_insufficient_rest_merges_seats_and_tails():
         "C-FAKE – Rest PIC/SIC 10:00/10:30",
         "C-OTHER – Rest PIC/SIC 10:50/10:40",
     ]
+
+
+def test_build_flight_following_report_compiles_payload_and_text():
+    snapshot = DutyStartSnapshot(
+        tail="C-FAKE",
+        flight_id=1,
+        block_off_est_utc=datetime(2024, 1, 1, 8, 0, tzinfo=UTC),
+        pilots=[
+            DutyStartPilotSnapshot(
+                seat="PIC",
+                name="Jane Doe",
+                split_duty=True,
+                explainer_map={"ACTUAL_FDP": {"header": "FDP = 9:00", "text": ["Break = 3:00"]}},
+                rest_after_min=700,
+                rest_after_str="11:40",
+            ),
+            DutyStartPilotSnapshot(
+                seat="SIC",
+                name="John Smith",
+                split_duty=True,
+                explainer_map={"ACTUAL_FDP": {"header": "FDP = 9:00", "text": ["Break = 3:00"]}},
+                rest_after_min=700,
+                rest_after_str="11:40",
+            ),
+        ],
+    )
+
+    collection = DutyStartCollection(
+        target_date=date(2024, 1, 1),
+        start_utc=datetime(2024, 1, 1, 6, 0, tzinfo=UTC),
+        end_utc=datetime(2024, 1, 2, 6, 0, tzinfo=UTC),
+        snapshots=[snapshot],
+    )
+
+    report = build_flight_following_report(
+        collection,
+        generated_at=datetime(2024, 1, 1, 12, 0, tzinfo=UTC),
+    )
+
+    text_payload = report.text_payload()
+    assert "Flight Following Duty Report – 2024-01-01" in text_payload
+    assert "Split Duty Watchlist" in text_payload
+    assert "C-FAKE – Duty 9:00 Break 3:00 (PIC/SIC)" in text_payload
+    assert "Insufficient Rest" in text_payload
+    assert text_payload.endswith("None")
+
+    message_payload = report.message_payload()
+    assert message_payload["target_date"] == "2024-01-01"
+    assert message_payload["text"] == text_payload
+    assert message_payload["sections"][0]["lines"] == [
+        "C-FAKE – Duty 9:00 Break 3:00 (PIC/SIC)"
+    ]
+    assert message_payload["sections"][1]["lines"] == ["None"]
+
+
+def test_build_flight_following_report_handles_custom_sections_and_dates():
+    snapshots = [
+        DutyStartSnapshot(
+            tail="C-TEST",
+            flight_id=5,
+            block_off_est_utc=None,
+            pilots=[
+                DutyStartPilotSnapshot(
+                    seat="PIC",
+                    name="Jordan Sky",
+                )
+            ],
+        )
+    ]
+
+    def empty_section(_collection):
+        return []
+
+    report = build_flight_following_report(
+        snapshots,
+        generated_at=datetime(2024, 2, 2, 5, 0),
+        target_date=date(2024, 2, 2),
+        section_builders=[("Empty", empty_section)],
+    )
+
+    assert report.sections[0].title == "Empty"
+    assert report.sections[0].text == "None"
+    assert "None" in report.text_payload()
+
+
+def test_build_flight_following_report_requires_target_date_for_iterables():
+    with pytest.raises(ValueError):
+        build_flight_following_report([], generated_at=datetime(2024, 1, 1, 1, 0))
