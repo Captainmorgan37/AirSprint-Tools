@@ -402,39 +402,52 @@ def _extract_rest_minutes(
     return None
 
 
-def _extract_break_str(explainer_map: Mapping[str, Any]) -> Optional[str]:
+def _parse_actual_fdp_details(
+    explainer_map: Mapping[str, Any],
+) -> Tuple[Optional[str], Optional[str]]:
+    """Return the duty length and break duration strings from ACTUAL_FDP."""
+
     if not isinstance(explainer_map, Mapping):
-        return None
+        return None, None
     actual = explainer_map.get("ACTUAL_FDP")
     if not isinstance(actual, Mapping):
-        return None
+        return None, None
+
+    duty_str: Optional[str] = None
+    header = actual.get("header")
+    if isinstance(header, str):
+        header = header.strip()
+        if "=" in header:
+            header = header.split("=", 1)[1].strip()
+        if header:
+            duty_str = header
+
+    break_str: Optional[str] = None
     text_lines = actual.get("text")
-    if not isinstance(text_lines, Iterable):
-        return None
-    for line in text_lines:
-        if not isinstance(line, str):
-            continue
-        if line.strip().lower().startswith("break"):
-            parts = line.split("=")
-            if len(parts) >= 2:
-                return parts[-1].strip()
-    return None
+    if isinstance(text_lines, Iterable):
+        for line in text_lines:
+            if not isinstance(line, str):
+                continue
+            lower_line = line.strip().lower()
+            if not lower_line.startswith("break"):
+                continue
+            parts = line.split("=", 1)
+            candidate = parts[1].strip() if len(parts) == 2 else line.strip()
+            if candidate:
+                break_str = candidate
+                break
+
+    return duty_str, break_str
+
+
+def _extract_break_str(explainer_map: Mapping[str, Any]) -> Optional[str]:
+    _, break_str = _parse_actual_fdp_details(explainer_map)
+    return break_str
 
 
 def _extract_fdp_actual_str(explainer_map: Mapping[str, Any]) -> Optional[str]:
-    if not isinstance(explainer_map, Mapping):
-        return None
-    actual = explainer_map.get("ACTUAL_FDP")
-    if not isinstance(actual, Mapping):
-        return None
-    header = actual.get("header")
-    if isinstance(header, str):
-        if "=" in header:
-            return header.split("=", 1)[1].strip()
-        header = header.strip()
-        if header:
-            return header
-    return None
+    duty_str, _ = _parse_actual_fdp_details(explainer_map)
+    return duty_str
 
 
 def _extract_first(mapping: Mapping[str, Any], *keys: str) -> Any:
@@ -448,7 +461,7 @@ def _extract_first(mapping: Mapping[str, Any], *keys: str) -> Any:
 def summarize_long_duty_days(
     collection: Iterable[DutyStartSnapshot] | DutyStartCollection,
 ) -> List[str]:
-    """Return formatted lines for the Long Duty Days section."""
+    """Return formatted lines for the Split Duty section."""
 
     if isinstance(collection, DutyStartCollection):
         snapshots: Iterable[DutyStartSnapshot] = collection.snapshots
@@ -459,59 +472,45 @@ def summarize_long_duty_days(
 
     for snapshot in snapshots:
         tail = snapshot.tail or "UNKNOWN"
-        qualifying: List[Dict[str, Any]] = []
-
-        for pilot in snapshot.pilots:
-            actual_min = pilot.fdp_actual_min
-            max_min = pilot.fdp_max_min
-            if actual_min is None or not max_min:
-                continue
-
-            if max_min <= 0:
-                continue
-
-            ratio = actual_min / max_min
-            if ratio < 0.90:
-                continue
-
-            seat = (pilot.seat or "PIC").upper()
-            actual_display = pilot.fdp_actual_str or _minutes_to_hhmm(actual_min)
-            max_display = _minutes_to_hhmm(max_min)
-
-            qualifying.append(
-                {
-                    "seat": seat,
-                    "ratio": ratio,
-                    "actual_display": actual_display,
-                    "max_display": max_display,
-                }
-            )
-
-        if not qualifying:
+        split_pilots = [pilot for pilot in snapshot.pilots if pilot.split_duty]
+        if not split_pilots:
             continue
 
-        seats = "/".join(sorted({entry["seat"] for entry in qualifying}))
-        highlight = max(qualifying, key=lambda entry: entry["ratio"])
-        ratio_percent = highlight["ratio"] * 100
-        ratio_display = f"{ratio_percent:.0f}%"
+        seats = sorted({(pilot.seat or "PIC").upper() for pilot in split_pilots if pilot.seat})
+        seats_display = "/".join(seats) if seats else "CREW"
 
-        actual_display = highlight.get("actual_display")
-        max_display = highlight.get("max_display")
+        duty_display: Optional[str] = None
+        break_display: Optional[str] = None
 
-        if actual_display and max_display:
-            detail = f"{actual_display} of {max_display}"
-        elif actual_display:
-            detail = actual_display
-        elif max_display:
-            detail = f"of {max_display}"
-        else:
-            detail = None
+        for pilot in split_pilots:
+            duty_candidate, break_candidate = _parse_actual_fdp_details(pilot.explainer_map)
+            if duty_candidate and not duty_display:
+                duty_display = duty_candidate
+            if break_candidate and not break_display:
+                break_display = break_candidate
+            if duty_display and break_display:
+                break
 
-        if detail:
-            line = f"{tail} – {ratio_display} FDP ({detail}) ({seats})"
-        else:
-            line = f"{tail} – {ratio_display} FDP ({seats})"
+        if duty_display is None:
+            for pilot in split_pilots:
+                if pilot.fdp_actual_str:
+                    duty_display = pilot.fdp_actual_str
+                    break
+                fallback = _minutes_to_hhmm(pilot.fdp_actual_min)
+                if fallback:
+                    duty_display = fallback
+                    break
 
+        if break_display is None:
+            for pilot in split_pilots:
+                if pilot.split_break_str:
+                    break_display = pilot.split_break_str
+                    break
+
+        duty_display = duty_display or "Unknown"
+        break_display = break_display or "Unknown"
+
+        line = f"{tail} – Duty {duty_display} Break {break_display} ({seats_display})"
         lines.append(line)
 
     return lines
