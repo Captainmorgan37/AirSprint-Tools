@@ -113,10 +113,11 @@ def _sidebar_links() -> list[dict[str, Any]]:
                 {"path": "pages/Arrival Weather Outlook.py", "label": "Arrival Weather Outlook"},
                 {"path": "pages/NOTAM Checker.py", "label": "NOTAM/Weather Checker"},
                 {"path": "pages/Jeppesen ITP Required Flight Check.py", "label": "Jeppesen ITP Checker"},
+                {"path": "pages/Crew Duty Clearance Monitor.py", "label": "Crew Duty Clearance"},
                 {"path": "pages/Max ZFW Checker.py", "label": "Max ZFW Checker"},
                 {"path": "pages/_Customs Dashboard.py", "label": "Customs Dashboard"},
                 {"path": "pages/Operations Lead Morning Reports.py", "label": "OL Morning Reports"},
-                {"path": "pages/FBO Disconnect Report.py", "label": "FBO Disconnect Report"},      
+                {"path": "pages/FBO Disconnect Report.py", "label": "FBO Disconnect Report"},
             ],
         },
         {
