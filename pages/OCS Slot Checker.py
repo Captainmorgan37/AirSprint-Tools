@@ -24,7 +24,6 @@ This tool normalizes both formats and compares them against Fl3xx with airport-s
 - ✔ Matched
 - ⚠ Missing (no usable slot)
 - ⚠ Misaligned (wrong tail or outside time window)
-- ⚠ Stale Slots (slot not used by any Fl3xx leg)
 """)
 
 # ---------------- Config ----------------
@@ -1099,7 +1098,6 @@ if fl3xx_frames and ocs_files:
     show_table(missing_df,  "⚠ Missing",          "missing")
     show_table(mis_tail_df, "⚠ Tail mismatch",    "misaligned_tail")
     show_table(mis_time_df, "⚠ Time mismatch",    "misaligned_time")
-    show_table(stale_df,    "⚠ Stale Slots",      "stale")
 
 
 elif not ocs_files:
