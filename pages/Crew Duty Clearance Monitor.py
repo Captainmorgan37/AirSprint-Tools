@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
+from collections.abc import Mapping
 from typing import Any, Dict, Optional
 import streamlit as st
 
@@ -24,14 +25,32 @@ st.write(
 
 
 def _load_fl3xx_settings() -> Optional[Dict[str, Any]]:
+    """Return FL3XX settings from Streamlit secrets when available."""
+
     try:
-        settings = st.secrets.get("fl3xx_api")  # type: ignore[attr-defined]
+        secrets = st.secrets  # type: ignore[attr-defined]
     except Exception:
-        settings = None
-    if settings is None:
         return None
-    if isinstance(settings, dict):
-        return dict(settings)
+
+    # Streamlit exposes secrets as a mapping-like object. Indexing raises a
+    # KeyError if the section is missing, so guard access carefully.
+    try:
+        section = secrets["fl3xx_api"]
+    except Exception:
+        return None
+
+    if isinstance(section, Mapping):
+        return dict(section)
+
+    if isinstance(section, dict):  # pragma: no cover - defensive fallback
+        return dict(section)
+
+    # Section proxies sometimes provide an .items() iterator even if they are
+    # not formal Mapping subclasses. Handle that gracefully.
+    items_getter = getattr(section, "items", None)
+    if callable(items_getter):  # pragma: no cover - defensive fallback
+        return dict(items_getter())
+
     return None
 
 
