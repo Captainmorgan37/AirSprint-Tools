@@ -99,7 +99,7 @@ with st.spinner("Fetching duty clearance data from FL3XX…"):
         st.error(f"Unable to load duty clearance data: {exc}")
         st.stop()
 
-if display_df.empty:
+if raw_df.empty:
     st.success(
         "No active duties found for the selected date. Everyone is either clear or no crews are scheduled."
     )
@@ -115,21 +115,52 @@ if display_df.empty:
 
 raw_minutes = raw_df.get("_minutes_left")
 overdue_count = int((raw_minutes < 0).sum()) if raw_minutes is not None else 0
-not_cleared = int((raw_df["Status"] == "⚠️ NOT CLEARED").sum())
+not_confirmed = int((raw_df["Status"] == "⚠️ Not Confirmed").sum())
 unknown = int((raw_df["Status"] == "⏳ UNKNOWN").sum())
 total_crews = int(len(raw_df))
 
 metrics_row = st.columns(4)
 metrics_row[0].metric("Crews monitored", total_crews)
 metrics_row[1].metric("Overdue", overdue_count)
-metrics_row[2].metric("Not cleared", not_cleared)
+metrics_row[2].metric("Not confirmed", not_confirmed)
 metrics_row[3].metric("Status unknown", unknown)
 
 st.caption(
     "Confirm-by deadlines are computed per crew using their local duty timezone. Time left updates each time the report is run."
 )
 
-st.dataframe(display_df, use_container_width=True, hide_index=True)
+presentation_df = raw_df.copy()
+
+if "_confirm_by_mt" in presentation_df.columns:
+    presentation_df["Clear by (MT)"] = presentation_df["_confirm_by_mt"].apply(
+        lambda value: value.strftime("%Y-%m-%d %H:%M %Z") if isinstance(value, datetime) else ""
+    )
+
+columns_to_show = [
+    "Tail",
+    "Crew",
+    "Clear by (MT)",
+    "Report (local)",
+    "First ETD (local)",
+    "Status",
+    "Time left",
+]
+
+not_confirmed_mask = presentation_df["Status"] != "✅ Confirmed"
+not_confirmed_df = presentation_df.loc[not_confirmed_mask, columns_to_show].reset_index(drop=True)
+confirmed_df = presentation_df.loc[~not_confirmed_mask, columns_to_show].reset_index(drop=True)
+
+st.subheader("Crews requiring confirmation")
+if not not_confirmed_df.empty:
+    st.dataframe(not_confirmed_df, use_container_width=True, hide_index=True)
+else:
+    st.success("All crews are confirmed.")
+
+st.subheader("Confirmed crews")
+if not confirmed_df.empty:
+    st.dataframe(confirmed_df, use_container_width=True, hide_index=True)
+else:
+    st.info("No crews are currently marked as confirmed.")
 
 if not troubleshooting_df.empty:
     with st.expander("Troubleshooting details"):
@@ -140,7 +171,7 @@ if not troubleshooting_df.empty:
 
 with st.expander("Download data or inspect raw fields"):
     download_df = raw_df.copy()
-    for column in ["_confirm_by_local", "_report_local_dt", "_first_dep_local_dt"]:
+    for column in ["_confirm_by_local", "_confirm_by_mt", "_report_local_dt", "_first_dep_local_dt"]:
         if column in download_df.columns:
             download_df[column] = download_df[column].apply(_format_datetime)
     download_df["_generated_utc"] = datetime.utcnow().isoformat() + "Z"
