@@ -4,7 +4,6 @@ import time
 from typing import Any
 
 import streamlit as st
-from streamlit_autorefresh import st_autorefresh
 
 
 _SECRET_RETRY_PREFIX = "_secret_retry__"
@@ -189,7 +188,6 @@ def password_gate() -> None:
 def main() -> None:
     configure_page()
     password_gate()
-    st_autorefresh(interval=4 * 60 * 1000, key="auth-heartbeat")
     render_sidebar()
 
     st.title("✈️ AirSprint Operations Tools")
