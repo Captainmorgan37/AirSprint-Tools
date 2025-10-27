@@ -21,6 +21,7 @@ from taf_utils import get_taf_reports
 from zoneinfo_compat import ZoneInfo
 from arrival_weather_utils import (
     _CEILING_CODE_REGEX,
+    _combine_highlight_levels,
     _determine_highlight_level,
     _format_clouds_value,
     _get_ceiling_highlight,
@@ -547,6 +548,14 @@ def _summarise_period(
         if clouds_t:
             tempo_bits.append(clouds_t)
 
+        tempo_highlight = _combine_highlight_levels(
+            (
+                _get_visibility_highlight(vis_t),
+                "red" if wx_t and _should_highlight_weather(wx_t) else None,
+                _get_ceiling_highlight(clouds_t) if clouds_t else None,
+            )
+        )
+
         tempo_tailwind = _is_tailwind_direction(airport_code, tempo_wind_dir)
         if tempo_tailwind:
             tempo_bits.append(f"Tailwind ({source_label})")
@@ -559,6 +568,8 @@ def _summarise_period(
             }
             if tempo_tailwind:
                 tempo_entry["highlight"] = "red"
+            elif tempo_highlight:
+                tempo_entry["highlight"] = tempo_highlight
             summary.append(tempo_entry)
 
     return summary
