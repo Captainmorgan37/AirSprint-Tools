@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
+import json
 import math
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
@@ -111,6 +112,26 @@ def _format_crew_label(crew_payload: Iterable[Mapping[str, Any]]) -> str:
     return f"CMD: {pic_name or '??'} / FO: {sic_name or '??'}"
 
 
+def _serialise_checkins_for_debug(preflight_status: PreflightChecklistStatus) -> Optional[str]:
+    if not preflight_status.crew_checkins:
+        return None
+
+    serialised: List[Dict[str, Any]] = []
+    for entry in preflight_status.crew_checkins:
+        serialised.append(
+            {
+                "pilotRole": entry.pilot_role,
+                "userId": entry.user_id,
+                "checkin": entry.checkin,
+                "checkinActual": entry.checkin_actual,
+                "checkinDefault": entry.checkin_default,
+                "extraCheckins": list(entry.extra_checkins),
+            }
+        )
+
+    return json.dumps(serialised, ensure_ascii=False, sort_keys=True)
+
+
 def _get_report_time_local(
     preflight_status: PreflightChecklistStatus,
     duty_tz: ZoneInfo,
@@ -194,7 +215,14 @@ def compute_clearance_table(
     rows: List[Dict[str, Any]] = []
     troubleshooting: List[Dict[str, Any]] = []
 
-    def record_issue(issue: str, *, tail: Optional[str] = None, flight_id: Optional[Any] = None, detail: Optional[str] = None) -> None:
+    def record_issue(
+        issue: str,
+        *,
+        tail: Optional[str] = None,
+        flight_id: Optional[Any] = None,
+        detail: Optional[str] = None,
+        preflight_checkins: Optional[str] = None,
+    ) -> None:
         entry: Dict[str, Any] = {
             "Tail": tail or "",
             "Flight ID": flight_id if flight_id is not None else "",
@@ -202,6 +230,8 @@ def compute_clearance_table(
         }
         if detail:
             entry["Details"] = detail
+        if preflight_checkins:
+            entry["Preflight check-ins"] = preflight_checkins
         troubleshooting.append(entry)
 
     if not legs_by_tail:
@@ -245,6 +275,8 @@ def compute_clearance_table(
                 )
                 continue
 
+            checkins_debug = _serialise_checkins_for_debug(preflight_status)
+
             signature = _build_preflight_signature(preflight_status)
             if signature is None:
                 signature = (("LEG", str(flight_id)),)
@@ -273,6 +305,7 @@ def compute_clearance_table(
                     "Missing departure time for first leg.",
                     tail=tail,
                     flight_id=flight_id,
+                    preflight_checkins=checkins_debug,
                 )
                 continue
 
@@ -285,6 +318,7 @@ def compute_clearance_table(
                     "Unable to determine crew report time from checklist.",
                     tail=tail,
                     flight_id=flight_id,
+                    preflight_checkins=checkins_debug,
                 )
                 continue
 
