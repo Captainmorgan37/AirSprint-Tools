@@ -94,7 +94,7 @@ except FlightDataError as exc:
 
 with st.spinner("Fetching duty clearance data from FL3XX…"):
     try:
-        display_df, raw_df = compute_clearance_table(config, target_date)
+        display_df, raw_df, troubleshooting_df = compute_clearance_table(config, target_date)
     except Exception as exc:
         st.error(f"Unable to load duty clearance data: {exc}")
         st.stop()
@@ -103,6 +103,14 @@ if display_df.empty:
     st.success(
         "No active duties found for the selected date. Everyone is either clear or no crews are scheduled."
     )
+    if "troubleshooting_df" in locals() and not troubleshooting_df.empty:
+        st.warning(
+            "We requested data from FL3XX but some flights were skipped because required details were missing. Review the troubleshooting table below for next steps."
+        )
+        st.dataframe(troubleshooting_df, use_container_width=True, hide_index=True)
+        st.caption(
+            "Troubleshooting tips show which flights were filtered out—for example missing report times or preflight data. Fix the issue in FL3XX and re-run the report."
+        )
     st.stop()
 
 raw_minutes = raw_df.get("_minutes_left")
@@ -122,6 +130,13 @@ st.caption(
 )
 
 st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+if not troubleshooting_df.empty:
+    with st.expander("Troubleshooting details"):
+        st.dataframe(troubleshooting_df, use_container_width=True, hide_index=True)
+        st.caption(
+            "Entries in this table were skipped because required information was unavailable. Resolve the issue in FL3XX—such as adding crew check-ins or departure times—and rerun the report."
+        )
 
 with st.expander("Download data or inspect raw fields"):
     download_df = raw_df.copy()
