@@ -20,14 +20,19 @@ st.set_page_config(page_title="DEBUG PREFLIGHT / CHECKINS", layout="wide")
 st.title("DEBUG: Preflight / Checkins / Legs by Tail")
 
 # --- Build config from secrets the same way your main page does ---
-# adjust the secrets paths if yours differ
-fl3xx_secrets = st.secrets["fl3xx"]
+def _fetch_secret(key: str, *, required: bool, default: Any = _MISSING) -> Any:
+    """Fetch a secret, retrying briefly if the secrets store isn't ready yet."""
 
-config = Fl3xxApiConfig(
-    base_url=fl3xx_secrets["https://app.fl3xx.us/api/external/flight/flights"],
-    api_token=fl3xx_secrets["ts__ddFWrYpN-N3Hvt9Rp08LJ5nk9ODl"],
-    auth_header_name=fl3xx_secrets["X-Auth-Token"],
-)
+    try:
+        if key in st.secrets:
+            value = st.secrets[key]
+            st.session_state.pop(_secret_retry_key(key), None)
+            return value
+    except Exception:
+        # When the Streamlit runtime is still initialising secrets, accessing
+        # ``st.secrets`` can raise or behave like an empty mapping. Treat this
+        # as "not yet available" and retry.
+        pass
 
 # --- Pick a target date (default = tomorrow in America/Edmonton) ---
 MOUNTAIN_TZ = ZoneInfo("America/Edmonton")
