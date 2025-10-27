@@ -1149,11 +1149,35 @@ def get_todays_sorted_legs_by_tail(
             continue
         dep_dt = safe_parse_dt(str(dep_raw)).astimezone(UTC)
 
+        dep_tz_raw = row.get("dep_tz")
+        dep_tz: Optional[str]
+        if dep_tz_raw is None or (isinstance(dep_tz_raw, float) and pd.isna(dep_tz_raw)):
+            dep_tz = None
+        else:
+            dep_tz_str = str(dep_tz_raw).strip()
+            dep_tz = dep_tz_str or None
+
+        dep_airport: Optional[str] = None
+        for column in DEPARTURE_AIRPORT_COLUMNS:
+            if column not in df.columns:
+                continue
+            value = row.get(column)
+            if value is None:
+                continue
+            if isinstance(value, float) and pd.isna(value):
+                continue
+            candidate = str(value).strip()
+            if candidate:
+                dep_airport = candidate
+                break
+
         legs_by_tail.setdefault(tail, []).append(
             {
                 "tail": tail,
                 "flightId": flight_id,
                 "dep_dt_utc": dep_dt,
+                "dep_tz": dep_tz,
+                "dep_airport": dep_airport,
             }
         )
 
