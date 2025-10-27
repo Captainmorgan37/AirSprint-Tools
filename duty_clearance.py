@@ -332,11 +332,13 @@ def compute_clearance_table(
             timeleft_label, minutes_left = _fmt_timeleft(now_local, confirm_by_local)
 
             if preflight_status.all_ok is True:
-                status_text = "✅ CLEAR"
+                status_text = "✅ Confirmed"
             elif preflight_status.all_ok is False:
-                status_text = "⚠️ NOT CLEARED"
+                status_text = "⚠️ Not Confirmed"
             else:
                 status_text = "⏳ UNKNOWN"
+
+            confirm_by_mt = confirm_by_local.astimezone(MOUNTAIN_TIME_ZONE)
 
             rows.append(
                 {
@@ -344,10 +346,12 @@ def compute_clearance_table(
                     "Crew": crew_label,
                     "Report (local)": report_local.strftime("%Y-%m-%d %H:%M %Z"),
                     "First ETD (local)": first_leg_dep_local.strftime("%Y-%m-%d %H:%M %Z"),
+                    "Clear by (MT)": confirm_by_mt.strftime("%Y-%m-%d %H:%M %Z"),
                     "Status": status_text,
                     "Time left": timeleft_label,
                     "_minutes_left": minutes_left,
                     "_confirm_by_local": confirm_by_local,
+                    "_confirm_by_mt": confirm_by_mt,
                     "_report_local_dt": report_local,
                     "_first_dep_local_dt": first_leg_dep_local,
                     "_has_early_flight": has_early_flight,
@@ -367,6 +371,7 @@ def compute_clearance_table(
             "Crew",
             "Report (local)",
             "First ETD (local)",
+            "Clear by (MT)",
             "Status",
             "Time left",
         ]].reset_index(drop=True)
