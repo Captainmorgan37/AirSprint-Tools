@@ -7,7 +7,14 @@ import sys
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
-from fl3xx_api import DutySnapshot, DutySnapshotPilot, parse_postflight_payload
+from fl3xx_api import (
+    DutySnapshot,
+    DutySnapshotPilot,
+    PreflightChecklistStatus,
+    PreflightCrewCheckin,
+    parse_postflight_payload,
+    parse_preflight_payload,
+)
 
 
 def test_parse_postflight_payload_reads_time_dtls2() -> None:
@@ -91,3 +98,73 @@ def test_parse_postflight_payload_falls_back_to_time_commanders() -> None:
     identifiers = {pilot.pilot_id for pilot in snapshot.pilots}
     assert identifiers == {"111", "222"}
     assert any(pilot.rest_after_min == 600 for pilot in snapshot.pilots)
+
+
+def test_parse_preflight_payload_extracts_status_flags() -> None:
+    payload = {
+        "crw": {
+            "crewBriefing": "OK",
+            "crewAssign": "REQ",
+        }
+    }
+
+    status = parse_preflight_payload(payload)
+
+    assert isinstance(status, PreflightChecklistStatus)
+    assert status.crew_briefing == "OK"
+    assert status.crew_assign == "REQ"
+    assert status.crew_briefing_ok is True
+    assert status.crew_assign_ok is False
+    assert status.all_ok is False
+    assert status.has_data is True
+
+
+def test_preflight_status_all_ok_requires_both_flags() -> None:
+    payload = {"crw": {"crewBriefing": "OK"}}
+
+    status = parse_preflight_payload(payload)
+
+    assert status.crew_briefing_ok is True
+    assert status.crew_assign is None
+    assert status.all_ok is None
+    assert status.has_data is True
+
+
+def test_parse_preflight_payload_collects_checkins() -> None:
+    payload = {
+        "dtls2": [
+            {
+                "userId": 395555,
+                "pilotRole": "CMD",
+                "checkin": 1791036000.000000000,
+                "checkinActual": "1791036000.000000000",
+                "checkinDefault": 1791036000.000000000,
+            },
+            {
+                "userId": "395567",
+                "pilotRole": "FO",
+                "checkin": "1791036000.0",
+            },
+            "not-a-mapping",
+        ]
+    }
+
+    status = parse_preflight_payload(payload)
+
+    assert status.crew_checkins
+    assert len(status.crew_checkins) == 2
+
+    first = status.crew_checkins[0]
+    assert isinstance(first, PreflightCrewCheckin)
+    assert first.user_id == "395555"
+    assert first.pilot_role == "CMD"
+    assert first.checkin == 1791036000
+    assert first.checkin_actual == 1791036000
+    assert first.checkin_default == 1791036000
+
+    second = status.crew_checkins[1]
+    assert second.user_id == "395567"
+    assert second.pilot_role == "FO"
+    assert second.checkin == 1791036000
+    assert second.checkin_actual is None
+    assert status.has_data is True
