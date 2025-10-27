@@ -280,8 +280,8 @@ with tab3:
                     return start <= clock_time <= end
                 return clock_time >= start or clock_time <= end
 
-            deemed_window_start = time(20, 15)
-            deemed_window_end = time(2, 15)
+            deemed_window_start = time(20, 00)
+            deemed_window_end = time(2, 00)
 
             if within_window(duty_end_clock, deemed_window_start, deemed_window_end):
                 # Deemed rest begins at duty end (block on + 15 minutes)
