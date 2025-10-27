@@ -491,26 +491,54 @@ def _parse_preflight_checkin(entry: Mapping[str, Any]) -> PreflightCrewCheckin:
 def parse_preflight_payload(preflight_payload: Any) -> PreflightChecklistStatus:
     """Return crew readiness flags and check-in data from a preflight payload."""
 
-    crew_block: Mapping[str, Any] = {}
+    crew_briefing: Optional[str] = None
+    crew_assign: Optional[str] = None
     dtls2_list: List[Mapping[str, Any]] = []
 
     if isinstance(preflight_payload, Mapping):
-        maybe_crew = preflight_payload.get("crw")
-        if isinstance(maybe_crew, Mapping):
-            crew_block = maybe_crew
-
-        maybe_dtls2 = preflight_payload.get("dtls2")
-        if isinstance(maybe_dtls2, list):
-            dtls2_list = [entry for entry in maybe_dtls2 if isinstance(entry, Mapping)]
+        # Newer AirSprint payloads expose crew status blocks at the root.
+        maybe_brief = preflight_payload.get("crewBrief")
+        if isinstance(maybe_brief, Mapping):
+            crew_briefing = _extract_preflight_status_value(maybe_brief.get("status"))
         else:
-            time_block = preflight_payload.get("time")
-            if isinstance(time_block, Mapping):
-                nested_dtls2 = time_block.get("dtls2")
-                if isinstance(nested_dtls2, list):
-                    dtls2_list = [entry for entry in nested_dtls2 if isinstance(entry, Mapping)]
+            crew_briefing = _extract_preflight_status_value(maybe_brief)
 
-    crew_briefing = _extract_preflight_status_value(crew_block.get("crewBriefing") if crew_block else None)
-    crew_assign = _extract_preflight_status_value(crew_block.get("crewAssign") if crew_block else None)
+        maybe_assign = preflight_payload.get("crewAssign")
+        if isinstance(maybe_assign, Mapping):
+            crew_assign = _extract_preflight_status_value(maybe_assign.get("status"))
+        else:
+            crew_assign = _extract_preflight_status_value(maybe_assign)
+
+        duty_time_lim = preflight_payload.get("dutyTimeLim")
+        if isinstance(duty_time_lim, Mapping):
+            dtls2 = duty_time_lim.get("dtls2")
+            if isinstance(dtls2, list):
+                dtls2_list = [entry for entry in dtls2 if isinstance(entry, Mapping)]
+
+        # Fall back to the original structure that surfaced crew info under "crw".
+        if crew_briefing is None or crew_assign is None:
+            maybe_crew = preflight_payload.get("crw")
+            if isinstance(maybe_crew, Mapping):
+                if crew_briefing is None:
+                    crew_briefing = _extract_preflight_status_value(
+                        maybe_crew.get("crewBriefing")
+                    )
+                if crew_assign is None:
+                    crew_assign = _extract_preflight_status_value(maybe_crew.get("crewAssign"))
+
+        # Original payloads also surfaced dtls2 either at the root or under "time".
+        if not dtls2_list:
+            maybe_dtls2 = preflight_payload.get("dtls2")
+            if isinstance(maybe_dtls2, list):
+                dtls2_list = [entry for entry in maybe_dtls2 if isinstance(entry, Mapping)]
+            else:
+                time_block = preflight_payload.get("time")
+                if isinstance(time_block, Mapping):
+                    nested_dtls2 = time_block.get("dtls2")
+                    if isinstance(nested_dtls2, list):
+                        dtls2_list = [
+                            entry for entry in nested_dtls2 if isinstance(entry, Mapping)
+                        ]
 
     crew_checkins = tuple(_parse_preflight_checkin(entry) for entry in dtls2_list)
 
