@@ -122,6 +122,9 @@ def _get_report_time_local(
         for candidate in (check.checkin_default, check.checkin_actual, check.checkin):
             if candidate is not None:
                 epochs.append(candidate)
+        for extra in getattr(check, "extra_checkins", ()):  # type: ignore[attr-defined]
+            if extra is not None:
+                epochs.append(extra)
     if not epochs:
         return None
 

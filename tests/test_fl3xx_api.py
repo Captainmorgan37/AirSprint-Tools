@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pathlib
+from datetime import datetime, timezone
 import sys
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
@@ -161,6 +162,7 @@ def test_parse_preflight_payload_collects_checkins() -> None:
     assert first.checkin == 1791036000
     assert first.checkin_actual == 1791036000
     assert first.checkin_default == 1791036000
+    assert first.extra_checkins == ()
 
     second = status.crew_checkins[1]
     assert second.user_id == "395567"
@@ -168,3 +170,26 @@ def test_parse_preflight_payload_collects_checkins() -> None:
     assert second.checkin == 1791036000
     assert second.checkin_actual is None
     assert status.has_data is True
+
+
+def test_parse_preflight_payload_collects_additional_datetime_fields() -> None:
+    payload = {
+        "dtls2": [
+            {
+                "userId": 123,
+                "pilotRole": "CMD",
+                "crewReportTimeUtc": "2024-05-02T12:15:00Z",
+                "checkInLocal": "2024-05-02 06:15:00-06:00",
+                "checkInLocalDuplicate": "2024-05-02T12:15:00+00:00",
+            }
+        ]
+    }
+
+    status = parse_preflight_payload(payload)
+    assert status.crew_checkins
+
+    checkin = status.crew_checkins[0]
+    assert checkin.extra_checkins
+
+    expected_epoch = int(datetime(2024, 5, 2, 12, 15, tzinfo=timezone.utc).timestamp())
+    assert checkin.extra_checkins == (expected_epoch,)
