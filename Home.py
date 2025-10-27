@@ -208,7 +208,7 @@ def main() -> None:
         "FBO Disconnect Report Workflow": "docs/FBO Disconnect Report.docx",
         "Flight Following Reports Workflow": "docs/Flight Following Reports Workflow.docx",
         "NOTAM and Weather Checker Workflow": "docs/NOTAM Checker.docx",
-        "OCS Slot Checker": "docs/OCS Slot Checker.docx",
+        "OCS Slot Checker Workflow": "docs/OCS Slot Checker.docx",
         "Operations Lead Morning Reports Workflow": "docs/Operations Lead Morning Reports.docx",
         "Reserve Calendar Day Checker Workflow": "docs/Reserve Calendar Day Checker.docx",
         "Short Turn Checker Workflow": "docs/Short Turn Checker.docx",
