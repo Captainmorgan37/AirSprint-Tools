@@ -62,6 +62,22 @@ def test_get_report_time_local_uses_earliest_epoch():
     assert report_local == (base - timedelta(hours=1)).astimezone(tz)
 
 
+def test_get_report_time_local_uses_extra_checkins():
+    tz = ZoneInfo("America/Edmonton")
+    base = datetime(2024, 7, 4, 8, 30, tzinfo=timezone.utc)
+    epoch = int(base.timestamp())
+    status = PreflightChecklistStatus(
+        crew_checkins=(
+            PreflightCrewCheckin(
+                extra_checkins=(epoch,),
+            ),
+        )
+    )
+
+    report_local = _get_report_time_local(status, tz)
+    assert report_local == base.astimezone(tz)
+
+
 def test_compute_confirm_by_without_early_duty():
     tz = ZoneInfo("America/Edmonton")
     report_local = datetime(2024, 6, 1, 9, 0, tzinfo=tz)

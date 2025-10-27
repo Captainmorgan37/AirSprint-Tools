@@ -8,6 +8,7 @@ import hashlib
 import json
 from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Tuple, Literal
 
+import pandas as pd
 import requests
 from zoneinfo_compat import ZoneInfo
 
@@ -338,6 +339,7 @@ class PreflightCrewCheckin:
     checkin: Optional[int] = None
     checkin_actual: Optional[int] = None
     checkin_default: Optional[int] = None
+    extra_checkins: Tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -409,6 +411,33 @@ def _normalise_optional_epoch(value: Any) -> Optional[int]:
     return None
 
 
+def _normalise_datetime_candidate(value: Any) -> Optional[int]:
+    """Return an epoch value for strings that encode datetimes."""
+
+    epoch = _normalise_optional_epoch(value)
+    if epoch is not None:
+        return epoch
+
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+
+        try:
+            parsed = datetime.fromisoformat(cleaned.replace("Z", "+00:00"))
+        except ValueError:
+            try:
+                parsed = pd.to_datetime(cleaned, utc=True).to_pydatetime()
+            except Exception:
+                return None
+
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return int(parsed.timestamp())
+
+    return None
+
+
 def _parse_preflight_checkin(entry: Mapping[str, Any]) -> PreflightCrewCheckin:
     user_id = entry.get("userId")
     user_id_str: Optional[str]
@@ -432,12 +461,30 @@ def _parse_preflight_checkin(entry: Mapping[str, Any]) -> PreflightCrewCheckin:
     checkin_actual = _normalise_optional_epoch(entry.get("checkinActual"))
     checkin_default = _normalise_optional_epoch(entry.get("checkinDefault"))
 
+    extra_epochs: List[int] = []
+    for key, value in entry.items():
+        if not isinstance(key, str):
+            continue
+        normalised_key = key.strip().lower()
+        if normalised_key in {"checkin", "checkinactual", "checkindefault"}:
+            continue
+        if "checkin" in normalised_key or (
+            "report" in normalised_key
+            and any(token in normalised_key for token in ("time", "utc", "local"))
+        ):
+            candidate = _normalise_datetime_candidate(value)
+            if candidate is not None:
+                extra_epochs.append(candidate)
+
+    unique_extra = tuple(sorted(set(extra_epochs)))
+
     return PreflightCrewCheckin(
         user_id=user_id_str,
         pilot_role=pilot_role,
         checkin=checkin,
         checkin_actual=checkin_actual,
         checkin_default=checkin_default,
+        extra_checkins=unique_extra,
     )
 
 
