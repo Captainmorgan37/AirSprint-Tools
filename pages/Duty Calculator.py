@@ -262,14 +262,29 @@ with tab3:
         duty_end_time = parse_time(duty_end_input) if duty_end_input.strip() != "" else None
 
         if landing_time and (not split_duty_toggle or duty_length_time):
-            default_duty_end_dt = time_to_datetime(landing_time) + timedelta(minutes=15)
-            duty_end_dt = time_to_datetime(duty_end_time) if duty_end_time else default_duty_end_dt
+            landing_dt = time_to_datetime(landing_time)
+            default_duty_end_dt = landing_dt + timedelta(minutes=15)
 
-            duty_end_hour = duty_end_dt.time().hour
-            duty_end_min = duty_end_dt.time().minute
+            if duty_end_time:
+                duty_end_dt = datetime.combine(default_duty_end_dt.date(), duty_end_time)
+                if duty_end_dt < landing_dt:
+                    duty_end_dt += timedelta(days=1)
+            else:
+                duty_end_dt = default_duty_end_dt
 
-            # Determine rest type
-            if (duty_end_hour >= 20) or (duty_end_hour < 2) or (duty_end_hour == 2 and duty_end_min == 0):
+            # Determine rest type based on duty end
+            duty_end_clock = duty_end_dt.time()
+
+            def within_window(clock_time, start, end):
+                if start <= end:
+                    return start <= clock_time <= end
+                return clock_time >= start or clock_time <= end
+
+            deemed_window_start = time(20, 00)
+            deemed_window_end = time(2, 00)
+
+            if within_window(duty_end_clock, deemed_window_start, deemed_window_end):
+                # Deemed rest begins at duty end (block on + 15 minutes)
                 rest_end_dt = duty_end_dt + timedelta(hours=10)
                 rest_type = "Deemed Rest"
                 rest_color = "orange"
@@ -281,23 +296,25 @@ with tab3:
                 rest_type = "Assumed Rest"
                 rest_color = "green"
 
-            # Apply FTL extension ONLY if rest is Deemed Rest
-            if ftl_extension and rest_type == "Deemed Rest":
-                rest_end_dt += timedelta(hours=1)
+            extra_rest = timedelta()
 
-            # Apply split/unforeseen duty extension ONLY if rest is Deemed Rest
-            if split_duty_toggle and duty_length_time and rest_type == "Deemed Rest":
+            if ftl_extension:
+                extra_rest += timedelta(hours=1)
+
+            if split_duty_toggle and duty_length_time:
                 duty_length_hours = duty_length_time.hour + duty_length_time.minute / 60
                 if duty_length_hours > 14:
-                    extra_hours = duty_length_hours - 14
-                    rest_end_dt += timedelta(hours=extra_hours)
+                    extra_hours = min(duty_length_hours - 14, 3)
+                    extra_rest += timedelta(hours=extra_hours)
+
+            rest_end_dt += extra_rest
 
             callout_dt = rest_end_dt
             departure_dt = callout_dt + timedelta(hours=2, minutes=30)
 
             # Build display string for rest end
             rest_end_display = rest_end_dt.strftime("%H:%M")
-            if rest_type == "Assumed Rest":
+            if rest_end_dt.date() > duty_end_dt.date():
                 rest_end_display += " (+1 day)"
 
 
