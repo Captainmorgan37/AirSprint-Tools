@@ -1,7 +1,6 @@
 import hashlib
 import html
 import json
-import re
 from collections import defaultdict
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
@@ -20,6 +19,20 @@ from flight_leg_utils import (
 from Home import configure_page, password_gate, render_sidebar
 from taf_utils import get_taf_reports
 from zoneinfo_compat import ZoneInfo
+from arrival_weather_utils import (
+    _CEILING_CODE_REGEX,
+    _combine_highlight_levels,
+    _determine_highlight_level,
+    _format_clouds_value,
+    _get_ceiling_highlight,
+    _get_visibility_highlight,
+    _parse_ceiling_value,
+    _parse_fraction,
+    _parse_visibility_value,
+    _should_highlight_weather,
+    _try_float,
+    _wrap_highlight_html,
+)
 
 configure_page(page_title="Arrival Weather Outlook")
 password_gate()
@@ -90,6 +103,12 @@ TAIL_DISPLAY_ORDER: Sequence[str] = (
 TAIL_INDEX = {tail: idx for idx, tail in enumerate(TAIL_DISPLAY_ORDER)}
 FAR_FUTURE = datetime.max.replace(tzinfo=timezone.utc)
 
+TAILWIND_DIRECTION_RANGES: Dict[str, Tuple[int, int]] = {
+    "CYRV": (30, 210),
+    "KSUN": (40, 220),
+    "KASE": (240, 60),
+}
+
 ARRIVAL_TIME_KEYS: Sequence[str] = (
     "arrival_time",
     "arrival_time_utc",
@@ -122,9 +141,21 @@ st.markdown(
                   background:rgba(17, 24, 39, 0.85); transition:background 0.2s ease, border-color 0.2s ease;}
     .flight-card--today {background:rgba(37, 99, 235, 0.22); border-color:rgba(147, 197, 253, 0.65);}
     .flight-card--future {background:rgba(15, 23, 42, 0.88);}
+    .flight-card--past {background:rgba(22, 101, 52, 0.78); border-color:rgba(34, 197, 94, 0.82);
+                        box-shadow:0 0 0 2px rgba(34, 197, 94, 0.45), 0 12px 24px rgba(22, 101, 52, 0.35);}
+    .flight-card--arrival-elapsed {background:rgba(202, 138, 4, 0.78); border-color:rgba(250, 204, 21, 0.82);
+                                   box-shadow:0 0 0 2px rgba(250, 204, 21, 0.45), 0 12px 24px rgba(161, 98, 7, 0.35);}
     .flight-card h4 {margin:0 0 0.35rem 0; font-size:1.05rem; color:#f8fafc;}
     .flight-card .times {font-family:"Source Code Pro", Menlo, Consolas, monospace; font-size:0.9rem;
                          margin-bottom:0.45rem; line-height:1.35; color:#cbd5f5;}
+    .flight-card .past-flag {display:inline-block; padding:0.25rem 0.55rem; margin-bottom:0.5rem;
+                             border-radius:999px; font-size:0.75rem; font-weight:700; letter-spacing:0.04em;
+                             background:rgba(34, 197, 94, 0.22); color:#bbf7d0; border:1px solid rgba(34, 197, 94, 0.45);
+                             text-transform:uppercase;}
+    .flight-card .arrival-elapsed-flag {display:inline-block; padding:0.25rem 0.55rem; margin-bottom:0.5rem;
+                                        border-radius:999px; font-size:0.75rem; font-weight:700; letter-spacing:0.04em;
+                                        background:rgba(250, 204, 21, 0.25); color:#fef9c3; border:1px solid rgba(250, 204, 21, 0.55);
+                                        text-transform:uppercase;}
     .flight-card .badge-strip {display:flex; flex-wrap:wrap; gap:0.35rem; margin-bottom:0.35rem;}
     .flight-card .badge {background:rgba(59,130,246,0.18); color:#93c5fd; padding:0.1rem 0.45rem;
                          border-radius:999px; font-size:0.75rem; letter-spacing:0.02em; text-transform:uppercase;}
@@ -147,234 +178,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-
-_CEILING_CODE_REGEX = re.compile(
-    r"\b(BKN|OVC|VV)\s*(\d(?:[\s,]?\d){1,})",
-    re.IGNORECASE,
-)
-
-
-def _parse_fraction(value: str) -> Optional[float]:
-    try:
-        numerator, denominator = value.split("/", 1)
-        return float(numerator) / float(denominator)
-    except (ValueError, ZeroDivisionError):
-        return None
-
-
-def _try_float(value: str) -> Optional[float]:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _parse_visibility_value(value) -> Optional[float]:
-    if value in (None, "", [], "M"):
-        return None
-
-    if isinstance(value, (int, float)):
-        return float(value)
-
-    if isinstance(value, dict):
-        for key in ("value", "visibility", "minValue", "maxValue"):
-            if key in value:
-                nested_val = _parse_visibility_value(value[key])
-                if nested_val is not None:
-                    return nested_val
-        return None
-
-    if isinstance(value, (list, tuple)):
-        for item in value:
-            nested_val = _parse_visibility_value(item)
-            if nested_val is not None:
-                return nested_val
-        return None
-
-    text = str(value).strip().upper()
-    if not text:
-        return None
-
-    if text.startswith("P") or text.startswith("M"):
-        text = text[1:]
-
-    if text.endswith("SM"):
-        text = text[:-2]
-    text = text.replace("SM", "")
-    text = text.strip().strip("+")
-    if not text:
-        return None
-
-    parts = text.split()
-    if len(parts) == 2:
-        whole_val = _try_float(parts[0]) or 0.0
-        frac_val = _parse_fraction(parts[1])
-        if frac_val is None:
-            return _try_float(text)
-        return whole_val + frac_val
-
-    if "/" in text:
-        frac_val = _parse_fraction(text)
-        if frac_val is not None:
-            return frac_val
-
-    return _try_float(text)
-
-
-def _get_visibility_highlight(value) -> Optional[str]:
-    if value in (None, ""):
-        return None
-
-    if isinstance(value, str):
-        stripped = value.strip()
-        if not stripped:
-            return None
-        upper_value = stripped.upper()
-        if "/" in upper_value and "SM" not in upper_value:
-            return None
-
-    vis_value = _parse_visibility_value(value)
-    if vis_value is None:
-        return None
-    if vis_value <= 2.0:
-        return "red"
-    if vis_value <= 3.0:
-        return "yellow"
-    return None
-
-
-def _parse_ceiling_value(value) -> Optional[float]:
-    if value in (None, "", [], "M"):
-        return None
-
-    if isinstance(value, (int, float)):
-        return float(value)
-
-    if isinstance(value, (list, tuple)) and value:
-        lowest: Optional[float] = None
-        for item in value:
-            parsed = _parse_ceiling_value(item)
-            if parsed is None:
-                continue
-            if lowest is None or parsed < lowest:
-                lowest = parsed
-        return lowest
-
-    if isinstance(value, dict):
-        for key in ("value", "ceiling", "ceiling_ft_agl"):
-            if key in value:
-                parsed = _parse_ceiling_value(value[key])
-                if parsed is not None:
-                    return parsed
-        return None
-
-    try:
-        text = str(value)
-    except Exception:
-        return None
-
-    text = text.strip()
-    if not text:
-        return None
-
-    upper_text = text.upper()
-    match = _CEILING_CODE_REGEX.search(upper_text)
-    if match:
-        height_digits = re.sub(r"\D", "", match.group(2))
-        if height_digits:
-            height_value = int(height_digits)
-            remainder = upper_text[match.end() :]
-            following = remainder.lstrip()
-            if following.startswith(("FT", "FT.", "FEET")):
-                return float(height_value)
-            if len(height_digits) == 3:
-                return float(height_value * 100)
-            return float(height_value)
-
-    cleaned = upper_text.replace(",", "")
-    for suffix in (" FT", "FT", " FT.", "FT."):
-        if cleaned.endswith(suffix):
-            cleaned = cleaned[: -len(suffix)].strip()
-            break
-
-    try:
-        return float(cleaned)
-    except ValueError:
-        return None
-
-
-def _get_ceiling_highlight(value) -> Optional[str]:
-    ceiling_value = _parse_ceiling_value(value)
-    if ceiling_value is None:
-        return None
-    if ceiling_value <= 2000:
-        return "red"
-    if ceiling_value <= 3000:
-        return "yellow"
-    return None
-
-
-def _should_highlight_weather(value) -> bool:
-    if value in (None, ""):
-        return False
-    if not isinstance(value, str):
-        value = str(value)
-    return "TS" in value.upper()
-
-
-def _determine_highlight_level(label: str, value: Any) -> Optional[str]:
-    label_lower = label.lower()
-    highlight_level: Optional[str] = None
-    if "visibility" in label_lower:
-        highlight_level = _get_visibility_highlight(value)
-    if not highlight_level and ("ceiling" in label_lower or "cloud" in label_lower):
-        highlight_level = _get_ceiling_highlight(value)
-    if not highlight_level and "weather" in label_lower and _should_highlight_weather(value):
-        highlight_level = "red"
-    return highlight_level
-
-
-def _format_clouds_value(value: Any) -> str:
-    if value in (None, ""):
-        return ""
-
-    text = str(value)
-    parts: List[str] = []
-    last_index = 0
-    for match in _CEILING_CODE_REGEX.finditer(text):
-        start, end = match.span()
-        if start > last_index:
-            parts.append(html.escape(text[last_index:start]))
-        match_text = text[start:end]
-        highlight_level = _get_ceiling_highlight(match_text)
-        escaped_match = html.escape(match_text)
-        if highlight_level:
-            parts.append(_wrap_highlight_html(escaped_match, highlight_level))
-        else:
-            parts.append(escaped_match)
-        last_index = end
-
-    if last_index < len(text):
-        parts.append(html.escape(text[last_index:]))
-
-    if parts:
-        return "".join(parts)
-
-    return html.escape(text)
-
-
-def _wrap_highlight_html(text: str, level: Optional[str]) -> str:
-    if not level:
-        return text
-    color_map = {
-        "red": "#c41230",
-        "yellow": "#b8860b",
-    }
-    color = color_map.get(level, color_map["red"])
-    css_classes = ["taf-highlight"]
-    if level in ("red", "yellow"):
-        css_classes.append(f"taf-highlight--{level}")
-    return f"<span class='{' '.join(css_classes)}' style='color:{color};'>{text}</span>"
 
 def _default_date_range(now: Optional[datetime] = None) -> Tuple[date, date]:
     now_local = (now or datetime.now(tz=MOUNTAIN_TZ)).astimezone(MOUNTAIN_TZ)
@@ -448,6 +251,20 @@ def _format_utc(dt: Optional[datetime]) -> str:
     if dt is None:
         return "—"
     return dt.astimezone(timezone.utc).strftime("%H:%MZ")
+
+
+def _format_duration_short(delta: timedelta) -> str:
+    total_minutes = int(max(delta.total_seconds(), 0) // 60)
+    days, remainder_minutes = divmod(total_minutes, 60 * 24)
+    hours, minutes = divmod(remainder_minutes, 60)
+    parts: List[str] = []
+    if days:
+        parts.append(f"{days}d")
+    if hours:
+        parts.append(f"{hours}h")
+    if minutes or not parts:
+        parts.append(f"{minutes}m")
+    return " ".join(parts)
 
 
 def _coerce_code(value: Any) -> Optional[str]:
@@ -578,9 +395,46 @@ def _match_period(
     return sorted_periods[0]
 
 
+def _parse_wind_direction(direction_text: Optional[str]) -> Optional[int]:
+    if direction_text in (None, ""):
+        return None
+    try:
+        cleaned = str(direction_text).strip()
+    except Exception:
+        return None
+    if not cleaned.isdigit():
+        return None
+    try:
+        value = int(cleaned)
+    except ValueError:
+        return None
+    if 0 <= value <= 360:
+        return value
+    return None
+
+
+def _is_tailwind_direction(
+    airport_code: Optional[str], wind_dir_text: Optional[str]
+) -> bool:
+    if not airport_code:
+        return False
+    airport = str(airport_code).strip().upper()
+    if not airport or airport not in TAILWIND_DIRECTION_RANGES:
+        return False
+    wind_dir = _parse_wind_direction(wind_dir_text)
+    if wind_dir is None:
+        return False
+    start, end = TAILWIND_DIRECTION_RANGES[airport]
+    if start <= end:
+        return start <= wind_dir <= end
+    return wind_dir >= start or wind_dir <= end
+
+
 def _summarise_period(
-    period: Dict[str, Any], arrival_dt: Optional[datetime]
-) -> List[Tuple[str, str]]:
+    period: Dict[str, Any],
+    arrival_dt: Optional[datetime],
+    airport_code: Optional[str],
+) -> List[Dict[str, Any]]:
     details_map = {label: value for label, value in period.get("details", [])}
 
     def _coerce(value: Any) -> Optional[str]:
@@ -588,7 +442,7 @@ def _summarise_period(
             return None
         return str(value)
 
-    summary: List[Tuple[str, str]] = []
+    summary: List[Dict[str, Any]] = []
 
     # prevailing conditions
     wind_dir = _coerce(details_map.get("Wind Dir (°)"))
@@ -602,7 +456,13 @@ def _summarise_period(
     if wind_gust:
         wind_parts.append(f"G{wind_gust}")
     if wind_parts:
-        summary.append(("Wind", " ".join(wind_parts)))
+        wind_text = " ".join(wind_parts)
+        tailwind = _is_tailwind_direction(airport_code, wind_dir)
+        entry: Dict[str, Any] = {"label": "Wind", "value": wind_text}
+        if tailwind:
+            entry["value"] = f"{wind_text} — Tailwind (TAF)"
+            entry["highlight"] = "red"
+        summary.append(entry)
 
     for detail_key, label in (
         ("Visibility", "Visibility"),
@@ -611,7 +471,7 @@ def _summarise_period(
     ):
         value = _coerce(details_map.get(detail_key))
         if value:
-            summary.append((label, value))
+            summary.append({"label": label, "value": value})
 
     # --- NEW: include only relevant TEMPO / PROB windows ---
     tempo_blocks = period.get("tempo", [])
@@ -661,10 +521,23 @@ def _summarise_period(
         )
 
         prob_prefix = tempo.get("prob") or "TEMPO"
+        source_label = str(prob_prefix)
 
         # flatten tempo details similar to prevailing
         tempo_detail_map = {label: value for label, value in tempo.get("details", [])}
         tempo_bits: List[str] = []
+        tempo_wind_dir = _coerce(tempo_detail_map.get("Wind Dir (°)"))
+        tempo_wind_speed = _coerce(tempo_detail_map.get("Wind Speed (kt)"))
+        tempo_wind_gust = _coerce(tempo_detail_map.get("Wind Gust (kt)"))
+        tempo_wind_parts: List[str] = []
+        if tempo_wind_dir:
+            tempo_wind_parts.append(tempo_wind_dir)
+        if tempo_wind_speed:
+            tempo_wind_parts.append(f"{tempo_wind_speed}kt")
+        if tempo_wind_gust:
+            tempo_wind_parts.append(f"G{tempo_wind_gust}")
+        if tempo_wind_parts:
+            tempo_bits.append("Wind " + " ".join(tempo_wind_parts))
         vis_t = _coerce(tempo_detail_map.get("Visibility"))
         wx_t = _coerce(tempo_detail_map.get("Weather"))
         clouds_t = _coerce(tempo_detail_map.get("Clouds"))
@@ -675,8 +548,29 @@ def _summarise_period(
         if clouds_t:
             tempo_bits.append(clouds_t)
 
-        if tempo_bits:
-            summary.append((f"{prob_prefix} {window_txt}", "; ".join(tempo_bits)))
+        tempo_highlight = _combine_highlight_levels(
+            (
+                _get_visibility_highlight(vis_t),
+                "red" if wx_t and _should_highlight_weather(wx_t) else None,
+                _get_ceiling_highlight(clouds_t) if clouds_t else None,
+            )
+        )
+
+        tempo_tailwind = _is_tailwind_direction(airport_code, tempo_wind_dir)
+        if tempo_tailwind:
+            tempo_bits.append(f"Tailwind ({source_label})")
+
+        if tempo_bits or tempo_tailwind:
+            entry_value = "; ".join(tempo_bits) if tempo_bits else f"Tailwind ({source_label})"
+            tempo_entry: Dict[str, Any] = {
+                "label": f"{source_label} {window_txt}",
+                "value": entry_value,
+            }
+            if tempo_tailwind:
+                tempo_entry["highlight"] = "red"
+            elif tempo_highlight:
+                tempo_entry["highlight"] = tempo_highlight
+            summary.append(tempo_entry)
 
     return summary
 
@@ -699,6 +593,7 @@ def _build_taf_html(
     report: Optional[Dict[str, Any]],
     period: Optional[Dict[str, Any]],
     arrival_dt: Optional[datetime],
+    airport_code: Optional[str],
 ) -> str:
     if report is None:
         return "<div class='taf taf-missing'>No TAF segment matched the arrival window.</div>"
@@ -750,7 +645,7 @@ def _build_taf_html(
             f"{html.escape(end_local_text)} ({html.escape(diff_text)} before arrival"
             f" at {html.escape(arrival_local_text)}).</div>"
         )
-    summary_items = _summarise_period(period, arrival_dt)
+    summary_items = _summarise_period(period, arrival_dt, airport_code)
 
     lines = [f"<div><strong>Forecast window:</strong> {html.escape(window_text)}</div>"]
     if warning_html:
@@ -758,15 +653,21 @@ def _build_taf_html(
     details_html = ""
     if summary_items:
         detail_entries: List[str] = []
-        for label, value in summary_items:
+        for entry in summary_items:
+            label = entry.get("label")
+            value = entry.get("value")
+            if label is None:
+                continue
             label_lower = label.lower()
+            explicit_highlight = entry.get("highlight")
             if "cloud" in label_lower:
                 value_text = _format_clouds_value(value)
+                highlight_level = explicit_highlight
             else:
-                value_text = html.escape(str(value))
-                highlight_level = _determine_highlight_level(label, value)
-                if highlight_level:
-                    value_text = _wrap_highlight_html(value_text, highlight_level)
+                value_text = html.escape(str(value)) if value is not None else ""
+                highlight_level = explicit_highlight or _determine_highlight_level(label, value)
+            if highlight_level:
+                value_text = _wrap_highlight_html(value_text, highlight_level)
             detail_entries.append(
                 f"<li><strong>{html.escape(label)}:</strong> {value_text}</li>"
             )
@@ -795,7 +696,33 @@ def _build_flight_card(flight: Dict[str, Any], taf_html: str) -> str:
     dep_line = f"Dep: {_format_local(flight['dep_dt_local'])} ({_format_utc(flight['dep_dt_utc'])})"
     arr_line = f"Arr: {_format_local(flight['arr_dt_local'])} ({_format_utc(flight['arr_dt_utc'])})"
     card_classes = ["flight-card"]
-    if flight.get("is_today"):
+    arrival_utc = _ensure_utc(flight.get("arr_dt_utc"))
+    arrival_state: Optional[str] = None
+    past_flag_html = ""
+    if arrival_utc is not None:
+        now_utc = datetime.now(timezone.utc)
+        diff = now_utc - arrival_utc
+        if diff >= timedelta(hours=2):
+            arrival_state = "past"
+            elapsed_text = _format_duration_short(diff)
+            past_flag_html = (
+                "<div class='past-flag'>"
+                f"Arrived {html.escape(elapsed_text)} ago"
+                "</div>"
+            )
+        elif diff >= timedelta(minutes=1):
+            arrival_state = "elapsed"
+            elapsed_text = _format_duration_short(diff)
+            past_flag_html = (
+                "<div class='arrival-elapsed-flag'>"
+                f"Scheduled arrival time elapsed {html.escape(elapsed_text)} ago"
+                "</div>"
+            )
+    if arrival_state == "past":
+        card_classes.append("flight-card--past")
+    elif arrival_state == "elapsed":
+        card_classes.append("flight-card--arrival-elapsed")
+    elif flight.get("is_today"):
         card_classes.append("flight-card--today")
     else:
         card_classes.append("flight-card--future")
@@ -817,6 +744,7 @@ def _build_flight_card(flight: Dict[str, Any], taf_html: str) -> str:
         f"<div class='{' '.join(card_classes)}'>"
         f"<h4>{html.escape(route)}</h4>"
         f"{badge_html}"
+        f"{past_flag_html}"
         f"<div class='times'>{html.escape(dep_line)}<br>{html.escape(arr_line)}</div>"
         f"{taf_html}"
         "</div>"
@@ -974,6 +902,7 @@ for tail in sorted(flights_by_tail.keys(), key=_tail_order_key):
             flight.get("taf_report"),
             flight.get("taf_period"),
             flight.get("arr_dt_utc"),
+            flight.get("arrival_airport"),
         )
         cards.append(_build_flight_card(flight, taf_html))
     st.markdown(f"<div class='flight-row'>{''.join(cards)}</div>", unsafe_allow_html=True)

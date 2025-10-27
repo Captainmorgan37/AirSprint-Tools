@@ -8,6 +8,7 @@ import hashlib
 import json
 from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Tuple, Literal
 
+import pandas as pd
 import requests
 from zoneinfo_compat import ZoneInfo
 
@@ -170,6 +171,13 @@ def _build_postflight_endpoint(base_url: str, flight_id: Any) -> str:
     return f"{base}/{flight_id}/postflight"
 
 
+def _build_preflight_endpoint(base_url: str, flight_id: Any) -> str:
+    base = base_url.rstrip("/")
+    if base.lower().endswith("/flights"):
+        base = base[: -len("/flights")]
+    return f"{base}/{flight_id}/preflight"
+
+
 def _build_notification_endpoint(base_url: str, flight_id: Any) -> str:
     base = base_url.rstrip("/")
     if base.lower().endswith("/flights"):
@@ -293,6 +301,254 @@ def fetch_postflight(
                 http.close()
             except AttributeError:
                 pass
+
+
+def fetch_preflight(
+    config: Fl3xxApiConfig,
+    flight_id: Any,
+    *,
+    session: Optional[requests.Session] = None,
+) -> Any:
+    """Return the preflight payload for a specific flight."""
+
+    http = session or requests.Session()
+    close_session = session is None
+    try:
+        response = http.get(
+            _build_preflight_endpoint(config.base_url, flight_id),
+            headers=config.build_headers(),
+            timeout=config.timeout,
+            verify=config.verify_ssl,
+        )
+        response.raise_for_status()
+        return response.json()
+    finally:
+        if close_session:
+            try:
+                http.close()
+            except AttributeError:
+                pass
+
+
+@dataclass(frozen=True)
+class PreflightCrewCheckin:
+    """Normalised check-in information for a crew member."""
+
+    user_id: Optional[str] = None
+    pilot_role: Optional[str] = None
+    checkin: Optional[int] = None
+    checkin_actual: Optional[int] = None
+    checkin_default: Optional[int] = None
+    extra_checkins: Tuple[int, ...] = ()
+
+
+@dataclass(frozen=True)
+class PreflightChecklistStatus:
+    """Normalised crew preflight checklist readiness indicators."""
+
+    crew_briefing: Optional[str] = None
+    crew_assign: Optional[str] = None
+    crew_checkins: Tuple[PreflightCrewCheckin, ...] = ()
+
+    def _normalise_flag(self, value: Optional[str]) -> Optional[bool]:
+        if value is None:
+            return None
+        normalised = value.strip().upper()
+        if not normalised:
+            return None
+        return normalised == "OK"
+
+    @property
+    def crew_briefing_ok(self) -> Optional[bool]:
+        return self._normalise_flag(self.crew_briefing)
+
+    @property
+    def crew_assign_ok(self) -> Optional[bool]:
+        return self._normalise_flag(self.crew_assign)
+
+    @property
+    def all_ok(self) -> Optional[bool]:
+        flags = (self.crew_briefing_ok, self.crew_assign_ok)
+        if any(flag is False for flag in flags):
+            return False
+        if all(flag is True for flag in flags):
+            return True
+        if any(flag is None for flag in flags):
+            return None
+        return None
+
+    @property
+    def has_data(self) -> bool:
+        if any(value is not None for value in (self.crew_briefing, self.crew_assign)):
+            return True
+        return any(checkin.checkin is not None for checkin in self.crew_checkins)
+
+
+def _extract_preflight_status_value(value: Any) -> Optional[str]:
+    if isinstance(value, str):
+        cleaned = value.strip()
+        return cleaned or None
+    if value is None:
+        return None
+    cleaned = str(value).strip()
+    return cleaned or None
+
+
+def _normalise_optional_epoch(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        try:
+            numeric = float(cleaned)
+        except ValueError:
+            return None
+        return int(numeric)
+    return None
+
+
+def _normalise_datetime_candidate(value: Any) -> Optional[int]:
+    """Return an epoch value for strings that encode datetimes."""
+
+    epoch = _normalise_optional_epoch(value)
+    if epoch is not None:
+        return epoch
+
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+
+        try:
+            parsed = datetime.fromisoformat(cleaned.replace("Z", "+00:00"))
+        except ValueError:
+            try:
+                parsed = pd.to_datetime(cleaned, utc=True).to_pydatetime()
+            except Exception:
+                return None
+
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return int(parsed.timestamp())
+
+    return None
+
+
+def _parse_preflight_checkin(entry: Mapping[str, Any]) -> PreflightCrewCheckin:
+    user_id = entry.get("userId")
+    user_id_str: Optional[str]
+    if user_id is None:
+        user_id_str = None
+    elif isinstance(user_id, str):
+        user_id_str = user_id.strip() or None
+    else:
+        user_id_str = str(user_id)
+
+    pilot_role_value = entry.get("pilotRole")
+    pilot_role: Optional[str]
+    if isinstance(pilot_role_value, str):
+        pilot_role = pilot_role_value.strip() or None
+    elif pilot_role_value is None:
+        pilot_role = None
+    else:
+        pilot_role = str(pilot_role_value)
+
+    checkin = _normalise_optional_epoch(entry.get("checkin"))
+    checkin_actual = _normalise_optional_epoch(entry.get("checkinActual"))
+    checkin_default = _normalise_optional_epoch(entry.get("checkinDefault"))
+
+    extra_epochs: List[int] = []
+    for key, value in entry.items():
+        if not isinstance(key, str):
+            continue
+        normalised_key = key.strip().lower()
+        if normalised_key in {"checkin", "checkinactual", "checkindefault"}:
+            continue
+        if "checkin" in normalised_key or (
+            "report" in normalised_key
+            and any(token in normalised_key for token in ("time", "utc", "local"))
+        ):
+            candidate = _normalise_datetime_candidate(value)
+            if candidate is not None:
+                extra_epochs.append(candidate)
+
+    unique_extra = tuple(sorted(set(extra_epochs)))
+
+    return PreflightCrewCheckin(
+        user_id=user_id_str,
+        pilot_role=pilot_role,
+        checkin=checkin,
+        checkin_actual=checkin_actual,
+        checkin_default=checkin_default,
+        extra_checkins=unique_extra,
+    )
+
+
+def parse_preflight_payload(preflight_payload: Any) -> PreflightChecklistStatus:
+    """Return crew readiness flags and check-in data from a preflight payload."""
+
+    crew_briefing: Optional[str] = None
+    crew_assign: Optional[str] = None
+    dtls2_list: List[Mapping[str, Any]] = []
+
+    if isinstance(preflight_payload, Mapping):
+        # Newer AirSprint payloads expose crew status blocks at the root.
+        maybe_brief = preflight_payload.get("crewBrief")
+        if isinstance(maybe_brief, Mapping):
+            crew_briefing = _extract_preflight_status_value(maybe_brief.get("status"))
+        else:
+            crew_briefing = _extract_preflight_status_value(maybe_brief)
+
+        maybe_assign = preflight_payload.get("crewAssign")
+        if isinstance(maybe_assign, Mapping):
+            crew_assign = _extract_preflight_status_value(maybe_assign.get("status"))
+        else:
+            crew_assign = _extract_preflight_status_value(maybe_assign)
+
+        duty_time_lim = preflight_payload.get("dutyTimeLim")
+        if isinstance(duty_time_lim, Mapping):
+            dtls2 = duty_time_lim.get("dtls2")
+            if isinstance(dtls2, list):
+                dtls2_list = [entry for entry in dtls2 if isinstance(entry, Mapping)]
+
+        # Fall back to the original structure that surfaced crew info under "crw".
+        if crew_briefing is None or crew_assign is None:
+            maybe_crew = preflight_payload.get("crw")
+            if isinstance(maybe_crew, Mapping):
+                if crew_briefing is None:
+                    crew_briefing = _extract_preflight_status_value(
+                        maybe_crew.get("crewBriefing")
+                    )
+                if crew_assign is None:
+                    crew_assign = _extract_preflight_status_value(maybe_crew.get("crewAssign"))
+
+        # Original payloads also surfaced dtls2 either at the root or under "time".
+        if not dtls2_list:
+            maybe_dtls2 = preflight_payload.get("dtls2")
+            if isinstance(maybe_dtls2, list):
+                dtls2_list = [entry for entry in maybe_dtls2 if isinstance(entry, Mapping)]
+            else:
+                time_block = preflight_payload.get("time")
+                if isinstance(time_block, Mapping):
+                    nested_dtls2 = time_block.get("dtls2")
+                    if isinstance(nested_dtls2, list):
+                        dtls2_list = [
+                            entry for entry in nested_dtls2 if isinstance(entry, Mapping)
+                        ]
+
+    crew_checkins = tuple(_parse_preflight_checkin(entry) for entry in dtls2_list)
+
+    status = PreflightChecklistStatus(
+        crew_briefing=crew_briefing,
+        crew_assign=crew_assign,
+        crew_checkins=crew_checkins,
+    )
+
+    return status
 
 
 @dataclass
@@ -769,6 +1025,7 @@ __all__ = [
     "fetch_flights",
     "fetch_flight_crew",
     "fetch_postflight",
+    "fetch_preflight",
     "fetch_flight_services",
     "fetch_flight_planning_note",
     "fetch_flight_migration",
@@ -776,5 +1033,8 @@ __all__ = [
     "enrich_flights_with_crew",
     "DutySnapshot",
     "DutySnapshotPilot",
+    "PreflightCrewCheckin",
+    "PreflightChecklistStatus",
     "parse_postflight_payload",
+    "parse_preflight_payload",
 ]
