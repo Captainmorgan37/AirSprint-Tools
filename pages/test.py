@@ -1,38 +1,72 @@
 
-import streamlit as st
+from __future__ import annotations
+
+from collections.abc import Mapping
 from datetime import datetime, timedelta, date
+from typing import Any, Optional
+
+import streamlit as st
 from zoneinfo_compat import ZoneInfo
 
+from duty_clearance import _get_report_time_local
 from fl3xx_api import (
     Fl3xxApiConfig,
     fetch_preflight,
     parse_preflight_payload,
 )
 from flight_leg_utils import (
+    FlightDataError,
+    build_fl3xx_api_config,
     get_todays_sorted_legs_by_tail,
 )
-from duty_clearance import (
-    _get_report_time_local,
-)
+from Home import configure_page, password_gate, render_sidebar
 
-# --- Page setup ---
-st.set_page_config(page_title="DEBUG PREFLIGHT / CHECKINS", layout="wide")
-st.title("DEBUG: Preflight / Checkins / Legs by Tail")
 
-# --- Build config from secrets the same way your main page does ---
-def _fetch_secret(key: str, *, required: bool, default: Any = _MISSING) -> Any:
-    """Fetch a secret, retrying briefly if the secrets store isn't ready yet."""
+def _load_fl3xx_settings() -> Optional[dict[str, Any]]:
+    """Return FL3XX API credentials from Streamlit secrets when available."""
 
     try:
-        if key in st.secrets:
-            value = st.secrets[key]
-            st.session_state.pop(_secret_retry_key(key), None)
-            return value
+        secrets = st.secrets  # type: ignore[attr-defined]
     except Exception:
-        # When the Streamlit runtime is still initialising secrets, accessing
-        # ``st.secrets`` can raise or behave like an empty mapping. Treat this
-        # as "not yet available" and retry.
-        pass
+        return None
+
+    try:
+        section = secrets["fl3xx_api"]
+    except Exception:
+        return None
+
+    if isinstance(section, Mapping):
+        return dict(section)
+
+    if isinstance(section, dict):  # pragma: no cover - defensive fallback
+        return dict(section)
+
+    items_getter = getattr(section, "items", None)
+    if callable(items_getter):  # pragma: no cover - defensive fallback
+        return dict(items_getter())
+
+    return None
+
+
+# --- Page setup ---
+configure_page(page_title="DEBUG PREFLIGHT / CHECKINS")
+password_gate()
+render_sidebar()
+st.title("DEBUG: Preflight / Checkins / Legs by Tail")
+
+fl3xx_settings = _load_fl3xx_settings()
+if not fl3xx_settings:
+    st.error(
+        "FL3XX API credentials are missing. Add them to `.streamlit/secrets.toml` under the "
+        "`fl3xx_api` section and reload the app."
+    )
+    st.stop()
+
+try:
+    config: Fl3xxApiConfig = build_fl3xx_api_config(fl3xx_settings)
+except FlightDataError as exc:
+    st.error(str(exc))
+    st.stop()
 
 # --- Pick a target date (default = tomorrow in America/Edmonton) ---
 MOUNTAIN_TZ = ZoneInfo("America/Edmonton")
