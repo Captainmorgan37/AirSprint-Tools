@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import html
 import re
-from typing import Any, List, Optional
+from typing import Any, Iterable, List, Optional
 
 
 _CEILING_CODE_REGEX = re.compile(
     r"\b(BKN|OVC|VV)\s*(\d([\s,]?\d){1,})",
     re.IGNORECASE,
 )
+
+
+_HIGHLIGHT_SEVERITY = {"yellow": 1, "red": 2}
 
 
 def _parse_fraction(value: str) -> Optional[float]:
@@ -195,6 +198,21 @@ def _determine_highlight_level(label: str, value: Any) -> Optional[str]:
     return highlight_level
 
 
+def _combine_highlight_levels(levels: Iterable[Optional[str]]) -> Optional[str]:
+    """Return the strongest highlight level from the provided candidates."""
+
+    best_level: Optional[str] = None
+    best_score = -1
+    for level in levels:
+        if not level:
+            continue
+        score = _HIGHLIGHT_SEVERITY.get(level, 0)
+        if score > best_score:
+            best_level = level
+            best_score = score
+    return best_level
+
+
 def _format_clouds_value(value: Any) -> str:
     if value in (None, ""):
         return ""
@@ -235,6 +253,7 @@ __all__ = [
     "_should_highlight_weather",
     "_wrap_highlight_html",
     "_determine_highlight_level",
+    "_combine_highlight_levels",
     "_format_clouds_value",
 ]
 
