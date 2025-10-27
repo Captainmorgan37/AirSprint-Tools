@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import json
 
 import pytest
 
@@ -8,8 +9,9 @@ from duty_clearance import (
     _epoch_to_dt_utc,
     _fmt_timeleft,
     _get_report_time_local,
+    compute_clearance_table,
 )
-from fl3xx_api import PreflightChecklistStatus, PreflightCrewCheckin
+from fl3xx_api import Fl3xxApiConfig, PreflightChecklistStatus, PreflightCrewCheckin
 from zoneinfo_compat import ZoneInfo
 
 
@@ -62,6 +64,22 @@ def test_get_report_time_local_uses_earliest_epoch():
     assert report_local == (base - timedelta(hours=1)).astimezone(tz)
 
 
+def test_get_report_time_local_uses_extra_checkins():
+    tz = ZoneInfo("America/Edmonton")
+    base = datetime(2024, 7, 4, 8, 30, tzinfo=timezone.utc)
+    epoch = int(base.timestamp())
+    status = PreflightChecklistStatus(
+        crew_checkins=(
+            PreflightCrewCheckin(
+                extra_checkins=(epoch,),
+            ),
+        )
+    )
+
+    report_local = _get_report_time_local(status, tz)
+    assert report_local == base.astimezone(tz)
+
+
 def test_compute_confirm_by_without_early_duty():
     tz = ZoneInfo("America/Edmonton")
     report_local = datetime(2024, 6, 1, 9, 0, tzinfo=tz)
@@ -95,3 +113,72 @@ def test_fmt_timeleft_positive_and_negative():
     assert future_minutes == 150
     assert past_label == "OVERDUE by 1h 15m"
     assert past_minutes == -75
+
+
+def test_compute_clearance_table_includes_checkin_debug(monkeypatch):
+    config = Fl3xxApiConfig()
+    target_date = datetime(2025, 10, 28, tzinfo=timezone.utc).date()
+
+    legs_by_tail = {
+        "C-GABC": [
+            {
+                "flightId": 102938,
+                "dep_dt_utc": datetime(2025, 10, 28, 15, 0, tzinfo=timezone.utc),
+                "dep_tz": "America/Edmonton",
+            }
+        ]
+    }
+
+    monkeypatch.setattr(
+        "duty_clearance.get_todays_sorted_legs_by_tail",
+        lambda _config, _target_date: legs_by_tail,
+    )
+
+    preflight_payload = {
+        "dtls2": [
+            {
+                "userId": "321",
+                "pilotRole": "CMD",
+                "checkin": None,
+                "checkinActual": None,
+                "checkinDefault": None,
+            }
+        ]
+    }
+
+    monkeypatch.setattr(
+        "duty_clearance.fetch_preflight",
+        lambda _config, _flight_id: preflight_payload,
+    )
+
+    monkeypatch.setattr(
+        "duty_clearance.fetch_flight_crew",
+        lambda _config, _flight_id: [
+            {"role": "CMD", "firstName": "Test", "lastName": "Pilot"},
+            {"role": "FO", "firstName": "Sample", "lastName": "Copilot"},
+        ],
+    )
+
+    display_df, raw_df, troubleshooting_df = compute_clearance_table(
+        config,
+        target_date,
+        now=datetime(2025, 10, 27, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert display_df.empty
+    assert raw_df.empty
+    assert not troubleshooting_df.empty
+
+    debug_value = troubleshooting_df.loc[0, "Preflight check-ins"]
+    parsed_debug = json.loads(debug_value)
+
+    assert parsed_debug == [
+        {
+            "checkin": None,
+            "checkinActual": None,
+            "checkinDefault": None,
+            "extraCheckins": [],
+            "pilotRole": "CMD",
+            "userId": "321",
+        }
+    ]
