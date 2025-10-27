@@ -21,13 +21,22 @@ from zoneinfo_compat import ZoneInfo
 
 
 def _epoch_to_dt_utc(epoch_val: Optional[int]) -> Optional[datetime]:
-    """Convert a FL3XX epoch value (seconds or milliseconds) to UTC."""
+    """Convert a FL3XX epoch value (seconds, ms, µs, or ns) to UTC."""
 
     if epoch_val is None:
         return None
+
     numeric = float(epoch_val)
-    if numeric > 10**12:  # milliseconds
+
+    # FL3XX sometimes returns timestamps with millisecond, microsecond, or
+    # nanosecond precision encoded as integers. Keep dividing by 1000 until the
+    # value falls into the expected "seconds since epoch" range. Guard the loop
+    # to avoid infinite iteration on corrupted values.
+    for _ in range(6):
+        if abs(numeric) < 10**12:
+            break
         numeric /= 1000.0
+
     return datetime.fromtimestamp(numeric, tz=timezone.utc)
 
 
@@ -173,22 +182,65 @@ def compute_clearance_table(
     target_date: date,
     *,
     now: Optional[datetime] = None,
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
+) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Build a table of crew duty clearance status for the provided duty date."""
 
     legs_by_tail = get_todays_sorted_legs_by_tail(config, target_date)
     now_utc = now.astimezone(timezone.utc) if isinstance(now, datetime) else datetime.now(timezone.utc)
 
     rows: List[Dict[str, Any]] = []
+    troubleshooting: List[Dict[str, Any]] = []
+
+    def record_issue(issue: str, *, tail: Optional[str] = None, flight_id: Optional[Any] = None, detail: Optional[str] = None) -> None:
+        entry: Dict[str, Any] = {
+            "Tail": tail or "",
+            "Flight ID": flight_id if flight_id is not None else "",
+            "Issue": issue,
+        }
+        if detail:
+            entry["Details"] = detail
+        troubleshooting.append(entry)
+
+    if not legs_by_tail:
+        record_issue(
+            "No duties returned for the selected date.",
+            detail="Verify the FL3XX schedule or adjust the duty date.",
+        )
 
     for tail, legs in legs_by_tail.items():
         last_signature: Optional[Tuple[Tuple[str, str], ...]] = None
 
         for leg_info in legs:
-            flight_id = leg_info["flightId"]
+            flight_id = leg_info.get("flightId")
+            if flight_id is None:
+                record_issue(
+                    "Missing flight identifier in FL3XX response.",
+                    tail=tail,
+                    detail=str({k: leg_info.get(k) for k in ("tail", "flightNumber") if k in leg_info}),
+                )
+                continue
 
-            preflight_payload = fetch_preflight(config, flight_id)
-            preflight_status = parse_preflight_payload(preflight_payload)
+            try:
+                preflight_payload = fetch_preflight(config, flight_id)
+            except Exception as exc:  # pragma: no cover - network failures
+                record_issue(
+                    "Failed to load preflight checklist.",
+                    tail=tail,
+                    flight_id=flight_id,
+                    detail=str(exc),
+                )
+                continue
+
+            try:
+                preflight_status = parse_preflight_payload(preflight_payload)
+            except Exception as exc:
+                record_issue(
+                    "Unable to parse preflight checklist payload.",
+                    tail=tail,
+                    flight_id=flight_id,
+                    detail=str(exc),
+                )
+                continue
 
             signature = _build_preflight_signature(preflight_status)
             if signature is None:
@@ -198,18 +250,39 @@ def compute_clearance_table(
                 continue
             last_signature = signature
 
-            crew_payload = fetch_flight_crew(config, flight_id)
+            try:
+                crew_payload = fetch_flight_crew(config, flight_id)
+            except Exception as exc:  # pragma: no cover - network failures
+                record_issue(
+                    "Failed to load crew roster from FL3XX.",
+                    tail=tail,
+                    flight_id=flight_id,
+                    detail=str(exc),
+                )
+                continue
+
             crew_label = _format_crew_label(crew_payload)
 
             duty_tz = _extract_departure_timezone(leg_info)
-            dep_dt_utc = leg_info["dep_dt_utc"]
+            dep_dt_utc = leg_info.get("dep_dt_utc")
             if not isinstance(dep_dt_utc, datetime):
+                record_issue(
+                    "Missing departure time for first leg.",
+                    tail=tail,
+                    flight_id=flight_id,
+                )
                 continue
+
             first_leg_dep_local = dep_dt_utc.astimezone(duty_tz)
             has_early_flight = 2 <= first_leg_dep_local.hour < 8
 
             report_local = _get_report_time_local(preflight_status, duty_tz)
             if report_local is None:
+                record_issue(
+                    "Unable to determine crew report time from checklist.",
+                    tail=tail,
+                    flight_id=flight_id,
+                )
                 continue
 
             confirm_by_local = _compute_confirm_by(
@@ -246,23 +319,24 @@ def compute_clearance_table(
                 }
             )
 
-    if not rows:
-        empty = pd.DataFrame()
-        return empty, empty
-
     raw_df = pd.DataFrame(rows)
-    raw_df = raw_df.sort_values(by="_minutes_left")
+    if not rows:
+        display_df = pd.DataFrame()
+    else:
+        raw_df = raw_df.sort_values(by="_minutes_left")
 
-    display_df = raw_df[[
-        "Tail",
-        "Crew",
-        "Report (local)",
-        "First ETD (local)",
-        "Status",
-        "Time left",
-    ]].reset_index(drop=True)
+        display_df = raw_df[[
+            "Tail",
+            "Crew",
+            "Report (local)",
+            "First ETD (local)",
+            "Status",
+            "Time left",
+        ]].reset_index(drop=True)
 
-    return display_df, raw_df
+    troubleshooting_df = pd.DataFrame(troubleshooting)
+
+    return display_df, raw_df, troubleshooting_df
 
 
 __all__ = [
