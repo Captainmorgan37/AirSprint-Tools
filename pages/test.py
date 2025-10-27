@@ -1,13 +1,4 @@
 
-# Use the same config you already build in Crew Duty Clearance Monitor.py
-config = Fl3xxApiConfig(
-[fl3xx_api]
-# base_url is optional—the client will default to the FL3XX flights endpoint.
-base_url = "https://app.fl3xx.us/api/external/flight/flights"
-api_token = "ts__ddFWrYpN-N3Hvt9Rp08LJ5nk9ODl"
-auth_header_name = "X-Auth-Token"
-
-
 import streamlit as st
 from datetime import datetime, timedelta, date
 from zoneinfo_compat import ZoneInfo
