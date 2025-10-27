@@ -21,13 +21,22 @@ from zoneinfo_compat import ZoneInfo
 
 
 def _epoch_to_dt_utc(epoch_val: Optional[int]) -> Optional[datetime]:
-    """Convert a FL3XX epoch value (seconds or milliseconds) to UTC."""
+    """Convert a FL3XX epoch value (seconds, ms, µs, or ns) to UTC."""
 
     if epoch_val is None:
         return None
+
     numeric = float(epoch_val)
-    if numeric > 10**12:  # milliseconds
+
+    # FL3XX sometimes returns timestamps with millisecond, microsecond, or
+    # nanosecond precision encoded as integers. Keep dividing by 1000 until the
+    # value falls into the expected "seconds since epoch" range. Guard the loop
+    # to avoid infinite iteration on corrupted values.
+    for _ in range(6):
+        if abs(numeric) < 10**12:
+            break
         numeric /= 1000.0
+
     return datetime.fromtimestamp(numeric, tz=timezone.utc)
 
 

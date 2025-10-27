@@ -18,6 +18,11 @@ from zoneinfo_compat import ZoneInfo
     [
         (1_700_000_000, datetime.fromtimestamp(1_700_000_000, tz=timezone.utc)),
         (1_700_000_000_000, datetime.fromtimestamp(1_700_000_000_000 / 1000, tz=timezone.utc)),
+        (1_700_000_000_000_000, datetime.fromtimestamp(1_700_000_000_000_000 / 1_000_000, tz=timezone.utc)),
+        (
+            1_700_000_000_000_000_000,
+            datetime.fromtimestamp(1_700_000_000_000_000_000 / 1_000_000_000, tz=timezone.utc),
+        ),
         (None, None),
     ],
 )
