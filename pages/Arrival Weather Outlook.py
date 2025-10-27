@@ -122,9 +122,15 @@ st.markdown(
                   background:rgba(17, 24, 39, 0.85); transition:background 0.2s ease, border-color 0.2s ease;}
     .flight-card--today {background:rgba(37, 99, 235, 0.22); border-color:rgba(147, 197, 253, 0.65);}
     .flight-card--future {background:rgba(15, 23, 42, 0.88);}
+    .flight-card--past {background:rgba(127, 29, 29, 0.75); border-color:rgba(248, 113, 113, 0.8);
+                        box-shadow:0 0 0 2px rgba(248, 113, 113, 0.55), 0 12px 24px rgba(127, 29, 29, 0.4);}
     .flight-card h4 {margin:0 0 0.35rem 0; font-size:1.05rem; color:#f8fafc;}
     .flight-card .times {font-family:"Source Code Pro", Menlo, Consolas, monospace; font-size:0.9rem;
                          margin-bottom:0.45rem; line-height:1.35; color:#cbd5f5;}
+    .flight-card .past-flag {display:inline-block; padding:0.25rem 0.55rem; margin-bottom:0.5rem;
+                             border-radius:999px; font-size:0.75rem; font-weight:700; letter-spacing:0.04em;
+                             background:rgba(248, 113, 113, 0.25); color:#fee2e2; border:1px solid rgba(248, 113, 113, 0.55);
+                             text-transform:uppercase;}
     .flight-card .badge-strip {display:flex; flex-wrap:wrap; gap:0.35rem; margin-bottom:0.35rem;}
     .flight-card .badge {background:rgba(59,130,246,0.18); color:#93c5fd; padding:0.1rem 0.45rem;
                          border-radius:999px; font-size:0.75rem; letter-spacing:0.02em; text-transform:uppercase;}
@@ -448,6 +454,20 @@ def _format_utc(dt: Optional[datetime]) -> str:
     if dt is None:
         return "—"
     return dt.astimezone(timezone.utc).strftime("%H:%MZ")
+
+
+def _format_duration_short(delta: timedelta) -> str:
+    total_minutes = int(max(delta.total_seconds(), 0) // 60)
+    days, remainder_minutes = divmod(total_minutes, 60 * 24)
+    hours, minutes = divmod(remainder_minutes, 60)
+    parts: List[str] = []
+    if days:
+        parts.append(f"{days}d")
+    if hours:
+        parts.append(f"{hours}h")
+    if minutes or not parts:
+        parts.append(f"{minutes}m")
+    return " ".join(parts)
 
 
 def _coerce_code(value: Any) -> Optional[str]:
@@ -795,7 +815,23 @@ def _build_flight_card(flight: Dict[str, Any], taf_html: str) -> str:
     dep_line = f"Dep: {_format_local(flight['dep_dt_local'])} ({_format_utc(flight['dep_dt_utc'])})"
     arr_line = f"Arr: {_format_local(flight['arr_dt_local'])} ({_format_utc(flight['arr_dt_utc'])})"
     card_classes = ["flight-card"]
-    if flight.get("is_today"):
+    arrival_utc = _ensure_utc(flight.get("arr_dt_utc"))
+    is_past_arrival = False
+    past_flag_html = ""
+    if arrival_utc is not None:
+        now_utc = datetime.now(timezone.utc)
+        diff = now_utc - arrival_utc
+        if diff >= timedelta(hours=2):
+            is_past_arrival = True
+            elapsed_text = _format_duration_short(diff)
+            past_flag_html = (
+                "<div class='past-flag'>"
+                f"Arrived {html.escape(elapsed_text)} ago"
+                "</div>"
+            )
+    if is_past_arrival:
+        card_classes.append("flight-card--past")
+    elif flight.get("is_today"):
         card_classes.append("flight-card--today")
     else:
         card_classes.append("flight-card--future")
@@ -817,6 +853,7 @@ def _build_flight_card(flight: Dict[str, Any], taf_html: str) -> str:
         f"<div class='{' '.join(card_classes)}'>"
         f"<h4>{html.escape(route)}</h4>"
         f"{badge_html}"
+        f"{past_flag_html}"
         f"<div class='times'>{html.escape(dep_line)}<br>{html.escape(arr_line)}</div>"
         f"{taf_html}"
         "</div>"
