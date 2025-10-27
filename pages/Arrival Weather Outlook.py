@@ -102,6 +102,12 @@ TAIL_DISPLAY_ORDER: Sequence[str] = (
 TAIL_INDEX = {tail: idx for idx, tail in enumerate(TAIL_DISPLAY_ORDER)}
 FAR_FUTURE = datetime.max.replace(tzinfo=timezone.utc)
 
+TAILWIND_DIRECTION_RANGES: Dict[str, Tuple[int, int]] = {
+    "CYRV": (30, 210),
+    "KSUN": (40, 220),
+    "KASE": (240, 60),
+}
+
 ARRIVAL_TIME_KEYS: Sequence[str] = (
     "arrival_time",
     "arrival_time_utc",
@@ -382,9 +388,46 @@ def _match_period(
     return sorted_periods[0]
 
 
+def _parse_wind_direction(direction_text: Optional[str]) -> Optional[int]:
+    if direction_text in (None, ""):
+        return None
+    try:
+        cleaned = str(direction_text).strip()
+    except Exception:
+        return None
+    if not cleaned.isdigit():
+        return None
+    try:
+        value = int(cleaned)
+    except ValueError:
+        return None
+    if 0 <= value <= 360:
+        return value
+    return None
+
+
+def _is_tailwind_direction(
+    airport_code: Optional[str], wind_dir_text: Optional[str]
+) -> bool:
+    if not airport_code:
+        return False
+    airport = str(airport_code).strip().upper()
+    if not airport or airport not in TAILWIND_DIRECTION_RANGES:
+        return False
+    wind_dir = _parse_wind_direction(wind_dir_text)
+    if wind_dir is None:
+        return False
+    start, end = TAILWIND_DIRECTION_RANGES[airport]
+    if start <= end:
+        return start <= wind_dir <= end
+    return wind_dir >= start or wind_dir <= end
+
+
 def _summarise_period(
-    period: Dict[str, Any], arrival_dt: Optional[datetime]
-) -> List[Tuple[str, str]]:
+    period: Dict[str, Any],
+    arrival_dt: Optional[datetime],
+    airport_code: Optional[str],
+) -> List[Dict[str, Any]]:
     details_map = {label: value for label, value in period.get("details", [])}
 
     def _coerce(value: Any) -> Optional[str]:
@@ -392,7 +435,7 @@ def _summarise_period(
             return None
         return str(value)
 
-    summary: List[Tuple[str, str]] = []
+    summary: List[Dict[str, Any]] = []
 
     # prevailing conditions
     wind_dir = _coerce(details_map.get("Wind Dir (°)"))
@@ -406,7 +449,13 @@ def _summarise_period(
     if wind_gust:
         wind_parts.append(f"G{wind_gust}")
     if wind_parts:
-        summary.append(("Wind", " ".join(wind_parts)))
+        wind_text = " ".join(wind_parts)
+        tailwind = _is_tailwind_direction(airport_code, wind_dir)
+        entry: Dict[str, Any] = {"label": "Wind", "value": wind_text}
+        if tailwind:
+            entry["value"] = f"{wind_text} — Tailwind (TAF)"
+            entry["highlight"] = "red"
+        summary.append(entry)
 
     for detail_key, label in (
         ("Visibility", "Visibility"),
@@ -415,7 +464,7 @@ def _summarise_period(
     ):
         value = _coerce(details_map.get(detail_key))
         if value:
-            summary.append((label, value))
+            summary.append({"label": label, "value": value})
 
     # --- NEW: include only relevant TEMPO / PROB windows ---
     tempo_blocks = period.get("tempo", [])
@@ -465,10 +514,23 @@ def _summarise_period(
         )
 
         prob_prefix = tempo.get("prob") or "TEMPO"
+        source_label = str(prob_prefix)
 
         # flatten tempo details similar to prevailing
         tempo_detail_map = {label: value for label, value in tempo.get("details", [])}
         tempo_bits: List[str] = []
+        tempo_wind_dir = _coerce(tempo_detail_map.get("Wind Dir (°)"))
+        tempo_wind_speed = _coerce(tempo_detail_map.get("Wind Speed (kt)"))
+        tempo_wind_gust = _coerce(tempo_detail_map.get("Wind Gust (kt)"))
+        tempo_wind_parts: List[str] = []
+        if tempo_wind_dir:
+            tempo_wind_parts.append(tempo_wind_dir)
+        if tempo_wind_speed:
+            tempo_wind_parts.append(f"{tempo_wind_speed}kt")
+        if tempo_wind_gust:
+            tempo_wind_parts.append(f"G{tempo_wind_gust}")
+        if tempo_wind_parts:
+            tempo_bits.append("Wind " + " ".join(tempo_wind_parts))
         vis_t = _coerce(tempo_detail_map.get("Visibility"))
         wx_t = _coerce(tempo_detail_map.get("Weather"))
         clouds_t = _coerce(tempo_detail_map.get("Clouds"))
@@ -479,8 +541,19 @@ def _summarise_period(
         if clouds_t:
             tempo_bits.append(clouds_t)
 
-        if tempo_bits:
-            summary.append((f"{prob_prefix} {window_txt}", "; ".join(tempo_bits)))
+        tempo_tailwind = _is_tailwind_direction(airport_code, tempo_wind_dir)
+        if tempo_tailwind:
+            tempo_bits.append(f"Tailwind ({source_label})")
+
+        if tempo_bits or tempo_tailwind:
+            entry_value = "; ".join(tempo_bits) if tempo_bits else f"Tailwind ({source_label})"
+            tempo_entry: Dict[str, Any] = {
+                "label": f"{source_label} {window_txt}",
+                "value": entry_value,
+            }
+            if tempo_tailwind:
+                tempo_entry["highlight"] = "red"
+            summary.append(tempo_entry)
 
     return summary
 
@@ -503,6 +576,7 @@ def _build_taf_html(
     report: Optional[Dict[str, Any]],
     period: Optional[Dict[str, Any]],
     arrival_dt: Optional[datetime],
+    airport_code: Optional[str],
 ) -> str:
     if report is None:
         return "<div class='taf taf-missing'>No TAF segment matched the arrival window.</div>"
@@ -554,7 +628,7 @@ def _build_taf_html(
             f"{html.escape(end_local_text)} ({html.escape(diff_text)} before arrival"
             f" at {html.escape(arrival_local_text)}).</div>"
         )
-    summary_items = _summarise_period(period, arrival_dt)
+    summary_items = _summarise_period(period, arrival_dt, airport_code)
 
     lines = [f"<div><strong>Forecast window:</strong> {html.escape(window_text)}</div>"]
     if warning_html:
@@ -562,15 +636,21 @@ def _build_taf_html(
     details_html = ""
     if summary_items:
         detail_entries: List[str] = []
-        for label, value in summary_items:
+        for entry in summary_items:
+            label = entry.get("label")
+            value = entry.get("value")
+            if label is None:
+                continue
             label_lower = label.lower()
+            explicit_highlight = entry.get("highlight")
             if "cloud" in label_lower:
                 value_text = _format_clouds_value(value)
+                highlight_level = explicit_highlight
             else:
-                value_text = html.escape(str(value))
-                highlight_level = _determine_highlight_level(label, value)
-                if highlight_level:
-                    value_text = _wrap_highlight_html(value_text, highlight_level)
+                value_text = html.escape(str(value)) if value is not None else ""
+                highlight_level = explicit_highlight or _determine_highlight_level(label, value)
+            if highlight_level:
+                value_text = _wrap_highlight_html(value_text, highlight_level)
             detail_entries.append(
                 f"<li><strong>{html.escape(label)}:</strong> {value_text}</li>"
             )
@@ -795,6 +875,7 @@ for tail in sorted(flights_by_tail.keys(), key=_tail_order_key):
             flight.get("taf_report"),
             flight.get("taf_period"),
             flight.get("arr_dt_utc"),
+            flight.get("arrival_airport"),
         )
         cards.append(_build_flight_card(flight, taf_html))
     st.markdown(f"<div class='flight-row'>{''.join(cards)}</div>", unsafe_allow_html=True)
