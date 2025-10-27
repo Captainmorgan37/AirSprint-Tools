@@ -27,7 +27,8 @@ FAA_CLIENT_ID = require_secret("FAA_CLIENT_ID")
 FAA_CLIENT_SECRET = require_secret("FAA_CLIENT_SECRET")
 KEYWORDS = ["CLOSED", "CLSD"]  # Add any more keywords here
 HIDE_KEYWORDS = ["crane", "RUSSIAN", "CONGO", "OBST RIG", "CANCELLED", "CANCELED", 
-                 "SAFETY AREA NOT STD", "GRASS CUTTING", "OBST TOWER", "SFC MARKINGS NOT STD"]
+                 "SAFETY AREA NOT STD", "GRASS CUTTING", "OBST TOWER", "SFC MARKINGS NOT STD",
+                 "OBSC", "IRREGULAR", "NOT GROOVED", "OBST", "NOT STD", "MARKINGS", "ODP"]
 
 CATEGORY_COLORS = {
     "Runway": "#ff4d4d",
