@@ -103,10 +103,8 @@ def test_parse_postflight_payload_falls_back_to_time_commanders() -> None:
 
 def test_parse_preflight_payload_extracts_status_flags() -> None:
     payload = {
-        "crw": {
-            "crewBriefing": "OK",
-            "crewAssign": "REQ",
-        }
+        "crewBrief": {"status": "OK"},
+        "crewAssign": {"status": "REQ"},
     }
 
     status = parse_preflight_payload(payload)
@@ -131,23 +129,34 @@ def test_preflight_status_all_ok_requires_both_flags() -> None:
     assert status.has_data is True
 
 
+def test_parse_preflight_payload_falls_back_to_legacy_structure() -> None:
+    payload = {"crw": {"crewBriefing": "REQ", "crewAssign": "OK"}}
+
+    status = parse_preflight_payload(payload)
+
+    assert status.crew_briefing == "REQ"
+    assert status.crew_assign == "OK"
+
+
 def test_parse_preflight_payload_collects_checkins() -> None:
     payload = {
-        "dtls2": [
-            {
-                "userId": 395555,
-                "pilotRole": "CMD",
-                "checkin": 1791036000.000000000,
-                "checkinActual": "1791036000.000000000",
-                "checkinDefault": 1791036000.000000000,
-            },
-            {
-                "userId": "395567",
-                "pilotRole": "FO",
-                "checkin": "1791036000.0",
-            },
-            "not-a-mapping",
-        ]
+        "dutyTimeLim": {
+            "dtls2": [
+                {
+                    "userId": 395555,
+                    "pilotRole": "CMD",
+                    "checkin": 1791036000.000000000,
+                    "checkinActual": "1791036000.000000000",
+                    "checkinDefault": 1791036000.000000000,
+                },
+                {
+                    "userId": "395567",
+                    "pilotRole": "FO",
+                    "checkin": "1791036000.0",
+                },
+                "not-a-mapping",
+            ]
+        }
     }
 
     status = parse_preflight_payload(payload)
@@ -174,15 +183,17 @@ def test_parse_preflight_payload_collects_checkins() -> None:
 
 def test_parse_preflight_payload_collects_additional_datetime_fields() -> None:
     payload = {
-        "dtls2": [
-            {
-                "userId": 123,
-                "pilotRole": "CMD",
-                "crewReportTimeUtc": "2024-05-02T12:15:00Z",
-                "checkInLocal": "2024-05-02 06:15:00-06:00",
-                "checkInLocalDuplicate": "2024-05-02T12:15:00+00:00",
-            }
-        ]
+        "dutyTimeLim": {
+            "dtls2": [
+                {
+                    "userId": 123,
+                    "pilotRole": "CMD",
+                    "crewReportTimeUtc": "2024-05-02T12:15:00Z",
+                    "checkInLocal": "2024-05-02 06:15:00-06:00",
+                    "checkInLocalDuplicate": "2024-05-02T12:15:00+00:00",
+                }
+            ]
+        }
     }
 
     status = parse_preflight_payload(payload)
