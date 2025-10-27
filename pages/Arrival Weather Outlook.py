@@ -140,15 +140,21 @@ st.markdown(
                   background:rgba(17, 24, 39, 0.85); transition:background 0.2s ease, border-color 0.2s ease;}
     .flight-card--today {background:rgba(37, 99, 235, 0.22); border-color:rgba(147, 197, 253, 0.65);}
     .flight-card--future {background:rgba(15, 23, 42, 0.88);}
-    .flight-card--past {background:rgba(127, 29, 29, 0.75); border-color:rgba(248, 113, 113, 0.8);
-                        box-shadow:0 0 0 2px rgba(248, 113, 113, 0.55), 0 12px 24px rgba(127, 29, 29, 0.4);}
+    .flight-card--past {background:rgba(22, 101, 52, 0.78); border-color:rgba(34, 197, 94, 0.82);
+                        box-shadow:0 0 0 2px rgba(34, 197, 94, 0.45), 0 12px 24px rgba(22, 101, 52, 0.35);}
+    .flight-card--arrival-elapsed {background:rgba(202, 138, 4, 0.78); border-color:rgba(250, 204, 21, 0.82);
+                                   box-shadow:0 0 0 2px rgba(250, 204, 21, 0.45), 0 12px 24px rgba(161, 98, 7, 0.35);}
     .flight-card h4 {margin:0 0 0.35rem 0; font-size:1.05rem; color:#f8fafc;}
     .flight-card .times {font-family:"Source Code Pro", Menlo, Consolas, monospace; font-size:0.9rem;
                          margin-bottom:0.45rem; line-height:1.35; color:#cbd5f5;}
     .flight-card .past-flag {display:inline-block; padding:0.25rem 0.55rem; margin-bottom:0.5rem;
                              border-radius:999px; font-size:0.75rem; font-weight:700; letter-spacing:0.04em;
-                             background:rgba(248, 113, 113, 0.25); color:#fee2e2; border:1px solid rgba(248, 113, 113, 0.55);
+                             background:rgba(34, 197, 94, 0.22); color:#bbf7d0; border:1px solid rgba(34, 197, 94, 0.45);
                              text-transform:uppercase;}
+    .flight-card .arrival-elapsed-flag {display:inline-block; padding:0.25rem 0.55rem; margin-bottom:0.5rem;
+                                        border-radius:999px; font-size:0.75rem; font-weight:700; letter-spacing:0.04em;
+                                        background:rgba(250, 204, 21, 0.25); color:#fef9c3; border:1px solid rgba(250, 204, 21, 0.55);
+                                        text-transform:uppercase;}
     .flight-card .badge-strip {display:flex; flex-wrap:wrap; gap:0.35rem; margin-bottom:0.35rem;}
     .flight-card .badge {background:rgba(59,130,246,0.18); color:#93c5fd; padding:0.1rem 0.45rem;
                          border-radius:999px; font-size:0.75rem; letter-spacing:0.02em; text-transform:uppercase;}
@@ -680,21 +686,31 @@ def _build_flight_card(flight: Dict[str, Any], taf_html: str) -> str:
     arr_line = f"Arr: {_format_local(flight['arr_dt_local'])} ({_format_utc(flight['arr_dt_utc'])})"
     card_classes = ["flight-card"]
     arrival_utc = _ensure_utc(flight.get("arr_dt_utc"))
-    is_past_arrival = False
+    arrival_state: Optional[str] = None
     past_flag_html = ""
     if arrival_utc is not None:
         now_utc = datetime.now(timezone.utc)
         diff = now_utc - arrival_utc
         if diff >= timedelta(hours=2):
-            is_past_arrival = True
+            arrival_state = "past"
             elapsed_text = _format_duration_short(diff)
             past_flag_html = (
                 "<div class='past-flag'>"
                 f"Arrived {html.escape(elapsed_text)} ago"
                 "</div>"
             )
-    if is_past_arrival:
+        elif diff >= timedelta(minutes=1):
+            arrival_state = "elapsed"
+            elapsed_text = _format_duration_short(diff)
+            past_flag_html = (
+                "<div class='arrival-elapsed-flag'>"
+                f"Scheduled arrival time elapsed {html.escape(elapsed_text)} ago"
+                "</div>"
+            )
+    if arrival_state == "past":
         card_classes.append("flight-card--past")
+    elif arrival_state == "elapsed":
+        card_classes.append("flight-card--arrival-elapsed")
     elif flight.get("is_today"):
         card_classes.append("flight-card--today")
     else:
