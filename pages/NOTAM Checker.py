@@ -1811,3 +1811,6 @@ with tab2:
 
                 if not metars and not tafs:
                     st.info("No METAR or TAF information was available for this station.")
+
+taf_reports = get_taf_reports(tuple(unique_codes))
+st.write("DEBUG taf_reports:", taf_reports)
