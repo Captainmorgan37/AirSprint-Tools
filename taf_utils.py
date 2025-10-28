@@ -3,13 +3,22 @@
 from __future__ import annotations
 
 import calendar
+import csv
 import json
+import math
 import re
 
 from datetime import datetime, timezone
+from functools import lru_cache
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, MutableMapping, Sequence, Tuple
 
 import requests
+
+
+AVIATIONWEATHER_HEADERS = {
+    "User-Agent": "AirSprint-Tools/1.0 (+https://airsprint.com)"
+}
 
 
 TAF_FORECAST_FIELDS = [
@@ -649,6 +658,31 @@ def _coerce_float(value: Any) -> float | None:
         return None
 
 
+@lru_cache(maxsize=1)
+def _load_local_station_coordinates() -> Dict[str, Tuple[float, float]]:
+    coords: Dict[str, Tuple[float, float]] = {}
+
+    tz_path = Path(__file__).resolve().with_name("Airport TZ.txt")
+    try:
+        with tz_path.open("r", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            for row in reader:
+                lat = _coerce_float(row.get("lat"))
+                lon = _coerce_float(row.get("lon"))
+                if lat is None or lon is None:
+                    continue
+
+                for key in ("icao", "lid", "iata"):
+                    code = (row.get(key) or "").strip().upper()
+                    if not code:
+                        continue
+                    coords.setdefault(code, (lat, lon))
+    except OSError:
+        return {}
+
+    return coords
+
+
 def _extract_distance_nm(props: MutableMapping[str, Any]) -> float | None:
     for key in ("distanceNm", "distanceNM", "distance_nm"):
         distance = _coerce_float(props.get(key))
@@ -827,18 +861,11 @@ def _build_report_from_properties(
         },
     )
 
-
-import math
-import requests
-from typing import Tuple, Any, MutableMapping, Iterable
-
 def _lookup_station_coordinates(station: str) -> Tuple[float, float] | None:
     """
     Return (lat, lon) for a station using the new Data API.
 
-    We call /api/data/stationinfo instead of the old dataserver_current.
-    We'll accept a bunch of possible response shapes (json vs geojson-ish)
-    and try to coerce keys like lat/lon, latitude/longitude, etc.
+    Falls back to the local Airport TZ dataset when the API is unavailable.
     """
     station = (station or "").upper().strip()
     if not station:
@@ -850,42 +877,49 @@ def _lookup_station_coordinates(station: str) -> Tuple[float, float] | None:
         "format": "json",  # allowed per /api/data/stationinfo spec
     }
 
+    data: Any | None = None
     try:
-        resp = requests.get(url, params=params, timeout=10)
+        resp = requests.get(
+            url,
+            params=params,
+            headers=AVIATIONWEATHER_HEADERS,
+            timeout=10,
+        )
         resp.raise_for_status()
+        try:
+            data = resp.json()
+        except ValueError:
+            data = None
     except requests.RequestException:
-        return None
+        data = None
 
-    try:
-        data = resp.json()
-    except ValueError:
-        return None
+    if data:
+        # Reuse your generic walker that already knows how to peel apart
+        # "features", "properties", etc.
+        for props in _normalize_aviationweather_features(data):
+            if not isinstance(props, MutableMapping):
+                continue
 
-    # Reuse your generic walker that already knows how to peel apart
-    # "features", "properties", etc.
-    for props in _normalize_aviationweather_features(data):
-        if not isinstance(props, MutableMapping):
-            continue
+            lat = _coerce_float(
+                props.get("lat")
+                or props.get("latitude")
+                or props.get("stationLatitude")
+                or props.get("latitudeDeg")
+                or props.get("latitude_deg")
+            )
+            lon = _coerce_float(
+                props.get("lon")
+                or props.get("longitude")
+                or props.get("stationLongitude")
+                or props.get("longitudeDeg")
+                or props.get("longitude_deg")
+            )
 
-        lat = _coerce_float(
-            props.get("lat")
-            or props.get("latitude")
-            or props.get("stationLatitude")
-            or props.get("latitudeDeg")
-            or props.get("latitude_deg")
-        )
-        lon = _coerce_float(
-            props.get("lon")
-            or props.get("longitude")
-            or props.get("stationLongitude")
-            or props.get("longitudeDeg")
-            or props.get("longitude_deg")
-        )
+            if lat is not None and lon is not None:
+                return (lat, lon)
 
-        if lat is not None and lon is not None:
-            return (lat, lon)
-
-    return None
+    local_coords = _load_local_station_coordinates()
+    return local_coords.get(station)
 
 def _haversine_distance_nm(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """
@@ -959,7 +993,12 @@ def _fetch_nearby_taf_report(requested_station: str) -> Dict[str, Any] | None:
         }
 
         try:
-            resp = requests.get(url, params=params, timeout=10)
+            resp = requests.get(
+                url,
+                params=params,
+                headers=AVIATIONWEATHER_HEADERS,
+                timeout=10,
+            )
             resp.raise_for_status()
             try:
                 data = resp.json()
@@ -1043,7 +1082,12 @@ def get_taf_reports(icao_codes: Sequence[str]) -> Dict[str, List[Dict[str, Any]]
         return bool(body)
 
     try:
-        response = requests.get(url, params=params, timeout=10)
+        response = requests.get(
+            url,
+            params=params,
+            headers=AVIATIONWEATHER_HEADERS,
+            timeout=10,
+        )
         if response.status_code == 204 or not _has_body(response):
             data = {}
         else:
@@ -1056,7 +1100,12 @@ def get_taf_reports(icao_codes: Sequence[str]) -> Dict[str, List[Dict[str, Any]]
         status_code = getattr(exc.response, "status_code", None)
         if status_code == 400:
             fallback_params = {"ids": params["ids"], "format": "json"}
-            response = requests.get(url, params=fallback_params, timeout=10)
+            response = requests.get(
+                url,
+                params=fallback_params,
+                headers=AVIATIONWEATHER_HEADERS,
+                timeout=10,
+            )
             if response.status_code == 204 or not _has_body(response):
                 data = {}
             else:
