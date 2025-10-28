@@ -114,10 +114,11 @@ def _sidebar_links() -> list[dict[str, Any]]:
                 {"path": "pages/NOTAM Checker.py", "label": "NOTAM/Weather Checker"},
                 {"path": "pages/Crew Qualification Monitor.py", "label": "Crew Qualification Monitor"},
                 {"path": "pages/Jeppesen ITP Required Flight Check.py", "label": "Jeppesen ITP Checker"},
-                {"path": "pages/Crew Duty Clearance Monitor.py", "label": "Crew Duty Clearance"},
+                {"path": "pages/Crew Confirmaion Monitor.py", "label": "Crew Confirmation Monitor"},
                 {"path": "pages/Max ZFW Checker.py", "label": "Max ZFW Checker"},
                 {"path": "pages/_Customs Dashboard.py", "label": "Customs Dashboard"},
                 {"path": "pages/Operations Lead Morning Reports.py", "label": "OL Morning Reports"},
+                {"path": "pages/Flight Following Reports.py", "label": "Flight Following Reports"},
                 {"path": "pages/FBO Disconnect Report.py", "label": "FBO Disconnect Report"},
             ],
         },
@@ -141,7 +142,6 @@ def _sidebar_links() -> list[dict[str, Any]]:
             "label": "In Progress",
             "expanded": False,
             "links": [
-                {"path": "pages/Flight Following Reports.py", "label": "Flight Following Reports"},
             ],
         },
     ]
