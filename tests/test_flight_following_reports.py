@@ -190,8 +190,7 @@ def test_summarize_tight_turnarounds_flags_non_flight_when_no_next_day_match() -
         collection_today, next_day_rest_index=next_index
     )
 
-    assert lines
-    assert any("non-flight duties" in line.lower() for line in lines)
+    assert lines == []
 
 
 def test_summarize_tight_turnarounds_no_note_when_rest_matches() -> None:

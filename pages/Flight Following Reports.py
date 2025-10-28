@@ -153,7 +153,7 @@ if submitted:
                     next_day_collection = None
 
             if next_day_collection is None:
-                next_day_rest_index = {}
+                next_day_rest_index = None
                 st.warning(
                     "Next-day rest data could not be retrieved. Positioning notes will be omitted.",
                 )
