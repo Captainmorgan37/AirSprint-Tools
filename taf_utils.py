@@ -861,86 +861,98 @@ def _haversine_distance_nm(lat1: float, lon1: float, lat2: float, lon2: float) -
 
 
 def _fetch_nearby_taf_report(station_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Look for the nearest available TAF if `station_id` itself doesn't have one.
+
+    Strategy:
+      1. Get the station's coordinates from _lookup_station_coordinates().
+         (This already prefers your local Airport TZ.txt before falling back to API.)
+      2. For expanding radii (60, 90, 120, 180 NM), call the ADDS TAF service with
+         radialDistance="<radius>;<lat,lon>".
+      3. Collect TAFs, skip ones from the same station, measure distance.
+      4. Return the closest candidate, annotated with fallback metadata.
+
+    Returns:
+      A dict shaped like the ADDS TAF record plus:
+        "is_fallback": True
+        "fallback_distance_nm": float
+        "fallback_radius_nm": float
+    or None if nothing found.
+    """
+
     station_id = (station_id or "").upper().strip()
     if not station_id:
         return None
 
+    # 1. Get our "home" coords. This already prefers Airport TZ.txt, which fixes
+    #    CYSA=Stratford vs CYSA=Sable Island, etc.
     base_coords = _lookup_station_coordinates(station_id)
     if not base_coords:
         return None
-
     base_lat, base_lon = base_coords
 
     best_entry: Optional[Dict[str, Any]] = None
     best_distance: Optional[float] = None
 
-    api_coords = _fetch_station_coords_from_api(station_id)
-    if api_coords:
-        base_lat, base_lon = api_coords
-
     base_url = "https://aviationweather.gov/adds/dataserver_current/httpparam"
 
+    def _request_with_coords(lat: float, lon: float, radius_nm: float) -> List[Dict[str, Any]]:
+        """
+        Call ADDS tafs radialDistance=<radius>;<lat,lon>.
+        We ask for up to ~12 hours back so we can still get the most recent issuance.
+        """
+        params = {
+            "dataSource": "tafs",
+            "requestType": "retrieve",
+            "format": "JSON",
+            "radialDistance": f"{radius_nm};{lat},{lon}",
+            "hoursBeforeNow": "12",
+        }
+
+        try:
+            resp = requests.get(base_url, params=params, timeout=10)
+            resp.raise_for_status()
+        except requests.RequestException:
+            return []
+
+        try:
+            data = resp.json()
+        except ValueError:
+            return []
+
+        # normalize to a list of taf dicts
+        tafs = [taf for taf in _normalize_aviationweather_features(data)]
+        return tafs
+
+    # 2. Expand radius and keep the closest usable TAF
     for radius_nm in FALLBACK_TAF_SEARCH_RADII_NM:
-        def _request(radial_target: str) -> Tuple[str, List[Dict[str, Any]]]:
-            params = {
-                "dataSource": "tafs",
-                "requestType": "retrieve",
-                "format": "JSON",
-                "radialDistance": f"{radius_nm};{radial_target}",
-                "hoursBeforeNow": "5",
-            }
-
-            try:
-                resp = requests.get(base_url, params=params, timeout=10)
-                resp.raise_for_status()
-            except requests.HTTPError as exc:
-                status_code = getattr(exc.response, "status_code", None)
-                if status_code == 400:
-                    return "bad_request", []
-                return "error", []
-            except requests.RequestException:
-                return "error", []
-
-            try:
-                data = resp.json()
-            except ValueError:
-                return "error", []
-
-            tafs = [taf for taf in _normalize_aviationweather_features(data)]
-            return "ok", tafs
-
-        status, taf_candidates = _request(station_id)
-
-        if status == "bad_request":
-            if api_coords is None:
-                api_coords = _fetch_station_coords_from_api(station_id)
-                if api_coords:
-                    base_lat, base_lon = api_coords
-            target_coords: Optional[str] = None
-            if api_coords:
-                target_coords = f"{api_coords[0]},{api_coords[1]}"
-            else:
-                target_coords = f"{base_lat},{base_lon}"
-
-            if target_coords:
-                status, taf_candidates = _request(target_coords)
-            else:
-                taf_candidates = []
-        elif status == "ok" and not taf_candidates:
-            target_coords = f"{base_lat},{base_lon}"
-            status_coords, taf_candidates_coords = _request(target_coords)
-            if status_coords == "ok" and taf_candidates_coords:
-                taf_candidates = taf_candidates_coords
-        elif status != "ok":
+        taf_candidates = _request_with_coords(base_lat, base_lon, radius_nm)
+        if not taf_candidates:
             continue
 
-        found_candidate = False
+        found_any_here = False
 
         for taf in taf_candidates:
-            taf_station = (taf.get("station") or taf.get("stationId") or "").upper().strip()
-            if not taf_station or taf_station == station_id:
+            # Look up the station that issued THIS TAF
+            taf_station = (
+                taf.get("station")
+                or taf.get("stationId")
+                or taf.get("station_id")
+                or taf.get("icaoId")
+                or taf.get("icao_id")
+                or ""
+            )
+            taf_station = str(taf_station).upper().strip()
+            if not taf_station:
                 continue
 
+            # Don't "fallback" to the same station ID. (If the airport actually
+            # issues a TAF, we shouldn't be here anyway — but also this prevents
+            # weird NOAA alias collisions from picking itself.)
+            if taf_station == station_id:
+                continue
+
+            # distance: ADDS sometimes returns "distance" or "distanceNm".
             distance_nm = _coerce_float(
                 taf.get("distanceNm")
                 or taf.get("distance_nm")
@@ -948,31 +960,36 @@ def _fetch_nearby_taf_report(station_id: str) -> Optional[Dict[str, Any]]:
             )
 
             if distance_nm is None:
-                taf_coords = _lookup_station_coordinates(taf_station)
-                if taf_coords:
+                # If the API didn't give us the distance, compute it using coords.
+                their_coords = _lookup_station_coordinates(taf_station)
+                if their_coords:
                     distance_nm = _haversine_distance_nm(
-                        base_lat,
-                        base_lon,
-                        taf_coords[0],
-                        taf_coords[1],
+                        base_lat, base_lon,
+                        their_coords[0], their_coords[1],
                     )
 
+            # compare vs best so far
             if best_distance is not None:
+                # we already have a candidate
                 if distance_nm is None:
+                    # can't compare, skip
                     continue
                 if distance_nm >= best_distance:
                     continue
 
+            # It's our new best!
             candidate = dict(taf)
             candidate["is_fallback"] = True
             candidate["fallback_distance_nm"] = distance_nm
             candidate["fallback_radius_nm"] = radius_nm
-            best_entry = candidate
-            if distance_nm is not None:
-                best_distance = distance_nm
-            found_candidate = True
 
-        if found_candidate and best_entry is not None:
+            best_entry = candidate
+            best_distance = distance_nm if distance_nm is not None else best_distance
+            found_any_here = True
+
+        # As soon as we found at least one good candidate in this radius,
+        # we stop growing the circle.
+        if found_any_here and best_entry is not None:
             break
 
     return best_entry
@@ -985,14 +1002,17 @@ def _build_report_from_props(
     fallback_distance_nm: Optional[float] = None,
     fallback_radius_nm: Optional[float] = None,
 ) -> Optional[Dict[str, Any]]:
+
+    # Support both AviationWeather (/api/data/taf) and ADDS (dataserver_current)
     station = (
         props.get("station")
         or props.get("stationId")
+        or props.get("station_id")      # <-- added
         or props.get("icaoId")
         or props.get("icao_id")
         or ""
     )
-    station = str(station).upper()
+    station = str(station).upper().strip()
     if not station:
         return None
 
@@ -1003,20 +1023,28 @@ def _build_report_from_props(
         or props.get("obs_time")
         or props.get("bulletinTime")
     )
+
     valid_from_display, valid_from_dt = format_iso_timestamp(
-        props.get("validTimeFrom") or props.get("valid_time_from")
+        props.get("validTimeFrom")
+        or props.get("valid_time_from")
+        or props.get("valid_time_from_iso")  # being defensive
     )
+
     valid_to_display, valid_to_dt = format_iso_timestamp(
-        props.get("validTimeTo") or props.get("valid_time_to")
+        props.get("validTimeTo")
+        or props.get("valid_time_to")
+        or props.get("valid_time_to_iso")
     )
+
     raw_text = (
         props.get("rawTAF")
         or props.get("rawText")
-        or props.get("raw")
         or props.get("raw_text")
+        or props.get("raw")
         or ""
     )
 
+    # Forecast segments (either structured or fallback-parse the raw TAF)
     forecast_periods: List[Dict[str, Any]] = []
     forecast_source = (
         props.get("forecast")
@@ -1028,10 +1056,13 @@ def _build_report_from_props(
         if not isinstance(fc, MutableMapping):
             continue
         fc_processed = _normalise_forecast_segment(fc)
+
         from_value = _extract_time_field(fc_processed, TIME_FROM_FIELDS)
-        to_value = _extract_time_field(fc_processed, TIME_TO_FIELDS)
+        to_value   = _extract_time_field(fc_processed, TIME_TO_FIELDS)
+
         fc_from_display, fc_from_dt = format_iso_timestamp(from_value)
-        fc_to_display, fc_to_dt = format_iso_timestamp(to_value)
+        fc_to_display,   fc_to_dt   = format_iso_timestamp(to_value)
+
         fc_details = build_detail_list(fc_processed, TAF_FORECAST_FIELDS)
 
         wx = (
@@ -1044,9 +1075,8 @@ def _build_report_from_props(
                 parts = []
                 for item in wx:
                     simplified = _simplify_detail_value(item)
-                    if simplified in (None, "", []):
-                        continue
-                    parts.append(str(simplified))
+                    if simplified not in (None, "", []):
+                        parts.append(str(simplified))
                 wx = ", ".join(parts)
             fc_details.append(("Weather", wx))
 
@@ -1056,19 +1086,17 @@ def _build_report_from_props(
             or fc_processed.get("skyCondition")
             or fc_processed.get("sky_condition")
         )
+
         if isinstance(clouds, str):
             try:
                 parsed_clouds = json.loads(clouds)
             except (TypeError, ValueError):
                 parsed_clouds = []
             clouds = parsed_clouds
+
         if isinstance(clouds, Iterable) and not isinstance(clouds, (str, bytes, bytearray)):
-            cloud_iterable = clouds
-        else:
-            cloud_iterable = []
-        if isinstance(cloud_iterable, Iterable):
             cloud_parts: List[str] = []
-            for cloud in cloud_iterable:
+            for cloud in clouds:
                 if not isinstance(cloud, MutableMapping):
                     continue
                 cover = (
@@ -1100,6 +1128,7 @@ def _build_report_from_props(
                     cloud_parts.append(f"{cover} {base}ft")
                 elif cover:
                     cloud_parts.append(str(cover))
+
             if cloud_parts:
                 fc_details.append(("Clouds", ", ".join(cloud_parts)))
 
@@ -1114,6 +1143,7 @@ def _build_report_from_props(
         )
 
     if not forecast_periods:
+        # fall back to manual TAF parser if we didn't get structured segments
         forecast_periods = _fallback_parse_raw_taf(
             raw_text,
             issue_dt,
@@ -1141,6 +1171,7 @@ def _build_report_from_props(
             report["fallback_radius_nm"] = fallback_radius_nm
 
     return report
+
 
 
 def get_taf_reports(icao_codes: Sequence[str]) -> Dict[str, List[Dict[str, Any]]]:
