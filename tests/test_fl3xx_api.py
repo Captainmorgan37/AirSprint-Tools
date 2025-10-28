@@ -11,8 +11,10 @@ sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 from fl3xx_api import (
     DutySnapshot,
     DutySnapshotPilot,
+    MissingQualificationAlert,
     PreflightChecklistStatus,
     PreflightCrewCheckin,
+    extract_missing_qualifications_from_preflight,
     parse_postflight_payload,
     parse_preflight_payload,
 )
@@ -204,3 +206,54 @@ def test_parse_preflight_payload_collects_additional_datetime_fields() -> None:
 
     expected_epoch = int(datetime(2024, 5, 2, 12, 15, tzinfo=timezone.utc).timestamp())
     assert checkin.extra_checkins == (expected_epoch,)
+
+
+def test_extract_missing_qualifications_from_preflight_returns_alerts() -> None:
+    payload = {
+        "crewAssign": {
+            "commander": {
+                "user": {
+                    "id": 111,
+                    "firstName": "Alex",
+                    "lastName": "Commander",
+                },
+                "warnings": {
+                    "messages": [
+                        {"type": "qualification", "status": "missing", "name": "CANPASS"},
+                        {"type": "duty", "status": "setup", "name": "Duty_0"},
+                    ]
+                },
+            },
+            "firstOfficer": {
+                "user": {"id": "222", "nickname": "Sam"},
+                "warnings": {
+                    "messages": [
+                        {"type": "QUALIFICATION", "status": "MISSING", "name": "RNP AR"},
+                        {"type": "QUALIFICATION", "status": "OK", "name": "RVSM"},
+                        "not-a-mapping",
+                    ]
+                },
+            },
+        }
+    }
+
+    alerts = extract_missing_qualifications_from_preflight(payload)
+
+    assert len(alerts) == 2
+    assert alerts[0] == MissingQualificationAlert(
+        seat="PIC",
+        pilot_name="Alex Commander",
+        pilot_id="111",
+        qualification_name="CANPASS",
+    )
+    assert alerts[1] == MissingQualificationAlert(
+        seat="SIC",
+        pilot_name="Sam",
+        pilot_id="222",
+        qualification_name="RNP AR",
+    )
+
+
+def test_extract_missing_qualifications_handles_missing_blocks() -> None:
+    alerts = extract_missing_qualifications_from_preflight({})
+    assert alerts == []
