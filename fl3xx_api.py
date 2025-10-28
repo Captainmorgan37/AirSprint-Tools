@@ -331,6 +331,16 @@ def fetch_preflight(
 
 
 @dataclass(frozen=True)
+class MissingQualificationAlert:
+    """Details about a missing crew qualification for a specific seat."""
+
+    seat: str
+    pilot_name: str
+    pilot_id: Optional[str]
+    qualification_name: str
+
+
+@dataclass(frozen=True)
 class PreflightCrewCheckin:
     """Normalised check-in information for a crew member."""
 
@@ -394,6 +404,34 @@ def _extract_preflight_status_value(value: Any) -> Optional[str]:
     return cleaned or None
 
 
+def _format_pilot_name(user_block: Mapping[str, Any]) -> str:
+    parts: List[str] = []
+    for key in ("firstName", "middleName", "lastName"):
+        value = user_block.get(key)
+        if isinstance(value, str):
+            value = value.strip()
+        if value:
+            parts.append(str(value))
+    if parts:
+        return " ".join(parts)
+
+    for fallback_key in (
+        "nickname",
+        "logName",
+        "emailAddress",
+        "email",
+        "trigram",
+        "personnelNumber",
+    ):
+        fallback = user_block.get(fallback_key)
+        if isinstance(fallback, str):
+            fallback = fallback.strip()
+        if fallback:
+            return str(fallback)
+
+    return ""
+
+
 def _normalise_optional_epoch(value: Any) -> Optional[int]:
     if value is None:
         return None
@@ -436,6 +474,68 @@ def _normalise_datetime_candidate(value: Any) -> Optional[int]:
         return int(parsed.timestamp())
 
     return None
+
+
+def extract_missing_qualifications_from_preflight(
+    preflight_payload: Any,
+) -> List[MissingQualificationAlert]:
+    """Return any missing crew qualifications for the assigned PIC/SIC."""
+
+    results: List[MissingQualificationAlert] = []
+
+    if not isinstance(preflight_payload, Mapping):
+        return results
+
+    crew_assign = preflight_payload.get("crewAssign")
+    if not isinstance(crew_assign, Mapping):
+        return results
+
+    for seat_key, seat_label in (("commander", "PIC"), ("firstOfficer", "SIC")):
+        crew_block = crew_assign.get(seat_key)
+        if not isinstance(crew_block, Mapping):
+            continue
+
+        user_block = crew_block.get("user")
+        if not isinstance(user_block, Mapping):
+            user_block = {}
+
+        pilot_id_raw = user_block.get("id")
+        pilot_id = str(pilot_id_raw) if pilot_id_raw is not None else None
+        pilot_name = _format_pilot_name(user_block)
+
+        warnings_block = crew_block.get("warnings")
+        if not isinstance(warnings_block, Mapping):
+            continue
+
+        messages = warnings_block.get("messages")
+        if not isinstance(messages, list):
+            continue
+
+        for message in messages:
+            if not isinstance(message, Mapping):
+                continue
+
+            msg_type = str(message.get("type") or "").strip().upper()
+            msg_status = str(message.get("status") or "").strip().upper()
+            qual_name = message.get("name")
+
+            if (
+                msg_type == "QUALIFICATION"
+                and msg_status == "MISSING"
+                and isinstance(qual_name, str)
+            ):
+                cleaned_name = qual_name.strip()
+                if cleaned_name:
+                    results.append(
+                        MissingQualificationAlert(
+                            seat=seat_label,
+                            pilot_name=pilot_name,
+                            pilot_id=pilot_id,
+                            qualification_name=cleaned_name,
+                        )
+                    )
+
+    return results
 
 
 def _parse_preflight_checkin(entry: Mapping[str, Any]) -> PreflightCrewCheckin:
@@ -1033,8 +1133,10 @@ __all__ = [
     "enrich_flights_with_crew",
     "DutySnapshot",
     "DutySnapshotPilot",
+    "MissingQualificationAlert",
     "PreflightCrewCheckin",
     "PreflightChecklistStatus",
     "parse_postflight_payload",
     "parse_preflight_payload",
+    "extract_missing_qualifications_from_preflight",
 ]
