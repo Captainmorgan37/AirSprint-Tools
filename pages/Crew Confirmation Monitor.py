@@ -169,7 +169,7 @@ if not not_confirmed_df.empty:
         if minutes_left < 120:
             return ["background-color: #f8d7da"] * len(row)
         if minutes_left < 300:
-            return ["background-color: #fff3cd"] * len(row)
+            return ["background-color: rgba(255, 213, 79, 0.40)"] * len(row)
         return [""] * len(row)
 
     styled_not_confirmed = not_confirmed_df.style.apply(_highlight_time_left, axis=1)
