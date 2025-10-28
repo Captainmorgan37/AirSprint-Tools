@@ -214,7 +214,10 @@ def main() -> None:
         "Operations Lead Morning Reports Workflow": "docs/Operations Lead Morning Reports.docx",
         "Reserve Calendar Day Checker Workflow": "docs/Reserve Calendar Day Checker.docx",
         "Short Turn Checker Workflow": "docs/Short Turn Checker.docx",
-        "Task Splitter Workflow": "docs/Task Splitter.docx"
+        "Task Splitter Workflow": "docs/Task Splitter.docx",
+        "Crew Confirmation Monitor Workflow": "docs/Crew Confirmation Monitor Workflow.docx",
+        "Crew Qualification Monitor Workflow": "docs/Crew Qualification Monitor Workflow.docx",
+        "Owner Services Dashboard Workflow": "docs/Owner Services Dashboard Workflow.docx"
     }
 
     for label, path in docs.items():
