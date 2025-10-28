@@ -1708,11 +1708,6 @@ with tab2:
         coords_debug = {code: _lookup_station_coordinates(code) for code in unique_codes}
         st.write("DEBUG coords lookup:", coords_debug)
 
-        st.write("DEBUG taf_reports returned:", taf_reports)
-
-        coords_debug = {code: _lookup_station_coordinates(code) for code in unique_codes}
-        st.write("DEBUG coords lookup:", coords_debug)
-
         if not any(metar_reports.get(code) or taf_reports.get(code) for code in unique_codes):
             st.info("No METAR/TAF data returned for the provided stations.")
 
