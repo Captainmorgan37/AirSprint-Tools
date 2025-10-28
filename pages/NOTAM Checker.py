@@ -17,7 +17,8 @@ from flight_leg_utils import (
 )
 from Home import configure_page, password_gate, render_sidebar, require_secret
 from notam_filters import is_taxiway_only_notam
-from taf_utils import get_taf_reports as get_taf_reports_with_fallback
+from taf_utils import get_taf_reports as _taf_core
+from taf_utils import _lookup_station_coordinates
 
 configure_page(page_title="CFPS/FAA NOTAM Viewer")
 password_gate()
@@ -1134,11 +1135,11 @@ def get_metar_reports(icao_codes: tuple[str, ...]):
 
 
 @st.cache_data(ttl=300)
-def get_taf_reports(icao_codes: tuple[str, ...]):
+def get_taf_reports_cached(icao_codes: tuple[str, ...]):
     if not icao_codes:
         return {}
 
-    return get_taf_reports_with_fallback(list(icao_codes))
+    return _taf_core(list(icao_codes))
 
 
 def _split_taf_into_lines(raw_taf: str) -> list[list[str]]:
@@ -1697,11 +1698,18 @@ with tab2:
             metar_reports = {}
             st.warning(f"Failed to retrieve METAR data: {e}")
 
+        st.write("DEBUG requested stations:", unique_codes)
+
         try:
-            taf_reports = get_taf_reports(tuple(unique_codes))
+            taf_reports = get_taf_reports_cached(tuple(unique_codes))
         except Exception as e:
             taf_reports = {}
             st.warning(f"Failed to retrieve TAF data: {e}")
+
+        st.write("DEBUG taf_reports returned:", taf_reports)
+
+        coords_debug = {code: _lookup_station_coordinates(code) for code in unique_codes}
+        st.write("DEBUG coords lookup:", coords_debug)
 
         if not any(metar_reports.get(code) or taf_reports.get(code) for code in unique_codes):
             st.info("No METAR/TAF data returned for the provided stations.")
