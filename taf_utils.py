@@ -961,17 +961,32 @@ def get_taf_reports(icao_codes: Sequence[str]) -> Dict[str, List[Dict[str, Any]]
 
     try:
         response = requests.get(url, params=params, timeout=10)
-        response.raise_for_status()
+        if response.status_code == 204 or not response.content.strip():
+            data = {}
+        else:
+            response.raise_for_status()
+            try:
+                data = response.json()
+            except ValueError:
+                data = {}
     except requests.HTTPError as exc:
         status_code = getattr(exc.response, "status_code", None)
         if status_code == 400:
             fallback_params = {"ids": params["ids"], "format": "json"}
             response = requests.get(url, params=fallback_params, timeout=10)
-            response.raise_for_status()
+            if response.status_code == 204 or not response.content.strip():
+                data = {}
+            else:
+                response.raise_for_status()
+                try:
+                    data = response.json()
+                except ValueError:
+                    data = {}
         else:
             raise
+    except requests.RequestException:
+        data = {}
 
-    data = response.json()
     taf_reports: Dict[str, List[Dict[str, Any]]] = {}
 
     for props in _normalize_aviationweather_features(data):
