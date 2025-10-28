@@ -1650,33 +1650,51 @@ _REST_THRESHOLD_MINUTES = 11 * 60
 _REST_MATCH_TOLERANCE_MINUTES = 5
 
 
-def _requires_non_flight_note(
+def _has_upcoming_flight_duty(
     pilot: DutyStartPilotSnapshot,
     rest_minutes: int,
-    next_day_rest_index: Mapping[str, Dict[str, Any]],
+    next_day_rest_index: Optional[Mapping[str, Dict[str, Any]]],
     *,
     tolerance: int,
 ) -> bool:
+    """Return ``True`` when the next duty appears to be a flight assignment."""
+
+    if next_day_rest_index is None:
+        return True
+
+    if not next_day_rest_index:
+        return False
+
     identifier = _select_identifier(pilot)
     if not identifier:
         return True
 
     entry = next_day_rest_index.get(identifier)
     if not isinstance(entry, Mapping):
-        return True
+        return False
+
+    next_pilot = entry.get("pilot")
+    if not isinstance(next_pilot, DutyStartPilotSnapshot):
+        return False
 
     next_actual = entry.get("rest_before_actual_min")
     if next_actual is None:
         return True
 
-    after_actual = pilot.rest_after_actual_min if pilot.rest_after_actual_min is not None else rest_minutes
+    after_actual = (
+        pilot.rest_after_actual_min
+        if pilot.rest_after_actual_min is not None
+        else rest_minutes
+    )
     if after_actual is None:
         return True
 
-    if abs(int(next_actual) - int(after_actual)) <= max(tolerance, 0):
-        return False
+    try:
+        difference = abs(int(next_actual) - int(after_actual))
+    except Exception:
+        return True
 
-    return True
+    return difference <= max(tolerance, 0)
 
 
 def summarize_tight_turnarounds(
@@ -1685,14 +1703,19 @@ def summarize_tight_turnarounds(
     next_day_rest_index: Optional[Mapping[str, Dict[str, Any]]] = None,
     rest_match_tolerance_min: int = _REST_MATCH_TOLERANCE_MINUTES,
 ) -> List[str]:
-    """Return formatted lines listing crew whose rest falls below the threshold."""
+    """Return formatted lines listing crew whose rest falls below the threshold.
+
+    When ``next_day_rest_index`` is provided, only duties that correspond to a
+    follow-up flight (based on matching rest-before metrics) are included in the
+    results.
+    """
 
     if isinstance(collection, DutyStartCollection):
         snapshots: Iterable[DutyStartSnapshot] = collection.snapshots
     else:
         snapshots = collection
 
-    tail_map: Dict[str, Dict[str, Tuple[int, str, bool]]] = {}
+    tail_map: Dict[str, Dict[str, Tuple[int, str]]] = {}
 
     for snapshot in snapshots:
         tail = snapshot.tail or "UNKNOWN"
@@ -1714,28 +1737,23 @@ def summarize_tight_turnarounds(
                 continue
 
             seat = (pilot.seat or "PIC").upper()
-            note_required = False
             if next_day_rest_index is not None:
-                note_required = _requires_non_flight_note(
+                has_flight = _has_upcoming_flight_duty(
                     pilot,
                     rest_minutes,
                     next_day_rest_index,
                     tolerance=rest_match_tolerance_min,
                 )
+                if not has_flight:
+                    continue
 
             existing = seat_map.get(seat)
-            candidate = (rest_minutes, rest_display, note_required)
+            candidate = (rest_minutes, rest_display)
             if existing is None:
                 seat_map[seat] = candidate
             else:
-                existing_minutes, existing_display, existing_note = existing
+                existing_minutes, existing_display = existing
                 if rest_minutes < existing_minutes:
-                    seat_map[seat] = candidate
-                elif (
-                    rest_minutes == existing_minutes
-                    and note_required
-                    and not existing_note
-                ):
                     seat_map[seat] = candidate
 
     lines: List[str] = []
@@ -1751,17 +1769,13 @@ def summarize_tight_turnarounds(
 
         seats = [seat for seat, _ in sorted_entries]
         rest_values = [value[1] for _, value in sorted_entries]
-        note_flags = [value[2] for _, value in sorted_entries]
         if not seats:
             continue
 
         seat_display = _format_seat_display(seats)
         rest_display = rest_values[0] if len(set(rest_values)) == 1 else "/".join(rest_values)
-        note_suffix = ""
-        if any(note_flags):
-            note_suffix = " – non-flight duties"
         lines.append(
-            f"{tail} – {rest_display} rest before next duty ({seat_display}){note_suffix}"
+            f"{tail} – {rest_display} rest before next duty ({seat_display})"
         )
 
     return lines
