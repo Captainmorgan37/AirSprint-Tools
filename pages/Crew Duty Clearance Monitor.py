@@ -12,11 +12,11 @@ from flight_leg_utils import FlightDataError, build_fl3xx_api_config
 from fl3xx_api import MOUNTAIN_TIME_ZONE
 from Home import configure_page, password_gate, render_sidebar
 
-configure_page(page_title="Crew Duty Clearance Monitor")
+configure_page(page_title="Crew Confirmation Monitor")
 password_gate()
 render_sidebar()
 
-st.title("🧑‍✈️ Crew Duty Clearance Monitor")
+st.title("🧑‍✈️ Crew Confirmation Monitor")
 
 st.write(
     """
