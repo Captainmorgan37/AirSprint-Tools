@@ -828,6 +828,50 @@ def _build_report_from_properties(
     )
 
 
+def _lookup_station_coordinates(station: str) -> Tuple[float, float] | None:
+    station = (station or "").upper()
+    if not station:
+        return None
+
+    url = "https://aviationweather.gov/dataserver_current/httpparam"
+    params = {
+        "dataSource": "stations",
+        "requestType": "retrieve",
+        "format": "json",
+        "stationString": station,
+    }
+
+    try:
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+    except requests.RequestException:
+        return None
+
+    data = response.json()
+    for props in _normalize_aviationweather_features(data):
+        if not isinstance(props, MutableMapping):
+            continue
+        lat = _coerce_float(
+            props.get("latitude")
+            or props.get("latitudeDeg")
+            or props.get("latitude_deg")
+            or props.get("stationLatitude")
+            or props.get("station_latitude")
+        )
+        lon = _coerce_float(
+            props.get("longitude")
+            or props.get("longitudeDeg")
+            or props.get("longitude_deg")
+            or props.get("stationLongitude")
+            or props.get("station_longitude")
+        )
+        if lat is None or lon is None:
+            continue
+        return lat, lon
+
+    return None
+
+
 def _fetch_nearby_taf_report(requested_station: str) -> Dict[str, Any] | None:
     requested_station = (requested_station or "").upper()
     if not requested_station:
@@ -842,41 +886,63 @@ def _fetch_nearby_taf_report(requested_station: str) -> Dict[str, Any] | None:
         "hoursBeforeNow": 12,
     }
 
+    station_coords = _lookup_station_coordinates(requested_station)
+    station_query_allowed = True
+
     for radius_nm in FALLBACK_TAF_SEARCH_RADII_NM:
-        params = {**base_params, "radialDistance": f"{radius_nm};{requested_station}"}
-        try:
-            response = requests.get(url, params=params, timeout=10)
-            response.raise_for_status()
-        except requests.RequestException:
-            continue
+        radial_queries: List[Tuple[str, str]] = []
+        if station_query_allowed:
+            radial_queries.append(("station", f"{radius_nm};{requested_station}"))
+        if station_coords:
+            lat, lon = station_coords
+            radial_queries.append(("coords", f"{radius_nm};{lat:.4f},{lon:.4f}"))
 
-        data = response.json()
-        candidates: List[Tuple[float | None, str, Dict[str, Any]]] = []
-        for props in _normalize_aviationweather_features(data):
-            if not isinstance(props, MutableMapping):
+        seen_radials: set[str] = set()
+        for query_type, radial in radial_queries:
+            if radial in seen_radials:
                 continue
-            built = _build_report_from_properties(props)
-            if not built:
-                continue
-            station, report = built
-            distance_nm = _extract_distance_nm(props)
-            candidates.append((distance_nm, station, report))
+            seen_radials.add(radial)
 
-        if candidates:
-            candidates.sort(
-                key=lambda item: (
-                    float("inf") if item[0] is None else item[0],
-                    item[1],
+            params = {**base_params, "radialDistance": radial}
+            try:
+                response = requests.get(url, params=params, timeout=10)
+                response.raise_for_status()
+            except requests.HTTPError as exc:
+                if query_type == "station":
+                    status_code = getattr(exc.response, "status_code", None)
+                    if status_code == 400:
+                        station_query_allowed = False
+                continue
+            except requests.RequestException:
+                continue
+
+            data = response.json()
+            candidates: List[Tuple[float | None, str, Dict[str, Any]]] = []
+            for props in _normalize_aviationweather_features(data):
+                if not isinstance(props, MutableMapping):
+                    continue
+                built = _build_report_from_properties(props)
+                if not built:
+                    continue
+                station, report = built
+                distance_nm = _extract_distance_nm(props)
+                candidates.append((distance_nm, station, report))
+
+            if candidates:
+                candidates.sort(
+                    key=lambda item: (
+                        float("inf") if item[0] is None else item[0],
+                        item[1],
+                    )
                 )
-            )
-            best_distance, _, best_report = candidates[0]
-            fallback_report = dict(best_report)
-            fallback_report["is_fallback"] = True
-            fallback_report["requested_station"] = requested_station
-            fallback_report["fallback_radius_nm"] = radius_nm
-            if best_distance is not None:
-                fallback_report["fallback_distance_nm"] = best_distance
-            return fallback_report
+                best_distance, _, best_report = candidates[0]
+                fallback_report = dict(best_report)
+                fallback_report["is_fallback"] = True
+                fallback_report["requested_station"] = requested_station
+                fallback_report["fallback_radius_nm"] = radius_nm
+                if best_distance is not None:
+                    fallback_report["fallback_distance_nm"] = best_distance
+                return fallback_report
 
     return None
 
