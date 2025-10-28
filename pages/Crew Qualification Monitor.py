@@ -180,15 +180,22 @@ def _select_primary_leg(legs: Sequence[Mapping[str, Any]]) -> Mapping[str, Any]:
     return min(legs, key=_sort_key)
 
 
+_FETCH_RESULTS_KEY = "crew_qualification_fetch_results"
+
+
 with st.sidebar:
     st.header("Flight selection")
     today_local = datetime.now(tz=MOUNTAIN_TIME_ZONE).date()
     default_end = today_local + timedelta(days=3)
-    date_selection = st.date_input(
-        "Departure window (Mountain)",
-        value=(today_local, default_end),
-        help="Flights departing within this inclusive local date range will be inspected.",
-    )
+
+    with st.form("crew_qualification_fetch"):
+        date_selection = st.date_input(
+            "Departure window (Mountain)",
+            value=(today_local, default_end),
+            help="Flights departing within this inclusive local date range will be inspected.",
+        )
+        submit_fetch = st.form_submit_button("Fetch flights", use_container_width=True)
+
     start_date, end_date = _normalise_date_range(date_selection, today_local, default_end)
     fetch_to_date = end_date + timedelta(days=1)
     show_metadata = st.checkbox("Show fetch details", value=False)
@@ -207,19 +214,37 @@ except (TypeError, ValueError):
 
 settings_digest = _settings_digest(fl3xx_settings)
 
-try:
-    legs, fetch_metadata, normalization_stats = load_filtered_legs(
-        settings_digest,
-        fl3xx_settings,
-        from_date=start_date,
-        to_date=fetch_to_date,
-    )
-except FlightDataError as exc:
-    st.error(str(exc))
+fetch_results = st.session_state.get(_FETCH_RESULTS_KEY)
+
+if submit_fetch:
+    try:
+        legs, fetch_metadata, normalization_stats = load_filtered_legs(
+            settings_digest,
+            fl3xx_settings,
+            from_date=start_date,
+            to_date=fetch_to_date,
+        )
+    except FlightDataError as exc:
+        st.error(str(exc))
+        st.stop()
+    except requests.HTTPError as exc:
+        st.error(f"FL3XX API request failed: {exc}")
+        st.stop()
+
+    fetch_results = {
+        "legs": legs,
+        "fetch_metadata": fetch_metadata,
+        "normalization_stats": normalization_stats,
+    }
+    st.session_state[_FETCH_RESULTS_KEY] = fetch_results
+
+if not fetch_results:
+    st.info('Select a departure window and press "Fetch flights" to retrieve data from FL3XX.')
     st.stop()
-except requests.HTTPError as exc:
-    st.error(f"FL3XX API request failed: {exc}")
-    st.stop()
+
+legs = fetch_results["legs"]
+fetch_metadata = fetch_results["fetch_metadata"]
+normalization_stats = fetch_results["normalization_stats"]
 
 if show_metadata:
     with st.expander("FL3XX fetch metadata", expanded=False):
