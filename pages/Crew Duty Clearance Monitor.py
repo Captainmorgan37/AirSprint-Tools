@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 from collections.abc import Mapping
 from typing import Any, Dict, Optional
+
+import pandas as pd
 import streamlit as st
 
 from duty_clearance import compute_clearance_table
@@ -113,17 +115,14 @@ if raw_df.empty:
         )
     st.stop()
 
-raw_minutes = raw_df.get("_minutes_left")
-overdue_count = int((raw_minutes < 0).sum()) if raw_minutes is not None else 0
 not_confirmed = int((raw_df["Status"] == "⚠️ Not Confirmed").sum())
 unknown = int((raw_df["Status"] == "⏳ UNKNOWN").sum())
 total_crews = int(len(raw_df))
 
-metrics_row = st.columns(4)
+metrics_row = st.columns(3)
 metrics_row[0].metric("Crews monitored", total_crews)
-metrics_row[1].metric("Overdue", overdue_count)
-metrics_row[2].metric("Not confirmed", not_confirmed)
-metrics_row[3].metric("Status unknown", unknown)
+metrics_row[1].metric("Not confirmed", not_confirmed)
+metrics_row[2].metric("Status unknown", unknown)
 
 st.caption(
     "Confirm-by deadlines are computed per crew using their local duty timezone. Time left updates each time the report is run."
@@ -152,7 +151,20 @@ confirmed_df = presentation_df.loc[~not_confirmed_mask, columns_to_show].reset_i
 
 st.subheader("Crews requiring confirmation")
 if not not_confirmed_df.empty:
-    st.dataframe(not_confirmed_df, use_container_width=True, hide_index=True)
+    minutes_left_series = presentation_df.loc[not_confirmed_mask, "_minutes_left"].reset_index(drop=True)
+
+    def _highlight_time_left(row: pd.Series) -> list[str]:
+        minutes_left = minutes_left_series.iloc[row.name]
+        if pd.isna(minutes_left):
+            return [""] * len(row)
+        if minutes_left < 120:
+            return ["background-color: #f8d7da"] * len(row)
+        if minutes_left < 300:
+            return ["background-color: #fff3cd"] * len(row)
+        return [""] * len(row)
+
+    styled_not_confirmed = not_confirmed_df.style.apply(_highlight_time_left, axis=1)
+    st.dataframe(styled_not_confirmed, use_container_width=True, hide_index=True)
 else:
     st.success("All crews are confirmed.")
 
