@@ -959,9 +959,24 @@ def get_taf_reports(icao_codes: Sequence[str]) -> Dict[str, List[Dict[str, Any]]
         "mostRecent": "true",
     }
 
+    def _has_body(response: requests.Response) -> bool:
+        body = getattr(response, "content", None)
+        if body is None:
+            body = getattr(response, "text", None)
+        if body is None:
+            return True
+        if isinstance(body, bytes):
+            return bool(body.strip())
+        if hasattr(body, "strip"):
+            try:
+                return bool(body.strip())
+            except TypeError:
+                return bool(body)
+        return bool(body)
+
     try:
         response = requests.get(url, params=params, timeout=10)
-        if response.status_code == 204 or not response.content.strip():
+        if response.status_code == 204 or not _has_body(response):
             data = {}
         else:
             response.raise_for_status()
@@ -974,7 +989,7 @@ def get_taf_reports(icao_codes: Sequence[str]) -> Dict[str, List[Dict[str, Any]]
         if status_code == 400:
             fallback_params = {"ids": params["ids"], "format": "json"}
             response = requests.get(url, params=fallback_params, timeout=10)
-            if response.status_code == 204 or not response.content.strip():
+            if response.status_code == 204 or not _has_body(response):
                 data = {}
             else:
                 response.raise_for_status()
