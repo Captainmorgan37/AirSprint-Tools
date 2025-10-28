@@ -1,688 +1,789 @@
-import csv
-import math
-import os
+"""Utilities for retrieving and normalising TAF forecasts."""
+
+from __future__ import annotations
+
+import calendar
+import json
 import re
-from datetime import datetime, timedelta
-from calendar import monthrange
-from functools import lru_cache
-from typing import Dict, List, Optional, Tuple
+
+from datetime import datetime, timezone
+from typing import Any, Dict, Iterable, List, MutableMapping, Sequence, Tuple
 
 import requests
-from collections.abc import MutableMapping
-
-###############################################################################
-# Constants / config
-###############################################################################
-
-EARTH_RADIUS_NM = 3440.065  # nautical miles
-FALLBACK_TAF_SEARCH_RADII_NM = [60, 90, 120, 180]  # how far we'll look for a "nearby" TAF
-
-# We'll lazy-load this from Airport TZ.txt
-_AIRPORT_COORDS: Dict[str, Tuple[float, float]] = {}
 
 
-###############################################################################
-# General small helpers
-###############################################################################
+TAF_FORECAST_FIELDS = [
+    (("windDir", "wind_direction", "wind_dir"), "Wind Dir (°)"),
+    (("windSpeed", "wind_speed", "windSpd"), "Wind Speed (kt)"),
+    (("windGust", "wind_gust", "windGustKt"), "Wind Gust (kt)"),
+    (("visibility", "visibilitySM", "visibility_sm", "visibility_mi"), "Visibility"),
+    (("probability", "probabilityPercent", "probability_percent"), "Probability (%)"),
+    (("icing",), "Icing"),
+    (("turbulence",), "Turbulence"),
+]
 
-def _coerce_float(x) -> Optional[float]:
+FORECAST_CONTAINER_KEYS: Tuple[str, ...] = (
+    "data",
+    "period",
+    "periods",
+    "forecast",
+    "forecastList",
+    "items",
+    "segments",
+)
+
+FORECAST_RELEVANT_KEYS: Tuple[str, ...] = (
+    "fcstTimeFrom",
+    "fcstTimeTo",
+    "timeFrom",
+    "timeTo",
+    "time_from",
+    "time_to",
+    "startTime",
+    "endTime",
+    "start_time",
+    "end_time",
+    "start",
+    "end",
+    "wxString",
+    "wx_string",
+    "weather",
+    "windDir",
+    "wind_direction",
+    "wind_dir",
+    "wind",
+    "windSpeed",
+    "wind_speed",
+    "windSpd",
+    "windGust",
+    "wind_gust",
+    "visibility",
+    "visibilitySM",
+    "visibility_sm",
+    "visibility_mi",
+    "clouds",
+    "cloudList",
+    "skyCondition",
+    "sky_condition",
+)
+
+TIME_FROM_FIELDS: Tuple[str, ...] = (
+    "fcstTimeFrom",
+    "timeFrom",
+    "time_from",
+    "startTime",
+    "start_time",
+    "from",
+    "start",
+)
+
+TIME_TO_FIELDS: Tuple[str, ...] = (
+    "fcstTimeTo",
+    "timeTo",
+    "time_to",
+    "endTime",
+    "end_time",
+    "to",
+    "end",
+)
+
+
+def format_iso_timestamp(value: Any) -> Tuple[str, datetime | None]:
+    """Return a human-readable timestamp and a timezone-aware datetime."""
+
+    if value in (None, "", []):
+        return "N/A", None
+
+    def _format(dt_obj: datetime) -> Tuple[str, datetime]:
+        dt_utc = dt_obj.astimezone(timezone.utc)
+        return dt_utc.strftime("%b %d %Y, %H:%MZ"), dt_utc
+
+    if isinstance(value, (int, float)):
+        try:
+            seconds = float(value)
+        except (TypeError, ValueError):
+            return str(value), None
+        if seconds > 1e12:
+            seconds /= 1000.0
+        dt = datetime.fromtimestamp(seconds, tz=timezone.utc)
+        return _format(dt)
+
+    value_str = str(value).strip()
+    if not value_str:
+        return "N/A", None
+
+    if value_str.isdigit():
+        try:
+            seconds = int(value_str)
+        except ValueError:
+            seconds = None
+        if seconds is not None:
+            if len(value_str) > 10:
+                seconds /= 1000.0
+            dt = datetime.fromtimestamp(seconds, tz=timezone.utc)
+            return _format(dt)
+
     try:
-        return float(x)
-    except (TypeError, ValueError):
-        return None
-
-
-def _normalize_aviationweather_features(data):
-    """
-    AviationWeather endpoints sometimes return:
-    - GeoJSON-style: {"features":[{"properties":{...}}, ...]}
-    - Plain JSON list: [{"station":"CYXX", ...}, ...]
-    - Dict with "reports": {"reports":[{...},{...}]}
-    - Single dict with keys directly
-    This yields dict-like "property bundles" so we can treat them uniformly.
-    """
-    if isinstance(data, dict):
-        # GeoJSON-ish
-        feats = data.get("features")
-        if isinstance(feats, list):
-            for feat in feats:
-                if not isinstance(feat, dict):
-                    continue
-                props = feat.get("properties")
-                if isinstance(props, dict):
-                    yield props
-                else:
-                    # Sometimes there's useful stuff directly in feat
-                    yield feat
-            return
-
-        # "reports" style
-        reps = data.get("reports")
-        if isinstance(reps, list):
-            for rep in reps:
-                if isinstance(rep, dict):
-                    yield rep
-            return
-
-        # Just treat the dict itself as one "feature"
-        yield data
-        return
-
-    if isinstance(data, list):
-        for item in data:
-            if not isinstance(item, dict):
-                continue
-            if "properties" in item and isinstance(item["properties"], dict):
-                yield item["properties"]
-            else:
-                yield item
-
-
-###############################################################################
-# Time parsing helpers
-###############################################################################
-
-def _safe_build_dt(day: int, hour: int, minute: int = 0,
-                   ref_dt: Optional[datetime] = None) -> Optional[datetime]:
-    """
-    TAFs don't include month/year on every time token, just DDHHMMZ or DDHH/DDHH.
-    We guess using "now", then adjust ±1 month if we're off by >20 days.
-    Good enough to sort TAFs and show nice timestamps.
-    """
-    if ref_dt is None:
-        ref_dt = datetime.utcnow()
-
-    year = ref_dt.year
-    month = ref_dt.month
-
-    # clamp "day" so 31 doesn't explode in February, etc.
-    last_day_this_month = monthrange(year, month)[1]
-    if day > last_day_this_month:
-        day = last_day_this_month
-
-    try:
-        dt = datetime(year, month, day, hour, minute)
+        dt = datetime.fromisoformat(value_str.replace("Z", "+00:00"))
     except ValueError:
-        return None
+        return value_str, None
 
-    # If guess is too far in the past/future, wrap month.
-    if (ref_dt - dt) > timedelta(days=20):
-        # maybe actually next month
-        m2 = month + 1
-        y2 = year
-        if m2 > 12:
-            m2 = 1
-            y2 += 1
-        last_day_next = monthrange(y2, m2)[1]
-        adj_day = min(day, last_day_next)
-        try:
-            dt = datetime(y2, m2, adj_day, hour, minute)
-        except ValueError:
-            pass
-    elif (dt - ref_dt) > timedelta(days=20):
-        # maybe actually previous month
-        m2 = month - 1
-        y2 = year
-        if m2 < 1:
-            m2 = 12
-            y2 -= 1
-        last_day_prev = monthrange(y2, m2)[1]
-        adj_day = min(day, last_day_prev)
-        try:
-            dt = datetime(y2, m2, adj_day, hour, minute)
-        except ValueError:
-            pass
-
-    return dt
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return _format(dt)
 
 
-def _parse_issue_time(issue_token: str) -> Tuple[Optional[datetime], str]:
-    """
-    issue_token like '281340Z' -> DDHHMMZ
-    returns (datetime_obj_or_None, "28 Oct 13:40Z")
-    """
-    m = re.match(r"(?P<day>\d{2})(?P<hour>\d{2})(?P<min>\d{2})Z", issue_token)
-    if not m:
-        return None, "N/A"
-
-    day = int(m.group("day"))
-    hour = int(m.group("hour"))
-    minute = int(m.group("min"))
-
-    dt = _safe_build_dt(day, hour, minute)
-    if dt is None:
-        return None, "N/A"
-
-    return dt, dt.strftime("%d %b %H:%MZ")
-
-
-def _parse_valid_period(validity_token: str) -> Dict[str, object]:
-    """
-    validity_token like '2812/2912' -> DDHH/DDHH
-    returns display strings and dt objects:
-      "valid_from_display": "28 Oct 12Z"
-      "valid_to_display":   "29 Oct 12Z"
-    """
-    m = re.match(
-        r"(?P<d1>\d{2})(?P<h1>\d{2})/(?P<d2>\d{2})(?P<h2>\d{2})",
-        validity_token
-    )
-    if not m:
-        return {
-            "valid_from_display": "N/A",
-            "valid_to_display": "N/A",
-            "valid_from_dt": None,
-            "valid_to_dt": None,
-        }
-
-    d1 = int(m.group("d1"))
-    h1 = int(m.group("h1"))
-    d2 = int(m.group("d2"))
-    h2 = int(m.group("h2"))
-
-    start_dt = _safe_build_dt(d1, h1, 0)
-    end_dt = _safe_build_dt(d2, h2, 0)
-
-    if start_dt is None:
-        start_disp = "N/A"
-    else:
-        start_disp = start_dt.strftime("%d %b %HZ")
-
-    if end_dt is None:
-        end_disp = "N/A"
-    else:
-        end_disp = end_dt.strftime("%d %b %HZ")
-
-    return {
-        "valid_from_display": start_disp,
-        "valid_to_display": end_disp,
-        "valid_from_dt": start_dt,
-        "valid_to_dt": end_dt,
-    }
+def _simplify_detail_value(value: Any) -> Any:
+    if isinstance(value, MutableMapping):
+        preferred_keys = ("repr", "text", "raw", "string")
+        numeric_keys = ("value", "visibility", "minValue", "maxValue")
+        for key in preferred_keys:
+            if key in value:
+                simplified = _simplify_detail_value(value[key])
+                if simplified not in (None, "", []):
+                    return simplified
+        for key in numeric_keys:
+            if key in value:
+                simplified = _simplify_detail_value(value[key])
+                if simplified not in (None, "", []):
+                    return simplified
+        return json.dumps(value)
+    if isinstance(value, (list, tuple)):
+        parts = [
+            str(_simplify_detail_value(item))
+            for item in value
+            if _simplify_detail_value(item) not in (None, "", [])
+        ]
+        return ", ".join(parts) if parts else None
+    return value
 
 
-###############################################################################
-# TAF parsing helpers
-###############################################################################
+def _iter_forecast_candidates(value: Any) -> Iterable[MutableMapping[str, Any]]:
+    """Yield potential forecast period dictionaries from varied structures."""
 
-def _parse_single_taf_block(raw_block: str) -> Optional[Dict[str, object]]:
-    """
-    Parse one TAF bulletin in "raw" AviationWeather format:
-      TAF CYKF 281340Z 2814/2914 24012KT P6SM SCT020 ...
-    or with AMD/COR:
-      TAF AMD CYKF 281400Z 2814/2914 ...
+    def _walk(item: Any) -> Iterable[Any]:
+        if item in (None, "", []):
+            return
+        if isinstance(item, str):
+            text = item.strip()
+            if not text:
+                return
+            try:
+                parsed = json.loads(text)
+            except (TypeError, ValueError):
+                return
+            yield from _walk(parsed)
+            return
+        if isinstance(item, MutableMapping):
+            yield item
+            handled_ids: set[int] = set()
+            for key in FORECAST_CONTAINER_KEYS:
+                if key in item:
+                    child = item[key]
+                    handled_ids.add(id(child))
+                    yield from _walk(child)
+            for value in item.values():
+                if id(value) in handled_ids:
+                    continue
+                if isinstance(value, (MutableMapping, list, tuple, set)):
+                    yield from _walk(value)
+                elif isinstance(value, str):
+                    yield from _walk(value)
+            return
+        if isinstance(item, Iterable) and not isinstance(item, (bytes, bytearray)):
+            for sub in item:
+                yield from _walk(sub)
 
-    We extract:
-      station
-      issue_time / issue_time_display
-      valid_from_display / valid_to_display
-      raw
-      forecast (empty list for now)
-    """
-    # normalize whitespace
-    raw_block = " ".join(raw_block.replace("\n", " ").split())
-    tokens = raw_block.split()
-    if not tokens or tokens[0] != "TAF":
-        return None
-
-    idx = 1
-    if idx < len(tokens) and tokens[idx] in ("AMD", "COR", "RTD"):
-        idx += 1
-
-    if idx >= len(tokens):
-        return None
-    station = tokens[idx].upper().strip()
-
-    issue_token = tokens[idx + 1] if (idx + 1) < len(tokens) else ""
-    validity_token = tokens[idx + 2] if (idx + 2) < len(tokens) else ""
-
-    issue_dt, issue_disp = _parse_issue_time(issue_token)
-    validity_info = _parse_valid_period(validity_token)
-
-    taf_dict = {
-        "station": station,
-        "issue_time": issue_dt,
-        "issue_time_display": issue_disp,
-        "valid_from_display": validity_info["valid_from_display"],
-        "valid_to_display": validity_info["valid_to_display"],
-        "raw": raw_block,
-        "forecast": [],        # you can expand this later if you want segment tables
-        "is_fallback": False,  # may flip to True later
-        # "fallback_distance_nm": float(...)
-        # "fallback_radius_nm": float(...)
-    }
-    return taf_dict
+    seen: set[int] = set()
+    for candidate in _walk(value):
+        if not isinstance(candidate, MutableMapping):
+            continue
+        candidate_id = id(candidate)
+        if candidate_id in seen:
+            continue
+        seen.add(candidate_id)
+        if any(key in candidate for key in FORECAST_RELEVANT_KEYS):
+            yield candidate
 
 
-def _parse_all_tafs(raw_text: str) -> List[Dict[str, object]]:
-    """
-    AviationWeather returns multiple bulletins concatenated. We'll split them.
-    Pattern: "TAF " ... up to next " TAF " or end.
-    """
-    if not raw_text:
+def build_detail_list(data_dict: Any, field_map: Iterable[Tuple[Iterable[str], str]]) -> List[Tuple[str, Any]]:
+    if not isinstance(data_dict, MutableMapping):
         return []
 
-    pattern = re.compile(r"\bTAF\b.*?(?=(?:\sTAF\b|$))", re.DOTALL)
-    blocks = pattern.findall(raw_text)
-
-    tafs: List[Dict[str, object]] = []
-    for block in blocks:
-        taf_obj = _parse_single_taf_block(block.strip())
-        if taf_obj:
-            tafs.append(taf_obj)
-
-    return tafs
-
-
-###############################################################################
-# Airport coordinate database loader
-###############################################################################
-
-def _load_airport_coords_db() -> None:
-    """
-    Populate _AIRPORT_COORDS from Airport TZ.txt if not loaded yet.
-
-    Expected CSV columns from your file dump look like:
-    0: ICAO
-    1: IATA
-    2: Name
-    3: City
-    4: Subd / Province / State
-    5: Country
-    6: Elevation (ft)
-    7: Lat (decimal degrees)
-    8: Lon (decimal degrees)
-    9: TZ
-    10: LID (local id)
-
-    Example row (Stratford, Ontario):
-    "CYSA","","Stratford Municipal Airport","Stratford","Ontario","CA",1215,43.4156,-80.9344,"America/Toronto",""
-    """
-    global _AIRPORT_COORDS
-    if _AIRPORT_COORDS:
-        return  # already loaded
-
-    db_path = os.path.join(os.path.dirname(__file__), "Airport TZ.txt")
-
-    try:
-        with open(db_path, newline="", encoding="utf-8") as f:
-            reader = csv.reader(f)
-            for row in reader:
-                # need at least up to lon index
-                if not row or len(row) < 9:
-                    continue
-
-                icao_raw = row[0].strip().strip('"').upper()
-                if not icao_raw or icao_raw == "ICAO":
-                    # skip header or empty rows
-                    continue
-
-                # lat/lon columns are index 7,8 in your file
-                try:
-                    lat_val = float(row[7])
-                    lon_val = float(row[8])
-                except (ValueError, IndexError):
-                    continue
-
-                _AIRPORT_COORDS[icao_raw] = (lat_val, lon_val)
-
-    except OSError:
-        # couldn't open the file -> leave dict empty, we'll fall back to API
-        pass
+    details: List[Tuple[str, Any]] = []
+    for key_spec, label in field_map:
+        value = None
+        for key in key_spec:
+            if key in data_dict and data_dict[key] not in (None, "", []):
+                value = data_dict[key]
+                break
+        if value in (None, "", []):
+            continue
+        simplified = _simplify_detail_value(value)
+        if simplified in (None, "", []):
+            continue
+        details.append((label, simplified))
+    return details
 
 
-###############################################################################
-# Coordinate lookup for a station
-###############################################################################
+def _unwrap_time_value(value: Any) -> Any:
+    """Return the most useful representation of a time-like structure."""
 
-@lru_cache(maxsize=512)
-def _lookup_station_coordinates(station: str) -> Optional[Tuple[float, float]]:
-    """
-    Return (lat, lon) for a station.
+    if isinstance(value, MutableMapping):
+        for key in ("value", "dateTime", "date_time", "iso", "iso8601", "timestamp"):
+            if key in value and value[key] not in (None, "", []):
+                return _unwrap_time_value(value[key])
+        for key in ("repr", "text", "raw", "string"):
+            if key in value and value[key] not in (None, "", []):
+                return value[key]
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        for item in value:
+            candidate = _unwrap_time_value(item)
+            if candidate not in (None, "", []):
+                return candidate
+    return value
 
-    Priority order:
-      1. Your local Airport TZ.txt file (this fixes CYSA/Stratford vs CYSA/Sable Island,
-         and also fills in small aerodromes like CYLS).
-      2. AviationWeather /api/data/stationinfo (as a fallback for anything not in your file).
-    """
-    station = (station or "").upper().strip()
-    if not station:
-        return None
 
-    # 1. local database
-    _load_airport_coords_db()
-    if station in _AIRPORT_COORDS:
-        return _AIRPORT_COORDS[station]
+def _extract_time_field(segment: MutableMapping[str, Any], keys: Sequence[str]) -> Any:
+    for key in keys:
+        if key in segment and segment[key] not in (None, "", []):
+            return _unwrap_time_value(segment[key])
 
-    # 2. fallback to AviationWeather stationinfo
-    url = "https://aviationweather.gov/api/data/stationinfo"
-    params = {"ids": station, "format": "json"}
+    for container_key in ("change", "time", "period", "window", "transition"):
+        nested = segment.get(container_key)
+        if isinstance(nested, MutableMapping):
+            value = _extract_time_field(nested, keys)
+            if value not in (None, "", []):
+                return _unwrap_time_value(value)
+    return None
 
-    try:
-        resp = requests.get(url, params=params, timeout=10)
-        if resp.status_code == 204 or not resp.content.strip():
+
+def _normalise_forecast_segment(segment: MutableMapping[str, Any]) -> MutableMapping[str, Any]:
+    """Augment raw forecast data with legacy-style fields for easier rendering."""
+
+    normalized: Dict[str, Any] = dict(segment)
+
+    wind = normalized.get("wind")
+    if isinstance(wind, MutableMapping):
+        direction = _simplify_detail_value(wind.get("direction"))
+        speed = _simplify_detail_value(
+            wind.get("speed")
+            or wind.get("speedKt")
+            or wind.get("speedKts")
+            or wind.get("speed_kts")
+        )
+        gust = _simplify_detail_value(
+            wind.get("gust")
+            or wind.get("gustKt")
+            or wind.get("gustKts")
+            or wind.get("gust_kts")
+        )
+        if direction not in (None, "", []):
+            normalized.setdefault("windDir", direction)
+        if speed not in (None, "", []):
+            normalized.setdefault("windSpeed", speed)
+        if gust not in (None, "", []):
+            normalized.setdefault("windGust", gust)
+
+    visibility = normalized.get("visibility") or normalized.get("vis")
+    if isinstance(visibility, MutableMapping):
+        vis_value = _simplify_detail_value(visibility)
+        if vis_value not in (None, "", []):
+            normalized.setdefault("visibility", vis_value)
+
+    probability = normalized.get("probability")
+    if isinstance(probability, MutableMapping):
+        prob_value = _simplify_detail_value(probability)
+        if prob_value not in (None, "", []):
+            normalized.setdefault("probability", prob_value)
+
+    for icing_key in ("icing", "icingConditions"):
+        icing_value = normalized.get(icing_key)
+        if isinstance(icing_value, MutableMapping):
+            simplified = _simplify_detail_value(icing_value)
+            if simplified not in (None, "", []):
+                normalized.setdefault("icing", simplified)
+
+    for turb_key in ("turbulence", "turbulenceConditions"):
+        turb_value = normalized.get(turb_key)
+        if isinstance(turb_value, MutableMapping):
+            simplified = _simplify_detail_value(turb_value)
+            if simplified not in (None, "", []):
+                normalized.setdefault("turbulence", simplified)
+
+    weather = normalized.get("weather")
+    if isinstance(weather, Iterable) and not isinstance(weather, (str, bytes, bytearray)):
+        parts: List[str] = []
+        for item in weather:
+            simplified = _simplify_detail_value(item)
+            if simplified in (None, "", []):
+                continue
+            parts.append(str(simplified))
+        normalized["weather"] = parts
+    elif isinstance(weather, MutableMapping):
+        simplified = _simplify_detail_value(weather)
+        if simplified not in (None, "", []):
+            normalized["weather"] = simplified
+
+    return normalized
+
+
+def _normalize_aviationweather_features(data: Any) -> Iterable[Dict[str, Any]]:
+    if isinstance(data, MutableMapping):
+        for key in ("features", "data", "items", "reports"):
+            if key in data and isinstance(data[key], Iterable):
+                for item in data[key]:
+                    if isinstance(item, MutableMapping):
+                        props = item.get("properties")
+                        if isinstance(props, MutableMapping):
+                            yield props  # type: ignore[misc]
+                        elif isinstance(item, MutableMapping):
+                            yield item  # type: ignore[misc]
+                return
+        yield data  # type: ignore[misc]
+    elif isinstance(data, Iterable):
+        for item in data:
+            if isinstance(item, MutableMapping):
+                props = item.get("properties") if isinstance(item, MutableMapping) else None
+                if isinstance(props, MutableMapping):
+                    yield props  # type: ignore[misc]
+                else:
+                    yield item  # type: ignore[misc]
+
+
+def _fallback_parse_raw_taf(
+    raw_taf: str,
+    issue_dt: datetime | None,
+    valid_from_dt: datetime | None,
+    valid_to_dt: datetime | None,
+) -> List[Dict[str, Any]]:
+    """Parse raw TAF text into simple forecast segments when none are provided."""
+
+    if not (raw_taf and issue_dt and valid_from_dt and valid_to_dt):
+        return []
+
+    taf_main = raw_taf.split(" RMK")[0]
+    tokens = taf_main.split()
+
+    idx = 0
+    if idx < len(tokens) and tokens[idx].startswith("TAF"):
+        idx += 1
+    if idx < len(tokens) and re.match(r"^[A-Z]{3,4}$", tokens[idx]):
+        idx += 1
+    if idx < len(tokens) and re.match(r"^\d{6}Z$", tokens[idx]):
+        idx += 1
+    if idx < len(tokens) and re.match(r"^\d{4}/\d{4}$", tokens[idx]):
+        idx += 1
+
+    def _parse_fm(token: str) -> datetime | None:
+        match = re.match(r"FM(\d{2})(\d{2})(\d{2})", token)
+        if not match or not issue_dt:
             return None
-        resp.raise_for_status()
-    except requests.RequestException:
-        return None
+        day = int(match.group(1))
+        hour = int(match.group(2))
+        minute = int(match.group(3))
 
-    try:
-        data = resp.json()
-    except ValueError:
-        return None
+        year = issue_dt.year
+        month = issue_dt.month
+        if day < issue_dt.day - 15:
+            month += 1
+            if month > 12:
+                month = 1
+                year += 1
 
-    # Walk through whatever data shape they return
-    coords_from_api: Optional[Tuple[float, float]] = None
+        return datetime(year, month, day, hour, minute, tzinfo=timezone.utc)
 
-    for props in _normalize_aviationweather_features(data):
-        if not isinstance(props, MutableMapping):
+    def _parse_range_ddhh_ddhh(token: str) -> tuple[datetime | None, datetime | None]:
+        match = re.match(r"^(\d{2})(\d{2})/(\d{2})(\d{2})$", token)
+        if not match or not issue_dt:
+            return (None, None)
+
+        start_day = int(match.group(1))
+        start_hour = int(match.group(2))
+        end_day = int(match.group(3))
+        end_hour = int(match.group(4))
+
+        def _mk(day: int, hour: int) -> datetime:
+            year = issue_dt.year
+            month = issue_dt.month
+            if day < issue_dt.day - 15:
+                month += 1
+                if month > 12:
+                    month = 1
+                    year += 1
+
+            if hour == 24:
+                hour = 0
+                day += 1
+
+            while True:
+                try:
+                    return datetime(year, month, day, hour, 0, tzinfo=timezone.utc)
+                except ValueError:
+                    # handle month rollover when the day exceeds the length of the month
+                    days_in_month = calendar.monthrange(year, month)[1]
+                    day -= days_in_month
+                    month += 1
+                    if month > 12:
+                        month = 1
+                        year += 1
+
+        return (_mk(start_day, start_hour), _mk(end_day, end_hour))
+
+    def _extract_conditions_from_tokens(tokens_list: List[str]) -> List[Tuple[str, str]]:
+        wind_re = re.compile(r"^(?P<dir>\d{3}|VRB)(?P<spd>\d{2,3})(G(?P<gst>\d{2,3}))?KT$")
+        cloud_re = re.compile(r"^(FEW|SCT|BKN|OVC)(\d{3})([A-Z]{2,3})?$")
+
+        wind_dir = wind_spd = wind_gust = None
+        visibility = None
+        weather_codes: List[str] = []
+        cloud_layers: List[str] = []
+
+        for token in tokens_list:
+            wind_match = wind_re.match(token)
+            if wind_match and wind_spd is None:
+                wind_dir = wind_match.group("dir")
+                wind_spd = wind_match.group("spd")
+                wind_gust = wind_match.group("gst")
+                continue
+
+            if visibility is None and (token.endswith("SM") or token == "P6SM"):
+                visibility = token
+                continue
+
+            cloud_match = cloud_re.match(token)
+            if cloud_match:
+                coverage = cloud_match.group(1)
+                base_hundreds = int(cloud_match.group(2))
+                suffix = cloud_match.group(3) or ""
+                base_ft = base_hundreds * 100
+                cloud_layers.append(f"{coverage} {base_ft}ft{suffix}")
+                continue
+
+            if re.match(r"^[-+A-Z]{2,}$", token) and not token.endswith("KT"):
+                weather_codes.append(token)
+
+        details: List[Tuple[str, str]] = []
+        if wind_dir or wind_spd or wind_gust:
+            if wind_dir:
+                details.append(("Wind Dir (°)", wind_dir))
+            if wind_spd:
+                details.append(("Wind Speed (kt)", wind_spd))
+            if wind_gust:
+                details.append(("Wind Gust (kt)", wind_gust))
+        if visibility:
+            details.append(("Visibility", visibility))
+        if weather_codes:
+            details.append(("Weather", ", ".join(weather_codes)))
+        if cloud_layers:
+            details.append(("Clouds", ", ".join(cloud_layers)))
+
+        return details
+
+    segs_raw: List[Tuple[datetime, List[str], List[Dict[str, Any]]]] = []
+    cur_start = valid_from_dt
+    cur_tokens: List[str] = []
+    cur_tempo: List[Dict[str, Any]] = []
+
+    i = idx
+    while i < len(tokens):
+        token = tokens[i]
+
+        fm_dt = _parse_fm(token)
+        if fm_dt:
+            if cur_start:
+                segs_raw.append((cur_start, list(cur_tokens), list(cur_tempo)))
+            cur_start = fm_dt
+            cur_tokens = []
+            cur_tempo = []
+            i += 1
             continue
 
-        lat = _coerce_float(
-            props.get("lat")
-            or props.get("latitude")
-            or props.get("stationLatitude")
-            or props.get("latitudeDeg")
-            or props.get("latitude_deg")
-        )
-        lon = _coerce_float(
-            props.get("lon")
-            or props.get("longitude")
-            or props.get("stationLongitude")
-            or props.get("longitudeDeg")
-            or props.get("longitude_deg")
-        )
+        if token == "TEMPO":
+            i += 1
+            tempo_start = tempo_end = None
+            if i < len(tokens) and re.match(r"^\d{4}/\d{4}$", tokens[i]):
+                tempo_start, tempo_end = _parse_range_ddhh_ddhh(tokens[i])
+                i += 1
 
-        if lat is not None and lon is not None:
-            coords_from_api = (lat, lon)
-            break
-
-        # Sometimes stationinfo comes back more GeoJSON-y:
-        geom = props.get("geometry") if isinstance(props, dict) else None
-        if isinstance(geom, dict):
-            coords_list = geom.get("coordinates")
-            if (
-                isinstance(coords_list, (list, tuple))
-                and len(coords_list) >= 2
-            ):
-                # [lon, lat] typical GeoJSON
-                lon_try = _coerce_float(coords_list[0])
-                lat_try = _coerce_float(coords_list[1])
-                if lat_try is not None and lon_try is not None:
-                    coords_from_api = (lat_try, lon_try)
+            tempo_tokens: List[str] = []
+            while i < len(tokens):
+                peek = tokens[i]
+                if peek in ("TEMPO", "BECMG") or peek.startswith("PROB") or _parse_fm(peek):
                     break
+                tempo_tokens.append(peek)
+                i += 1
 
-    return coords_from_api
+            tempo_details = _extract_conditions_from_tokens(tempo_tokens)
+            cur_tempo.append(
+                {
+                    "start": tempo_start or cur_start,
+                    "end": tempo_end or valid_to_dt,
+                    "prob": None,
+                    "details": tempo_details,
+                }
+            )
+            continue
 
+        if token.startswith("PROB") and re.match(r"^PROB\d{2}$", token):
+            prob_token = token
+            i += 1
 
-###############################################################################
-# Distance / bbox helpers
-###############################################################################
+            if i < len(tokens) and tokens[i] == "TEMPO":
+                i += 1
 
-def _haversine_distance_nm(lat1: float, lon1: float,
-                           lat2: float, lon2: float) -> float:
-    """Great-circle distance in nautical miles."""
-    rlat1 = math.radians(lat1)
-    rlon1 = math.radians(lon1)
-    rlat2 = math.radians(lat2)
-    rlon2 = math.radians(lon2)
+            tempo_start = tempo_end = None
+            if i < len(tokens) and re.match(r"^\d{4}/\d{4}$", tokens[i]):
+                tempo_start, tempo_end = _parse_range_ddhh_ddhh(tokens[i])
+                i += 1
 
-    dlat = rlat2 - rlat1
-    dlon = rlon2 - rlon1
+            tempo_tokens: List[str] = []
+            while i < len(tokens):
+                peek = tokens[i]
+                if peek in ("TEMPO", "BECMG") or peek.startswith("PROB") or _parse_fm(peek):
+                    break
+                tempo_tokens.append(peek)
+                i += 1
 
-    a = (
-        math.sin(dlat / 2) ** 2
-        + math.cos(rlat1) * math.cos(rlat2) * math.sin(dlon / 2) ** 2
-    )
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+            tempo_details = _extract_conditions_from_tokens(tempo_tokens)
+            cur_tempo.append(
+                {
+                    "start": tempo_start or cur_start,
+                    "end": tempo_end or valid_to_dt,
+                    "prob": prob_token,
+                    "details": tempo_details,
+                }
+            )
+            continue
 
-    return EARTH_RADIUS_NM * c
+        if token.startswith("BECMG"):
+            i += 1
+            if i < len(tokens) and re.match(r"^\d{4}/\d{4}$", tokens[i]):
+                i += 1
+            continue
 
+        if cur_start:
+            cur_tokens.append(token)
+        i += 1
 
-def _make_bbox(lat: float, lon: float, radius_nm: float) -> str:
-    """
-    Build a bounding box string for AviationWeather /api/data/taf.
+    if cur_start:
+        segs_raw.append((cur_start, list(cur_tokens), list(cur_tempo)))
 
-    AviationWeather wants bbox as "lat0,lon0,lat1,lon1"
-    corresponding (roughly) to SW corner then NE corner.
+    segments: List[Dict[str, Any]] = []
 
-    We'll approximate the circle radius_nm with a square:
-      1 deg latitude ~ 60 NM
-      1 deg longitude ~ 60 NM * cos(latitude)
-    """
-    dlat = radius_nm / 60.0
-    cos_lat = math.cos(math.radians(lat))
-    if abs(cos_lat) < 1e-6:
-        dlon = radius_nm / 60.0
-    else:
-        dlon = radius_nm / (60.0 * cos_lat)
-
-    min_lat = lat - dlat
-    max_lat = lat + dlat
-    min_lon = lon - dlon
-    max_lon = lon + dlon
-
-    # bbox=lat0,lon0,lat1,lon1 (SW lat/lon, NE lat/lon)
-    return f"{min_lat:.4f},{min_lon:.4f},{max_lat:.4f},{max_lon:.4f}"
-
-
-###############################################################################
-# Raw TAF fetcher
-###############################################################################
-
-def _fetch_taf_text(params: Dict[str, str]) -> str:
-    """
-    Call AviationWeather /api/data/taf.
-
-    We'll request "raw" format because it's consistent and easy to parse,
-    and it's valid for both ids=... and bbox=...
-
-    If the API returns 400 because it doesn't like extra params,
-    we retry with only the essentials.
-    """
-    base_url = "https://aviationweather.gov/api/data/taf"
-
-    try:
-        r = requests.get(base_url, params=params, timeout=10)
-        # 204 or blank -> no data
-        if r.status_code == 204 or not r.text.strip():
-            return ""
-        r.raise_for_status()
-        return r.text
-    except requests.HTTPError as exc:
-        status_code = getattr(exc.response, "status_code", None)
-        if status_code == 400:
-            # strip to bare essentials: just ids or bbox
-            fallback_params = {}
-            if "ids" in params:
-                fallback_params["ids"] = params["ids"]
-            if "bbox" in params:
-                fallback_params["bbox"] = params["bbox"]
-
-            r2 = requests.get(base_url, params=fallback_params, timeout=10)
-            if r2.status_code == 204 or not r2.text.strip():
-                return ""
-            r2.raise_for_status()
-            return r2.text
+    for index, (segment_start, segment_tokens, segment_tempo) in enumerate(segs_raw):
+        if index + 1 < len(segs_raw):
+            segment_end = segs_raw[index + 1][0]
         else:
-            raise
-    except requests.RequestException:
-        return ""
+            segment_end = valid_to_dt
 
+        prevailing_details = _extract_conditions_from_tokens(segment_tokens)
 
-###############################################################################
-# Fallback / nearest-TAF search
-###############################################################################
+        tempo_blocks: List[Dict[str, Any]] = []
+        for tempo_block in segment_tempo:
+            block_start = tempo_block.get("start") or segment_start
+            block_end = tempo_block.get("end") or segment_end
+            tempo_blocks.append(
+                {
+                    "start": block_start,
+                    "end": block_end,
+                    "prob": tempo_block.get("prob"),
+                    "details": tempo_block.get("details", []),
+                }
+            )
 
-def _fetch_nearby_taf_report(station_id: str) -> Optional[Dict[str, object]]:
-    """
-    Try to "borrow" a TAF from the nearest reporting aerodrome if this station
-    doesn't have its own TAF.
-
-    Steps:
-      1. Get coords for the requested station (from Airport TZ.txt or API).
-      2. Expand radius 60 -> 90 -> 120 -> 180 NM.
-      3. For each radius:
-         - Build bbox around that point.
-         - Query /api/data/taf?bbox=...&time=issue&format=raw
-         - Parse all TAFs returned.
-         - For each TAF, get that TAF station's coords.
-         - Skip if it's literally the same station_id we're looking up.
-         - Compute distance. Track the closest.
-      4. Return the closest as fallback with "is_fallback": True
-         and distance metadata.
-    """
-    station_id = (station_id or "").upper().strip()
-    if not station_id:
-        return None
-
-    base_coords = _lookup_station_coordinates(station_id)
-    if not base_coords:
-        return None
-
-    base_lat, base_lon = base_coords
-
-    best_entry = None
-    best_dist = None
-    best_radius = None
-
-    for radius_nm in FALLBACK_TAF_SEARCH_RADII_NM:
-        bbox_str = _make_bbox(base_lat, base_lon, radius_nm)
-
-        taf_text = _fetch_taf_text(
+        segments.append(
             {
-                "bbox": bbox_str,
-                "time": "issue",
-                "format": "raw",
+                "from_display": segment_start.strftime("%b %d %Y, %H:%MZ"),
+                "from_time": segment_start,
+                "to_display": segment_end.strftime("%b %d %Y, %H:%MZ") if segment_end else "N/A",
+                "to_time": segment_end,
+                "details": prevailing_details,
+                "tempo": tempo_blocks,
             }
         )
 
-        taf_list = _parse_all_tafs(taf_text)
-        if not taf_list:
-            continue
-
-        for taf in taf_list:
-            taf_station = taf.get("station")
-            if not taf_station:
-                continue
-
-            # don't "fallback" to the same station (useless,
-            # and also protects you from cases where NOAA thinks
-            # CYSA is Sable Island and just returns itself)
-            if taf_station.upper().strip() == station_id:
-                continue
-
-            their_coords = _lookup_station_coordinates(taf_station)
-            if not their_coords:
-                continue
-
-            dist_nm = _haversine_distance_nm(
-                base_lat,
-                base_lon,
-                their_coords[0],
-                their_coords[1],
-            )
-
-            if best_entry is None or dist_nm < (best_dist or 1e9):
-                candidate = dict(taf)
-                candidate["is_fallback"] = True
-                candidate["fallback_distance_nm"] = dist_nm
-                candidate["fallback_radius_nm"] = radius_nm
-                best_entry = candidate
-                best_dist = dist_nm
-                best_radius = radius_nm
-
-        # Once we found any candidate in this radius, stop expanding.
-        if best_entry is not None:
-            break
-
-    return best_entry
+    return segments
 
 
-###############################################################################
-# Public main: get_taf_reports
-###############################################################################
-
-def get_taf_reports(icao_codes: List[str]) -> Dict[str, List[Dict[str, object]]]:
-    """
-    Main entry point your Streamlit app calls.
-
-    Input: list like ["CYLS", "CYSA"]
-    Output: dict like:
-      {
-        "CYLS": [ { taf_dict }, ... ],
-        "CYSA": [ { taf_dict }, ... ],
-      }
-
-    Each taf_dict contains:
-      station
-      issue_time
-      issue_time_display
-      valid_from_display
-      valid_to_display
-      raw
-      forecast
-      is_fallback (bool)
-      fallback_distance_nm (float, only if is_fallback)
-      fallback_radius_nm (float, only if is_fallback)
-    """
-    # normalize + dedupe while preserving order
-    clean_codes: List[str] = []
-    for code in icao_codes:
-        if not code:
-            continue
-        up = code.strip().upper()
-        if up and up not in clean_codes:
-            clean_codes.append(up)
-
-    if not clean_codes:
+def get_taf_reports(icao_codes: Sequence[str]) -> Dict[str, List[Dict[str, Any]]]:
+    if not icao_codes:
         return {}
 
-    results: Dict[str, List[Dict[str, object]]] = {code: [] for code in clean_codes}
+    url = "https://aviationweather.gov/api/data/taf"
+    params = {
+        "ids": ",".join(sorted({code.upper() for code in icao_codes if code})),
+        "format": "json",
+        "mostRecent": "true",
+    }
 
-    # 1. Ask AviationWeather for direct TAFs for all requested stations
-    taf_text = _fetch_taf_text(
-        {
-            "ids": ",".join(clean_codes),
-            "time": "issue",
-            "format": "raw",
-        }
-    )
+    try:
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+    except requests.HTTPError as exc:
+        status_code = getattr(exc.response, "status_code", None)
+        if status_code == 400:
+            fallback_params = {"ids": params["ids"], "format": "json"}
+            response = requests.get(url, params=fallback_params, timeout=10)
+            response.raise_for_status()
+        else:
+            raise
 
-    taf_list = _parse_all_tafs(taf_text)
+    data = response.json()
+    taf_reports: Dict[str, List[Dict[str, Any]]] = {}
 
-    # Group by issuing station
-    grouped: Dict[str, List[Dict[str, object]]] = {}
-    for taf in taf_list:
-        stn = taf.get("station")
-        if not stn:
-            continue
-        grouped.setdefault(stn, []).append(taf)
-
-    # Keep newest TAF per station
-    for stn, tafs in grouped.items():
-        tafs_sorted = sorted(
-            tafs,
-            key=lambda t: t.get("issue_time") or datetime.min,
-            reverse=True,
+    for props in _normalize_aviationweather_features(data):
+        station = (
+            props.get("station")
+            or props.get("stationId")
+            or props.get("icaoId")
+            or props.get("icao_id")
+            or ""
         )
-        grouped[stn] = [tafs_sorted[0]]
-
-    # Fill direct hits
-    for code in clean_codes:
-        if code in grouped:
-            direct_taf = dict(grouped[code][0])
-            direct_taf["is_fallback"] = False
-            direct_taf.pop("fallback_distance_nm", None)
-            direct_taf.pop("fallback_radius_nm", None)
-            results[code] = [direct_taf]
-
-    # 2. For any station still empty, try nearest fallback
-    for code in clean_codes:
-        if results[code]:
+        station = str(station).upper()
+        if not station:
             continue
-        nearby = _fetch_nearby_taf_report(code)
-        if nearby:
-            results[code] = [nearby]
 
-    return results
+        issue_display, issue_dt = format_iso_timestamp(
+            props.get("issueTime")
+            or props.get("issue_time")
+            or props.get("obsTime")
+            or props.get("obs_time")
+            or props.get("bulletinTime")
+        )
+        valid_from_display, valid_from_dt = format_iso_timestamp(
+            props.get("validTimeFrom") or props.get("valid_time_from")
+        )
+        valid_to_display, valid_to_dt = format_iso_timestamp(
+            props.get("validTimeTo") or props.get("valid_time_to")
+        )
+        raw_text = (
+            props.get("rawTAF")
+            or props.get("rawText")
+            or props.get("raw")
+            or props.get("raw_text")
+            or ""
+        )
+
+        forecast_periods: List[Dict[str, Any]] = []
+        forecast_source = (
+            props.get("forecast")
+            or props.get("forecastList")
+            or props.get("periods")
+            or []
+        )
+        for fc in _iter_forecast_candidates(forecast_source):
+            if not isinstance(fc, MutableMapping):
+                continue
+            fc_processed = _normalise_forecast_segment(fc)
+            from_value = _extract_time_field(fc_processed, TIME_FROM_FIELDS)
+            to_value = _extract_time_field(fc_processed, TIME_TO_FIELDS)
+            fc_from_display, fc_from_dt = format_iso_timestamp(from_value)
+            fc_to_display, fc_to_dt = format_iso_timestamp(to_value)
+            fc_details = build_detail_list(fc_processed, TAF_FORECAST_FIELDS)
+
+            wx = (
+                fc_processed.get("wxString")
+                or fc_processed.get("weather")
+                or fc_processed.get("wx_string")
+            )
+            if wx:
+                if isinstance(wx, Iterable) and not isinstance(wx, (str, bytes, bytearray)):
+                    parts = []
+                    for item in wx:
+                        simplified = _simplify_detail_value(item)
+                        if simplified in (None, "", []):
+                            continue
+                        parts.append(str(simplified))
+                    wx = ", ".join(parts)
+                fc_details.append(("Weather", wx))
+
+            clouds = (
+                fc_processed.get("clouds")
+                or fc_processed.get("cloudList")
+                or fc_processed.get("skyCondition")
+                or fc_processed.get("sky_condition")
+            )
+            if isinstance(clouds, str):
+                try:
+                    parsed_clouds = json.loads(clouds)
+                except (TypeError, ValueError):
+                    parsed_clouds = []
+                clouds = parsed_clouds
+            if isinstance(clouds, Iterable) and not isinstance(clouds, (str, bytes, bytearray)):
+                cloud_iterable = clouds
+            else:
+                cloud_iterable = []
+            if isinstance(cloud_iterable, Iterable):
+                cloud_parts: List[str] = []
+                for cloud in cloud_iterable:
+                    if not isinstance(cloud, MutableMapping):
+                        continue
+                    cover = (
+                        cloud.get("cover")
+                        or cloud.get("cloudCover")
+                        or cloud.get("cloud_cover")
+                        or cloud.get("skyCover")
+                        or cloud.get("amount")
+                        or cloud.get("repr")
+                    )
+                    base = (
+                        cloud.get("base")
+                        or cloud.get("base_feet")
+                        or cloud.get("cloudBaseFT")
+                        or cloud.get("cloudBaseFt")
+                        or cloud.get("baseFeetAGL")
+                        or cloud.get("base_feet_agl")
+                        or cloud.get("baseFeet")
+                    )
+                    if isinstance(base, MutableMapping):
+                        base = (
+                            base.get("value")
+                            or base.get("feet")
+                            or base.get("repr")
+                            or base.get("minValue")
+                            or base.get("maxValue")
+                        )
+                    if cover and base:
+                        cloud_parts.append(f"{cover} {base}ft")
+                    elif cover:
+                        cloud_parts.append(str(cover))
+                if cloud_parts:
+                    fc_details.append(("Clouds", ", ".join(cloud_parts)))
+
+            forecast_periods.append(
+                {
+                    "from_display": fc_from_display,
+                    "from_time": fc_from_dt,
+                    "to_display": fc_to_display,
+                    "to_time": fc_to_dt,
+                    "details": fc_details,
+                }
+            )
+
+        if not forecast_periods:
+            forecast_periods = _fallback_parse_raw_taf(
+                raw_text,
+                issue_dt,
+                valid_from_dt,
+                valid_to_dt,
+            )
+
+        taf_reports.setdefault(station, []).append(
+            {
+                "station": station,
+                "raw": raw_text,
+                "issue_time_display": issue_display,
+                "issue_time": issue_dt,
+                "valid_from_display": valid_from_display,
+                "valid_from": valid_from_dt,
+                "valid_to_display": valid_to_display,
+                "valid_to": valid_to_dt,
+                "forecast": forecast_periods,
+            }
+        )
+
+    return taf_reports
+
+
+__all__ = ["TAF_FORECAST_FIELDS", "build_detail_list", "format_iso_timestamp", "get_taf_reports"]
