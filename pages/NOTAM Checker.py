@@ -1039,6 +1039,8 @@ def get_metar_reports(icao_codes: tuple[str, ...]):
 
     try:
         response = requests.get(url, params=params, timeout=10)
+        if response.status_code == 204 or not response.content.strip():
+            return {}
         response.raise_for_status()
     except requests.HTTPError as exc:
         status_code = getattr(exc.response, "status_code", None)
@@ -1049,11 +1051,16 @@ def get_metar_reports(icao_codes: tuple[str, ...]):
                 "hours": 3,
             }
             response = requests.get(url, params=fallback_params, timeout=10)
+            if response.status_code == 204 or not response.content.strip():
+                return {}
             response.raise_for_status()
         else:
             raise
 
-    data = response.json()
+    try:
+        data = response.json()
+    except ValueError:
+        return {}
 
     reports = {}
     for props in _normalize_aviationweather_features(data):
@@ -1139,6 +1146,8 @@ def get_taf_reports(icao_codes: tuple[str, ...]):
 
     try:
         response = requests.get(url, params=params, timeout=10)
+        if response.status_code == 204 or not response.content.strip():
+            return {}
         response.raise_for_status()
     except requests.HTTPError as exc:
         status_code = getattr(exc.response, "status_code", None)
@@ -1148,11 +1157,16 @@ def get_taf_reports(icao_codes: tuple[str, ...]):
                 "format": "json",
             }
             response = requests.get(url, params=fallback_params, timeout=10)
+            if response.status_code == 204 or not response.content.strip():
+                return {}
             response.raise_for_status()
         else:
             raise
 
-    data = response.json()
+    try:
+        data = response.json()
+    except ValueError:
+        return {}
 
     taf_reports = {}
 
