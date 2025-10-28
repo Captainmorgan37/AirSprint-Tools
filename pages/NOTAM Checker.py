@@ -1139,6 +1139,7 @@ def get_taf_reports_cached(icao_codes: tuple[str, ...]):
     if not icao_codes:
         return {}
 
+    # Pass a list, because the util expects a Sequence[str]
     return _taf_core(list(icao_codes))
 
 
@@ -1700,11 +1701,12 @@ with tab2:
 
         st.write("DEBUG requested stations:", unique_codes)
 
-        try:
-            taf_reports = get_taf_reports_cached(tuple(unique_codes))
-        except Exception as e:
-            taf_reports = {}
-            st.warning(f"Failed to retrieve TAF data: {e}")
+        # call the cached wrapper
+        taf_reports = get_taf_reports_cached(tuple(unique_codes))
+        st.write("DEBUG taf_reports returned:", taf_reports)
+
+        coords_debug = {code: _lookup_station_coordinates(code) for code in unique_codes}
+        st.write("DEBUG coords lookup:", coords_debug)
 
         st.write("DEBUG taf_reports returned:", taf_reports)
 
