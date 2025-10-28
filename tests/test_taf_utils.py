@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 import pytest
+import requests
 
 import sys
 
@@ -253,3 +254,134 @@ def test_get_taf_reports_unwraps_nested_time_values(monkeypatch: pytest.MonkeyPa
 
     assert second["from_time"] == datetime(2025, 10, 26, 14, 0, tzinfo=timezone.utc)
     assert second["to_time"] == datetime(2025, 10, 26, 16, 0, tzinfo=timezone.utc)
+
+
+def test_get_taf_reports_falls_back_to_nearby_station(monkeypatch: pytest.MonkeyPatch):
+    primary_payload = {"features": []}
+    fallback_payload = {
+        "data": {
+            "TAF": [
+                {
+                    "stationId": "CYUL",
+                    "issueTime": "2025-10-25T17:40:00Z",
+                    "validTimeFrom": "2025-10-25T18:00:00Z",
+                    "validTimeTo": "2025-10-26T24:00:00Z",
+                    "rawText": "TAF CYUL 251740Z 2518/2624 30008KT",
+                    "forecast": [
+                        _build_forecast_segment(
+                            "2025-10-25T18:00:00Z",
+                            "2025-10-26T02:00:00Z",
+                            windDir=300,
+                            windSpeed=8,
+                            visibilitySM="P6SM",
+                        )
+                    ],
+                    "distanceNm": 42.0,
+                }
+            ]
+        }
+    }
+
+    calls = []
+
+    def fake_get(url: str, params: Dict[str, Any], timeout: int) -> DummyResponse:
+        calls.append((url, params))
+        if "dataserver_current" in url and params.get("dataSource") == "stations":
+            return DummyResponse(
+                {
+                    "data": {
+                        "STATION": [
+                            {
+                                "station": "CYHU",
+                                "latitude": 45.517,
+                                "longitude": -73.417,
+                            }
+                        ]
+                    }
+                }
+            )
+        if "dataserver_current" in url:
+            assert params["radialDistance"].startswith("60;CYHU")
+            return DummyResponse(fallback_payload)
+        assert "api/data/taf" in url
+        return DummyResponse(primary_payload)
+
+    monkeypatch.setattr(taf_utils.requests, "get", fake_get)
+
+    reports = taf_utils.get_taf_reports(["CYHU"])
+
+    assert len(calls) == 3
+    assert "CYHU" in reports
+    fallback_entries = reports["CYHU"]
+    assert fallback_entries
+    report = fallback_entries[0]
+    assert report["station"] == "CYUL"
+    assert report["requested_station"] == "CYHU"
+    assert report["is_fallback"] is True
+    assert report["fallback_radius_nm"] == 60
+    assert report["fallback_distance_nm"] == 42.0
+
+
+def test_fallback_search_uses_station_coordinates_when_needed(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    primary_payload = {"features": []}
+
+    station_lookup_payload = {
+        "data": {
+            "STATION": [
+                {
+                    "station": "CYSA",
+                    "latitude": 48.3306,
+                    "longitude": -70.9964,
+                }
+            ]
+        }
+    }
+
+    fallback_payload = {
+        "data": {
+            "TAF": [
+                {
+                    "station": "CYBG",
+                    "issueTime": "2025-10-25T17:40:00Z",
+                    "validTimeFrom": "2025-10-25T18:00:00Z",
+                    "validTimeTo": "2025-10-26T24:00:00Z",
+                    "rawText": "TAF CYBG 251740Z 2518/2624 30008KT",
+                    "forecast": [
+                        _build_forecast_segment(
+                            "2025-10-25T18:00:00Z",
+                            "2025-10-26T02:00:00Z",
+                            windDir=300,
+                            windSpeed=8,
+                            visibilitySM="P6SM",
+                        )
+                    ],
+                    "distanceNm": 7.0,
+                }
+            ]
+        }
+    }
+
+    def fake_get(url: str, params: Dict[str, Any], timeout: int) -> DummyResponse:
+        if "api/data/taf" in url:
+            return DummyResponse(primary_payload)
+        if params.get("dataSource") == "stations":
+            return DummyResponse(station_lookup_payload)
+        radial = params.get("radialDistance")
+        if radial == "60;CYSA":
+            raise requests.HTTPError(response=type("R", (), {"status_code": 400})())
+        assert radial == "60;48.3306,-70.9964"
+        return DummyResponse(fallback_payload)
+
+    monkeypatch.setattr(taf_utils.requests, "get", fake_get)
+
+    reports = taf_utils.get_taf_reports(["CYSA"])
+
+    assert "CYSA" in reports
+    report = reports["CYSA"][0]
+    assert report["station"] == "CYBG"
+    assert report["requested_station"] == "CYSA"
+    assert report["is_fallback"] is True
+    assert report["fallback_radius_nm"] == 60
+    assert report["fallback_distance_nm"] == 7.0

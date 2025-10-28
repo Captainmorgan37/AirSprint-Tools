@@ -88,6 +88,9 @@ TIME_TO_FIELDS: Tuple[str, ...] = (
 )
 
 
+FALLBACK_TAF_SEARCH_RADII_NM: Tuple[int, ...] = (60, 90, 120, 180)
+
+
 def format_iso_timestamp(value: Any) -> Tuple[str, datetime | None]:
     """Return a human-readable timestamp and a timezone-aware datetime."""
 
@@ -331,14 +334,37 @@ def _normalise_forecast_segment(segment: MutableMapping[str, Any]) -> MutableMap
 def _normalize_aviationweather_features(data: Any) -> Iterable[Dict[str, Any]]:
     if isinstance(data, MutableMapping):
         for key in ("features", "data", "items", "reports"):
-            if key in data and isinstance(data[key], Iterable):
-                for item in data[key]:
+            if key in data:
+                queue: List[Any] = []
+                container = data[key]
+                if isinstance(container, MutableMapping):
+                    queue.extend(container.values())
+                elif isinstance(container, Iterable) and not isinstance(
+                    container, (str, bytes, bytearray)
+                ):
+                    queue.extend(list(container))
+
+                while queue:
+                    item = queue.pop(0)
                     if isinstance(item, MutableMapping):
                         props = item.get("properties")
                         if isinstance(props, MutableMapping):
                             yield props  # type: ignore[misc]
-                        elif isinstance(item, MutableMapping):
+                        else:
                             yield item  # type: ignore[misc]
+                        for value in item.values():
+                            if isinstance(value, MutableMapping) or (
+                                isinstance(value, Iterable)
+                                and not isinstance(value, (str, bytes, bytearray))
+                            ):
+                                if isinstance(value, MutableMapping):
+                                    queue.extend(value.values())
+                                else:
+                                    queue.extend(list(value))
+                    elif isinstance(item, Iterable) and not isinstance(
+                        item, (str, bytes, bytearray)
+                    ):
+                        queue.extend(list(item))
                 return
         yield data  # type: ignore[misc]
     elif isinstance(data, Iterable):
@@ -349,6 +375,14 @@ def _normalize_aviationweather_features(data: Any) -> Iterable[Dict[str, Any]]:
                     yield props  # type: ignore[misc]
                 else:
                     yield item  # type: ignore[misc]
+            elif isinstance(item, Iterable) and not isinstance(item, (str, bytes, bytearray)):
+                for sub in item:
+                    if isinstance(sub, MutableMapping):
+                        props = sub.get("properties") if isinstance(sub, MutableMapping) else None
+                        if isinstance(props, MutableMapping):
+                            yield props  # type: ignore[misc]
+                        else:
+                            yield sub  # type: ignore[misc]
 
 
 def _fallback_parse_raw_taf(
@@ -606,13 +640,321 @@ def _fallback_parse_raw_taf(
     return segments
 
 
+def _coerce_float(value: Any) -> float | None:
+    if isinstance(value, str):
+        value = value.strip()
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
+def _extract_distance_nm(props: MutableMapping[str, Any]) -> float | None:
+    for key in ("distanceNm", "distanceNM", "distance_nm"):
+        distance = _coerce_float(props.get(key))
+        if distance is not None:
+            return distance
+
+    for key in ("distanceSm", "distanceSM", "distance_sm"):
+        distance = _coerce_float(props.get(key))
+        if distance is not None:
+            return distance * 0.868976
+
+    for key in ("distanceKm", "distanceKM", "distance_km"):
+        distance = _coerce_float(props.get(key))
+        if distance is not None:
+            return distance * 0.539957
+
+    for key in ("distanceM", "distance_m"):
+        distance = _coerce_float(props.get(key))
+        if distance is not None:
+            return distance * 0.000539957
+
+    return None
+
+
+def _build_report_from_properties(
+    props: MutableMapping[str, Any]
+) -> Tuple[str, Dict[str, Any]] | None:
+    station = (
+        props.get("station")
+        or props.get("stationId")
+        or props.get("icaoId")
+        or props.get("icao_id")
+        or ""
+    )
+    station = str(station).upper()
+    if not station:
+        return None
+
+    issue_display, issue_dt = format_iso_timestamp(
+        props.get("issueTime")
+        or props.get("issue_time")
+        or props.get("obsTime")
+        or props.get("obs_time")
+        or props.get("bulletinTime")
+    )
+    valid_from_display, valid_from_dt = format_iso_timestamp(
+        props.get("validTimeFrom") or props.get("valid_time_from")
+    )
+    valid_to_display, valid_to_dt = format_iso_timestamp(
+        props.get("validTimeTo") or props.get("valid_time_to")
+    )
+    raw_text = (
+        props.get("rawTAF")
+        or props.get("rawText")
+        or props.get("raw")
+        or props.get("raw_text")
+        or ""
+    )
+
+    forecast_periods: List[Dict[str, Any]] = []
+    forecast_source = (
+        props.get("forecast")
+        or props.get("forecastList")
+        or props.get("periods")
+        or []
+    )
+    for fc in _iter_forecast_candidates(forecast_source):
+        if not isinstance(fc, MutableMapping):
+            continue
+        fc_processed = _normalise_forecast_segment(fc)
+        from_value = _extract_time_field(fc_processed, TIME_FROM_FIELDS)
+        to_value = _extract_time_field(fc_processed, TIME_TO_FIELDS)
+        fc_from_display, fc_from_dt = format_iso_timestamp(from_value)
+        fc_to_display, fc_to_dt = format_iso_timestamp(to_value)
+        fc_details = build_detail_list(fc_processed, TAF_FORECAST_FIELDS)
+
+        wx = (
+            fc_processed.get("wxString")
+            or fc_processed.get("weather")
+            or fc_processed.get("wx_string")
+        )
+        if wx:
+            if isinstance(wx, Iterable) and not isinstance(wx, (str, bytes, bytearray)):
+                parts = []
+                for item in wx:
+                    simplified = _simplify_detail_value(item)
+                    if simplified in (None, "", []):
+                        continue
+                    parts.append(str(simplified))
+                wx = ", ".join(parts)
+            fc_details.append(("Weather", wx))
+
+        clouds = (
+            fc_processed.get("clouds")
+            or fc_processed.get("cloudList")
+            or fc_processed.get("skyCondition")
+            or fc_processed.get("sky_condition")
+        )
+        if isinstance(clouds, str):
+            try:
+                parsed_clouds = json.loads(clouds)
+            except (TypeError, ValueError):
+                parsed_clouds = []
+            clouds = parsed_clouds
+        if isinstance(clouds, Iterable) and not isinstance(clouds, (str, bytes, bytearray)):
+            cloud_iterable = clouds
+        else:
+            cloud_iterable = []
+        if isinstance(cloud_iterable, Iterable):
+            cloud_parts: List[str] = []
+            for cloud in cloud_iterable:
+                if not isinstance(cloud, MutableMapping):
+                    continue
+                cover = (
+                    cloud.get("cover")
+                    or cloud.get("cloudCover")
+                    or cloud.get("cloud_cover")
+                    or cloud.get("skyCover")
+                    or cloud.get("amount")
+                    or cloud.get("repr")
+                )
+                base = (
+                    cloud.get("base")
+                    or cloud.get("base_feet")
+                    or cloud.get("cloudBaseFT")
+                    or cloud.get("cloudBaseFt")
+                    or cloud.get("baseFeetAGL")
+                    or cloud.get("base_feet_agl")
+                    or cloud.get("baseFeet")
+                )
+                if isinstance(base, MutableMapping):
+                    base = (
+                        base.get("value")
+                        or base.get("feet")
+                        or base.get("repr")
+                        or base.get("minValue")
+                        or base.get("maxValue")
+                    )
+                if cover and base:
+                    cloud_parts.append(f"{cover} {base}ft")
+                elif cover:
+                    cloud_parts.append(str(cover))
+            if cloud_parts:
+                fc_details.append(("Clouds", ", ".join(cloud_parts)))
+
+        forecast_periods.append(
+            {
+                "from_display": fc_from_display,
+                "from_time": fc_from_dt,
+                "to_display": fc_to_display,
+                "to_time": fc_to_dt,
+                "details": fc_details,
+            }
+        )
+
+    if not forecast_periods:
+        forecast_periods = _fallback_parse_raw_taf(
+            raw_text,
+            issue_dt,
+            valid_from_dt,
+            valid_to_dt,
+        )
+
+    return (
+        station,
+        {
+            "station": station,
+            "raw": raw_text,
+            "issue_time_display": issue_display,
+            "issue_time": issue_dt,
+            "valid_from_display": valid_from_display,
+            "valid_from": valid_from_dt,
+            "valid_to_display": valid_to_display,
+            "valid_to": valid_to_dt,
+            "forecast": forecast_periods,
+        },
+    )
+
+
+def _lookup_station_coordinates(station: str) -> Tuple[float, float] | None:
+    station = (station or "").upper()
+    if not station:
+        return None
+
+    url = "https://aviationweather.gov/dataserver_current/httpparam"
+    params = {
+        "dataSource": "stations",
+        "requestType": "retrieve",
+        "format": "json",
+        "stationString": station,
+    }
+
+    try:
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+    except requests.RequestException:
+        return None
+
+    data = response.json()
+    for props in _normalize_aviationweather_features(data):
+        if not isinstance(props, MutableMapping):
+            continue
+        lat = _coerce_float(
+            props.get("latitude")
+            or props.get("latitudeDeg")
+            or props.get("latitude_deg")
+            or props.get("stationLatitude")
+            or props.get("station_latitude")
+        )
+        lon = _coerce_float(
+            props.get("longitude")
+            or props.get("longitudeDeg")
+            or props.get("longitude_deg")
+            or props.get("stationLongitude")
+            or props.get("station_longitude")
+        )
+        if lat is None or lon is None:
+            continue
+        return lat, lon
+
+    return None
+
+
+def _fetch_nearby_taf_report(requested_station: str) -> Dict[str, Any] | None:
+    requested_station = (requested_station or "").upper()
+    if not requested_station:
+        return None
+
+    url = "https://aviationweather.gov/dataserver_current/httpparam"
+    base_params = {
+        "dataSource": "tafs",
+        "requestType": "retrieve",
+        "format": "json",
+        "mostRecent": "true",
+        "hoursBeforeNow": 12,
+    }
+
+    station_coords = _lookup_station_coordinates(requested_station)
+    station_query_allowed = True
+
+    for radius_nm in FALLBACK_TAF_SEARCH_RADII_NM:
+        radial_queries: List[Tuple[str, str]] = []
+        if station_query_allowed:
+            radial_queries.append(("station", f"{radius_nm};{requested_station}"))
+        if station_coords:
+            lat, lon = station_coords
+            radial_queries.append(("coords", f"{radius_nm};{lat:.4f},{lon:.4f}"))
+
+        seen_radials: set[str] = set()
+        for query_type, radial in radial_queries:
+            if radial in seen_radials:
+                continue
+            seen_radials.add(radial)
+
+            params = {**base_params, "radialDistance": radial}
+            try:
+                response = requests.get(url, params=params, timeout=10)
+                response.raise_for_status()
+            except requests.HTTPError as exc:
+                if query_type == "station":
+                    status_code = getattr(exc.response, "status_code", None)
+                    if status_code == 400:
+                        station_query_allowed = False
+                continue
+            except requests.RequestException:
+                continue
+
+            data = response.json()
+            candidates: List[Tuple[float | None, str, Dict[str, Any]]] = []
+            for props in _normalize_aviationweather_features(data):
+                if not isinstance(props, MutableMapping):
+                    continue
+                built = _build_report_from_properties(props)
+                if not built:
+                    continue
+                station, report = built
+                distance_nm = _extract_distance_nm(props)
+                candidates.append((distance_nm, station, report))
+
+            if candidates:
+                candidates.sort(
+                    key=lambda item: (
+                        float("inf") if item[0] is None else item[0],
+                        item[1],
+                    )
+                )
+                best_distance, _, best_report = candidates[0]
+                fallback_report = dict(best_report)
+                fallback_report["is_fallback"] = True
+                fallback_report["requested_station"] = requested_station
+                fallback_report["fallback_radius_nm"] = radius_nm
+                if best_distance is not None:
+                    fallback_report["fallback_distance_nm"] = best_distance
+                return fallback_report
+
+    return None
+
+
 def get_taf_reports(icao_codes: Sequence[str]) -> Dict[str, List[Dict[str, Any]]]:
-    if not icao_codes:
+    normalized_codes = [code.upper() for code in icao_codes if code]
+    if not normalized_codes:
         return {}
 
     url = "https://aviationweather.gov/api/data/taf"
     params = {
-        "ids": ",".join(sorted({code.upper() for code in icao_codes if code})),
+        "ids": ",".join(sorted(set(normalized_codes))),
         "format": "json",
         "mostRecent": "true",
     }
@@ -633,155 +975,21 @@ def get_taf_reports(icao_codes: Sequence[str]) -> Dict[str, List[Dict[str, Any]]
     taf_reports: Dict[str, List[Dict[str, Any]]] = {}
 
     for props in _normalize_aviationweather_features(data):
-        station = (
-            props.get("station")
-            or props.get("stationId")
-            or props.get("icaoId")
-            or props.get("icao_id")
-            or ""
-        )
-        station = str(station).upper()
-        if not station:
+        if not isinstance(props, MutableMapping):
             continue
+        built = _build_report_from_properties(props)
+        if not built:
+            continue
+        station, report = built
+        taf_reports.setdefault(station, []).append(report)
 
-        issue_display, issue_dt = format_iso_timestamp(
-            props.get("issueTime")
-            or props.get("issue_time")
-            or props.get("obsTime")
-            or props.get("obs_time")
-            or props.get("bulletinTime")
-        )
-        valid_from_display, valid_from_dt = format_iso_timestamp(
-            props.get("validTimeFrom") or props.get("valid_time_from")
-        )
-        valid_to_display, valid_to_dt = format_iso_timestamp(
-            props.get("validTimeTo") or props.get("valid_time_to")
-        )
-        raw_text = (
-            props.get("rawTAF")
-            or props.get("rawText")
-            or props.get("raw")
-            or props.get("raw_text")
-            or ""
-        )
-
-        forecast_periods: List[Dict[str, Any]] = []
-        forecast_source = (
-            props.get("forecast")
-            or props.get("forecastList")
-            or props.get("periods")
-            or []
-        )
-        for fc in _iter_forecast_candidates(forecast_source):
-            if not isinstance(fc, MutableMapping):
-                continue
-            fc_processed = _normalise_forecast_segment(fc)
-            from_value = _extract_time_field(fc_processed, TIME_FROM_FIELDS)
-            to_value = _extract_time_field(fc_processed, TIME_TO_FIELDS)
-            fc_from_display, fc_from_dt = format_iso_timestamp(from_value)
-            fc_to_display, fc_to_dt = format_iso_timestamp(to_value)
-            fc_details = build_detail_list(fc_processed, TAF_FORECAST_FIELDS)
-
-            wx = (
-                fc_processed.get("wxString")
-                or fc_processed.get("weather")
-                or fc_processed.get("wx_string")
-            )
-            if wx:
-                if isinstance(wx, Iterable) and not isinstance(wx, (str, bytes, bytearray)):
-                    parts = []
-                    for item in wx:
-                        simplified = _simplify_detail_value(item)
-                        if simplified in (None, "", []):
-                            continue
-                        parts.append(str(simplified))
-                    wx = ", ".join(parts)
-                fc_details.append(("Weather", wx))
-
-            clouds = (
-                fc_processed.get("clouds")
-                or fc_processed.get("cloudList")
-                or fc_processed.get("skyCondition")
-                or fc_processed.get("sky_condition")
-            )
-            if isinstance(clouds, str):
-                try:
-                    parsed_clouds = json.loads(clouds)
-                except (TypeError, ValueError):
-                    parsed_clouds = []
-                clouds = parsed_clouds
-            if isinstance(clouds, Iterable) and not isinstance(clouds, (str, bytes, bytearray)):
-                cloud_iterable = clouds
-            else:
-                cloud_iterable = []
-            if isinstance(cloud_iterable, Iterable):
-                cloud_parts: List[str] = []
-                for cloud in cloud_iterable:
-                    if not isinstance(cloud, MutableMapping):
-                        continue
-                    cover = (
-                        cloud.get("cover")
-                        or cloud.get("cloudCover")
-                        or cloud.get("cloud_cover")
-                        or cloud.get("skyCover")
-                        or cloud.get("amount")
-                        or cloud.get("repr")
-                    )
-                    base = (
-                        cloud.get("base")
-                        or cloud.get("base_feet")
-                        or cloud.get("cloudBaseFT")
-                        or cloud.get("cloudBaseFt")
-                        or cloud.get("baseFeetAGL")
-                        or cloud.get("base_feet_agl")
-                        or cloud.get("baseFeet")
-                    )
-                    if isinstance(base, MutableMapping):
-                        base = (
-                            base.get("value")
-                            or base.get("feet")
-                            or base.get("repr")
-                            or base.get("minValue")
-                            or base.get("maxValue")
-                        )
-                    if cover and base:
-                        cloud_parts.append(f"{cover} {base}ft")
-                    elif cover:
-                        cloud_parts.append(str(cover))
-                if cloud_parts:
-                    fc_details.append(("Clouds", ", ".join(cloud_parts)))
-
-            forecast_periods.append(
-                {
-                    "from_display": fc_from_display,
-                    "from_time": fc_from_dt,
-                    "to_display": fc_to_display,
-                    "to_time": fc_to_dt,
-                    "details": fc_details,
-                }
-            )
-
-        if not forecast_periods:
-            forecast_periods = _fallback_parse_raw_taf(
-                raw_text,
-                issue_dt,
-                valid_from_dt,
-                valid_to_dt,
-            )
-
-        taf_reports.setdefault(station, []).append(
-            {
-                "station": station,
-                "raw": raw_text,
-                "issue_time_display": issue_display,
-                "issue_time": issue_dt,
-                "valid_from_display": valid_from_display,
-                "valid_from": valid_from_dt,
-                "valid_to_display": valid_to_display,
-                "valid_to": valid_to_dt,
-                "forecast": forecast_periods,
-            }
-        )
+    requested_order = list(dict.fromkeys(normalized_codes))
+    for code in requested_order:
+        if code in taf_reports:
+            continue
+        fallback_report = _fetch_nearby_taf_report(code)
+        if fallback_report:
+            taf_reports.setdefault(code, []).append(fallback_report)
 
     return taf_reports
 
