@@ -9,7 +9,7 @@ import math
 import os
 import re
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from typing import Any, Dict, Iterable, List, MutableMapping, Optional, Sequence, Tuple
 
@@ -27,6 +27,123 @@ def _coerce_float(value: Any) -> Optional[float]:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _guess_datetime_from_tokens(
+    day: int, hour: int, minute: int = 0, *, reference: Optional[datetime] = None
+) -> Optional[datetime]:
+    if reference is None:
+        reference = datetime.utcnow().replace(tzinfo=timezone.utc)
+
+    year = reference.year
+    month = reference.month
+
+    last_day = calendar.monthrange(year, month)[1]
+    if day > last_day:
+        day = last_day
+
+    try:
+        candidate = datetime(year, month, day, hour, minute, tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+    if reference - candidate > timedelta(days=15):
+        month += 1
+        if month > 12:
+            month = 1
+            year += 1
+    elif candidate - reference > timedelta(days=15):
+        month -= 1
+        if month < 1:
+            month = 12
+            year -= 1
+
+    last_day = calendar.monthrange(year, month)[1]
+    if day > last_day:
+        day = last_day
+
+    try:
+        return datetime(year, month, day, hour, minute, tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def _parse_raw_taf_bulletins(raw_text: str) -> List[Dict[str, Any]]:
+    pattern = re.compile(r"\bTAF\b.*?(?=(?:\sTAF\b|$))", re.DOTALL)
+    bulletins: List[Dict[str, Any]] = []
+    reference = datetime.utcnow().replace(tzinfo=timezone.utc)
+
+    for block in pattern.findall(raw_text):
+        clean = " ".join(block.replace("\n", " ").split())
+        if not clean:
+            continue
+
+        tokens = clean.split()
+        if not tokens or tokens[0] != "TAF":
+            continue
+
+        idx = 1
+        while idx < len(tokens) and tokens[idx] in {"AMD", "COR", "RTD"}:
+            idx += 1
+
+        if idx >= len(tokens):
+            continue
+
+        station = tokens[idx].upper().strip()
+        if not station:
+            continue
+
+        issue_iso: Optional[str] = None
+        valid_from_iso: Optional[str] = None
+        valid_to_iso: Optional[str] = None
+
+        if idx + 1 < len(tokens):
+            match = re.match(r"^(\d{2})(\d{2})(\d{2})Z$", tokens[idx + 1])
+            if match:
+                dt = _guess_datetime_from_tokens(
+                    int(match.group(1)),
+                    int(match.group(2)),
+                    int(match.group(3)),
+                    reference=reference,
+                )
+                if dt:
+                    issue_iso = dt.isoformat()
+
+        if idx + 2 < len(tokens):
+            match = re.match(r"^(\d{2})(\d{2})/(\d{2})(\d{2})$", tokens[idx + 2])
+            if match:
+                start_dt = _guess_datetime_from_tokens(
+                    int(match.group(1)),
+                    int(match.group(2)),
+                    reference=reference,
+                )
+                end_dt = _guess_datetime_from_tokens(
+                    int(match.group(3)),
+                    int(match.group(4)),
+                    reference=reference,
+                )
+                if start_dt:
+                    valid_from_iso = start_dt.isoformat()
+                if end_dt:
+                    valid_to_iso = end_dt.isoformat()
+
+        entry: Dict[str, Any] = {
+            "station": station,
+            "rawTAF": clean,
+            "rawText": clean,
+            "raw": clean,
+        }
+
+        if issue_iso:
+            entry["issueTime"] = issue_iso
+        if valid_from_iso:
+            entry["validTimeFrom"] = valid_from_iso
+        if valid_to_iso:
+            entry["validTimeTo"] = valid_to_iso
+
+        bulletins.append(entry)
+
+    return bulletins
 
 
 TAF_FORECAST_FIELDS = [
@@ -1058,7 +1175,19 @@ def get_taf_reports(icao_codes: Sequence[str]) -> Dict[str, List[Dict[str, Any]]
         else:
             raise
 
-    data = response.json()
+    try:
+        data = response.json()
+    except ValueError:
+        text = response.text or ""
+        stripped = text.strip()
+        if stripped:
+            if "TAF" in stripped:
+                bulletins = _parse_raw_taf_bulletins(stripped)
+                data = {"reports": bulletins}
+            else:
+                data = []
+        else:
+            data = []
 
     grouped: Dict[str, List[Dict[str, Any]]] = {}
     for props in _normalize_aviationweather_features(data):
