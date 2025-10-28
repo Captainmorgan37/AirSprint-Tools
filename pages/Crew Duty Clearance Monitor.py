@@ -135,7 +135,7 @@ if "_confirm_by_mt" in presentation_df.columns:
         lambda value: value.strftime("%Y-%m-%d %H:%M %Z") if isinstance(value, datetime) else ""
     )
 
-columns_to_show = [
+not_confirmed_columns = [
     "Tail",
     "Crew",
     "Clear by (MT)",
@@ -145,9 +145,18 @@ columns_to_show = [
     "Time left",
 ]
 
+confirmed_columns = [
+    "Tail",
+    "Crew",
+    "Clear by (MT)",
+    "Report (local)",
+    "First ETD (local)",
+    "Status",
+]
+
 not_confirmed_mask = presentation_df["Status"] != "✅ Confirmed"
-not_confirmed_df = presentation_df.loc[not_confirmed_mask, columns_to_show].reset_index(drop=True)
-confirmed_df = presentation_df.loc[~not_confirmed_mask, columns_to_show].reset_index(drop=True)
+not_confirmed_df = presentation_df.loc[not_confirmed_mask, not_confirmed_columns].reset_index(drop=True)
+confirmed_df = presentation_df.loc[~not_confirmed_mask, confirmed_columns].reset_index(drop=True)
 
 st.subheader("Crews requiring confirmation")
 if not not_confirmed_df.empty:
