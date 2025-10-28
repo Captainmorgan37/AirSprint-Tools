@@ -11,6 +11,10 @@ _CEILING_CODE_REGEX = re.compile(
     r"\b(BKN|OVC|VV)\s*(\d([\s,]?\d){1,})",
     re.IGNORECASE,
 )
+_CEILING_SUFFIX_REGEX = re.compile(
+    r"^(?:\s*(?:FT\.?|FEET)|['′’])",
+    re.IGNORECASE,
+)
 
 
 _HIGHLIGHT_SEVERITY = {"yellow": 1, "red": 2}
@@ -225,13 +229,19 @@ def _format_clouds_value(value: Any) -> str:
         if start > last_index:
             parts.append(html.escape(text[last_index:start]))
         match_text = text[start:end]
-        highlight_level = _get_ceiling_highlight(match_text)
-        escaped_match = html.escape(match_text)
+        suffix_text = ""
+        following_text = text[end:]
+        suffix_match = _CEILING_SUFFIX_REGEX.match(following_text)
+        if suffix_match:
+            suffix_text = following_text[: suffix_match.end()]
+        highlight_source = match_text + suffix_text
+        highlight_level = _get_ceiling_highlight(highlight_source)
+        escaped_match = html.escape(highlight_source)
         if highlight_level:
             parts.append(_wrap_highlight_html(escaped_match, highlight_level))
         else:
             parts.append(escaped_match)
-        last_index = end
+        last_index = end + len(suffix_text)
 
     if last_index < len(text):
         parts.append(html.escape(text[last_index:]))
