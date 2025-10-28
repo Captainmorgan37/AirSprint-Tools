@@ -828,122 +828,190 @@ def _build_report_from_properties(
     )
 
 
+import math
+import requests
+from typing import Tuple, Any, MutableMapping, Iterable
+
 def _lookup_station_coordinates(station: str) -> Tuple[float, float] | None:
-    station = (station or "").upper()
+    """
+    Return (lat, lon) for a station using the new Data API.
+
+    We call /api/data/stationinfo instead of the old dataserver_current.
+    We'll accept a bunch of possible response shapes (json vs geojson-ish)
+    and try to coerce keys like lat/lon, latitude/longitude, etc.
+    """
+    station = (station or "").upper().strip()
     if not station:
         return None
 
-    url = "https://aviationweather.gov/dataserver_current/httpparam"
+    url = "https://aviationweather.gov/api/data/stationinfo"
     params = {
-        "dataSource": "stations",
-        "requestType": "retrieve",
-        "format": "json",
-        "stationString": station,
+        "ids": station,
+        "format": "json",  # allowed per /api/data/stationinfo spec
     }
 
     try:
-        response = requests.get(url, params=params, timeout=10)
-        response.raise_for_status()
+        resp = requests.get(url, params=params, timeout=10)
+        resp.raise_for_status()
     except requests.RequestException:
         return None
 
-    data = response.json()
+    try:
+        data = resp.json()
+    except ValueError:
+        return None
+
+    # Reuse your generic walker that already knows how to peel apart
+    # "features", "properties", etc.
     for props in _normalize_aviationweather_features(data):
         if not isinstance(props, MutableMapping):
             continue
+
         lat = _coerce_float(
-            props.get("latitude")
+            props.get("lat")
+            or props.get("latitude")
+            or props.get("stationLatitude")
             or props.get("latitudeDeg")
             or props.get("latitude_deg")
-            or props.get("stationLatitude")
-            or props.get("station_latitude")
         )
         lon = _coerce_float(
-            props.get("longitude")
+            props.get("lon")
+            or props.get("longitude")
+            or props.get("stationLongitude")
             or props.get("longitudeDeg")
             or props.get("longitude_deg")
-            or props.get("stationLongitude")
-            or props.get("station_longitude")
         )
-        if lat is None or lon is None:
-            continue
-        return lat, lon
+
+        if lat is not None and lon is not None:
+            return (lat, lon)
 
     return None
 
+def _haversine_distance_nm(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """
+    Great-circle distance in nautical miles between two lat/lon points.
+    """
+    R_NM = 3440.065  # Earth radius in NM
+    from math import radians, sin, cos, asin, sqrt
+
+    dlat = radians(lat2 - lat1)
+    dlon = radians(lon2 - lon1)
+    lat1r = radians(lat1)
+    lat2r = radians(lat2)
+
+    a = sin(dlat / 2.0) ** 2 + cos(lat1r) * cos(lat2r) * sin(dlon / 2.0) ** 2
+    c = 2.0 * asin(sqrt(a))
+    return R_NM * c
+
+
+
+import math
+
+def _make_bbox(lat: float, lon: float, radius_nm: float) -> str:
+    """
+    Build a bbox string "minLon,minLat,maxLon,maxLat" that roughly covers
+    `radius_nm` around (lat, lon). We approximate 1 deg lat ~ 60 NM and
+    1 deg lon ~ 60 NM * cos(lat).
+    """
+    # degrees per NM
+    deg_lat = radius_nm / 60.0
+    cos_lat = math.cos(math.radians(lat))
+    if cos_lat < 0.01:
+        cos_lat = 0.01  # avoid division blowup near poles
+    deg_lon = radius_nm / (60.0 * cos_lat)
+
+    min_lat = lat - deg_lat
+    max_lat = lat + deg_lat
+    min_lon = lon - deg_lon
+    max_lon = lon + deg_lon
+
+    # Data API expects bbox as minLon,minLat,maxLon,maxLat (per common Geo bbox convention)
+    return f"{min_lon:.4f},{min_lat:.4f},{max_lon:.4f},{max_lat:.4f}"
+
 
 def _fetch_nearby_taf_report(requested_station: str) -> Dict[str, Any] | None:
-    requested_station = (requested_station or "").upper()
+    """
+    Find the nearest OTHER station's TAF using the new Data API.
+    1. Get coords of the requested station.
+    2. For expanding radii (60, 90, 120, 180 NM):
+       - Query /api/data/taf with a bbox around that point.
+       - Rank all returned TAFs by great-circle distance.
+       - Return the closest one, annotated as fallback.
+    """
+
+    requested_station = (requested_station or "").upper().strip()
     if not requested_station:
         return None
 
-    url = "https://aviationweather.gov/dataserver_current/httpparam"
-    base_params = {
-        "dataSource": "tafs",
-        "requestType": "retrieve",
-        "format": "json",
-        "mostRecent": "true",
-        "hoursBeforeNow": 12,
-    }
-
+    # 1. Where is this station?
     station_coords = _lookup_station_coordinates(requested_station)
-    station_query_allowed = True
+    if not station_coords:
+        return None
+    req_lat, req_lon = station_coords
+
+    url = "https://aviationweather.gov/api/data/taf"
 
     for radius_nm in FALLBACK_TAF_SEARCH_RADII_NM:
-        radial_queries: List[Tuple[str, str]] = []
-        if station_query_allowed:
-            radial_queries.append(("station", f"{radius_nm};{requested_station}"))
-        if station_coords:
-            lat, lon = station_coords
-            radial_queries.append(("coords", f"{radius_nm};{lat:.4f},{lon:.4f}"))
+        bbox = _make_bbox(req_lat, req_lon, radius_nm)
+        params = {
+            "bbox": bbox,
+            "format": "json",
+        }
 
-        seen_radials: set[str] = set()
-        for query_type, radial in radial_queries:
-            if radial in seen_radials:
-                continue
-            seen_radials.add(radial)
-
-            params = {**base_params, "radialDistance": radial}
+        try:
+            resp = requests.get(url, params=params, timeout=10)
+            resp.raise_for_status()
             try:
-                response = requests.get(url, params=params, timeout=10)
-                response.raise_for_status()
-            except requests.HTTPError as exc:
-                if query_type == "station":
-                    status_code = getattr(exc.response, "status_code", None)
-                    if status_code == 400:
-                        station_query_allowed = False
+                data = resp.json()
+            except ValueError:
+                data = {}
+        except requests.RequestException:
+            continue  # try the next (bigger) radius
+
+        candidates = []
+
+        # Walk all returned taf-like objects
+        for props in _normalize_aviationweather_features(data):
+            if not isinstance(props, MutableMapping):
                 continue
-            except requests.RequestException:
+
+            built = _build_report_from_properties(props)
+            if not built:
                 continue
 
-            data = response.json()
-            candidates: List[Tuple[float | None, str, Dict[str, Any]]] = []
-            for props in _normalize_aviationweather_features(data):
-                if not isinstance(props, MutableMapping):
-                    continue
-                built = _build_report_from_properties(props)
-                if not built:
-                    continue
-                station, report = built
-                distance_nm = _extract_distance_nm(props)
-                candidates.append((distance_nm, station, report))
+            station_id, report = built
+            # Don't "fallback" to itself if somehow it has no TAF in ids mode but
+            # does appear in bbox mode (weird, but let's be safe)
+            if station_id == requested_station:
+                continue
 
-            if candidates:
-                candidates.sort(
-                    key=lambda item: (
-                        float("inf") if item[0] is None else item[0],
-                        item[1],
-                    )
-                )
-                best_distance, _, best_report = candidates[0]
-                fallback_report = dict(best_report)
-                fallback_report["is_fallback"] = True
-                fallback_report["requested_station"] = requested_station
-                fallback_report["fallback_radius_nm"] = radius_nm
-                if best_distance is not None:
-                    fallback_report["fallback_distance_nm"] = best_distance
-                return fallback_report
+            # Get coords for that station_id so we can rank by distance
+            cand_coords = _lookup_station_coordinates(station_id)
+            if not cand_coords:
+                continue
 
+            cand_lat, cand_lon = cand_coords
+            distance_nm = _haversine_distance_nm(req_lat, req_lon, cand_lat, cand_lon)
+
+            candidates.append((distance_nm, station_id, report))
+
+        if not candidates:
+            # nothing in this radius, try the next radius
+            continue
+
+        # Pick closest station
+        candidates.sort(key=lambda x: (x[0], x[1]))
+        best_distance, best_station, best_report = candidates[0]
+
+        fallback_report = dict(best_report)
+        fallback_report["is_fallback"] = True
+        fallback_report["requested_station"] = requested_station
+        fallback_report["fallback_radius_nm"] = radius_nm
+        fallback_report["fallback_distance_nm"] = round(best_distance, 1)
+
+        return fallback_report
+
+    # If we get here, even 180 NM had nothing
     return None
 
 
