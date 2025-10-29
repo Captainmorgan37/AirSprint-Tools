@@ -796,28 +796,28 @@ def _fallback_parse_raw_taf(
     if cur_start:
         segs_raw.append((cur_start, list(cur_tokens), list(cur_tempo)))
 
-        segments.append(
-            {
-                # readable strings
-                "from_display": segment_start.strftime("%b %d %Y, %H:%MZ"),
-                "to_display": (
-                    segment_end.strftime("%b %d %Y, %H:%MZ") if segment_end else "N/A"
-                ),
-        
-                # datetime objects (original keys)
-                "from_time": segment_start,
-                "to_time": segment_end,
-        
-                # NEW: alias keys that _extract_time_field() will actually pick up
-                "time_from": segment_start,
-                "time_to": segment_end,
-        
-                # details
-                "details": prevailing_details,
-                "tempo": tempo_blocks,
-            }
-        )
+    segments: List[Dict[str, Any]] = []
 
+    for index, (segment_start, segment_tokens, segment_tempo) in enumerate(segs_raw):
+        if index + 1 < len(segs_raw):
+            segment_end = segs_raw[index + 1][0]
+        else:
+            segment_end = valid_to_dt
+
+        prevailing_details = _extract_conditions_from_tokens(segment_tokens)
+
+        tempo_blocks: List[Dict[str, Any]] = []
+        for tempo_block in segment_tempo:
+            block_start = tempo_block.get("start") or segment_start
+            block_end = tempo_block.get("end") or segment_end
+            tempo_blocks.append(
+                {
+                    "start": block_start,
+                    "end": block_end,
+                    "prob": tempo_block.get("prob"),
+                    "details": tempo_block.get("details", []),
+                }
+            )
 
         segments.append(
             {
