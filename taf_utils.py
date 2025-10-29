@@ -207,6 +207,7 @@ TIME_FROM_FIELDS: Tuple[str, ...] = (
     "time_from",
     "startTime",
     "start_time",
+    "from_time",
     "from",
     "start",
 )
@@ -217,6 +218,7 @@ TIME_TO_FIELDS: Tuple[str, ...] = (
     "time_to",
     "endTime",
     "end_time",
+    "to_time",
     "to",
     "end",
 )
