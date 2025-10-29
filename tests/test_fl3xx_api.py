@@ -220,6 +220,11 @@ def test_extract_missing_qualifications_from_preflight_returns_alerts() -> None:
                 "warnings": {
                     "messages": [
                         {"type": "qualification", "status": "missing", "name": "CANPASS"},
+                        {
+                            "type": "qualification",
+                            "status": "expired",
+                            "name": "TP Performance Airspace: RNP 10",
+                        },
                         {"type": "duty", "status": "setup", "name": "Duty_0"},
                     ]
                 },
@@ -239,7 +244,7 @@ def test_extract_missing_qualifications_from_preflight_returns_alerts() -> None:
 
     alerts = extract_missing_qualifications_from_preflight(payload)
 
-    assert len(alerts) == 2
+    assert len(alerts) == 3
     assert alerts[0] == MissingQualificationAlert(
         seat="PIC",
         pilot_name="Alex Commander",
@@ -247,6 +252,12 @@ def test_extract_missing_qualifications_from_preflight_returns_alerts() -> None:
         qualification_name="CANPASS",
     )
     assert alerts[1] == MissingQualificationAlert(
+        seat="PIC",
+        pilot_name="Alex Commander",
+        pilot_id="111",
+        qualification_name="TP Performance Airspace: RNP 10",
+    )
+    assert alerts[2] == MissingQualificationAlert(
         seat="SIC",
         pilot_name="Sam",
         pilot_id="222",
