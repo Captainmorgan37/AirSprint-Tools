@@ -828,7 +828,7 @@ def _fetch_station_coords_from_api(station: str) -> Optional[Tuple[float, float]
     }
 
     try:
-        resp = requests.get(url, params=params, timeout=10)
+        resp = requests.get(url, params=params, timeout=30)
         resp.raise_for_status()
     except requests.RequestException:
         return None
