@@ -859,33 +859,63 @@ def _haversine_distance_nm(lat1: float, lon1: float, lat2: float, lon2: float) -
 
     return EARTH_RADIUS_NM * c
 
+def _make_bbox(lat: float, lon: float, radius_nm: float) -> str:
+    """
+    Build a bounding box string for aviationweather.gov/api/data/taf.
+
+    aviationweather.gov expects bbox as "lat0,lon0,lat1,lon1"
+    where (lat0,lon0) is SW corner and (lat1,lon1) is NE corner.
+
+    We'll approximate a circle with a square:
+      ~60 NM per degree latitude
+      ~60 NM * cos(lat) per degree longitude
+    """
+    # how many degrees of lat/lon ≈ this many NM?
+    dlat = radius_nm / 60.0
+
+    cos_lat = math.cos(math.radians(lat))
+    if abs(cos_lat) < 1e-6:
+        dlon = radius_nm / 60.0
+    else:
+        dlon = radius_nm / (60.0 * cos_lat)
+
+    min_lat = lat - dlat
+    max_lat = lat + dlat
+    min_lon = lon - dlon
+    max_lon = lon + dlon
+
+    return f"{min_lat:.4f},{min_lon:.4f},{max_lat:.4f},{max_lon:.4f}"
+
 
 def _fetch_nearby_taf_report(station_id: str) -> Optional[Dict[str, Any]]:
     """
-    Look for the nearest available TAF if `station_id` itself doesn't have one.
+    Find the nearest available TAF if `station_id` itself doesn't have one.
 
-    Strategy:
-      1. Get the station's coordinates from _lookup_station_coordinates().
-         (This already prefers your local Airport TZ.txt before falling back to API.)
-      2. For expanding radii (60, 90, 120, 180 NM), call the ADDS TAF service with
-         radialDistance="<radius>;<lat,lon>".
-      3. Collect TAFs, skip ones from the same station, measure distance.
-      4. Return the closest candidate, annotated with fallback metadata.
+    Steps:
+      1. Get coordinates for the requested station (prefers Airport TZ.txt).
+      2. For increasing radii (60, 90, 120, 180 NM):
+         - Build a lat/lon bbox around that point.
+         - Call aviationweather.gov/api/data/taf with that bbox, asking for raw TAF text.
+         - Parse the returned bulletins with _parse_raw_taf_bulletins.
+         - For each bulletin:
+             * identify its station
+             * skip if it's literally the same as station_id
+             * compute distance to our origin station (using our coord DB)
+         - Keep the closest.
+      3. Return the best match, with fallback metadata.
 
     Returns:
-      A dict shaped like the ADDS TAF record plus:
-        "is_fallback": True
-        "fallback_distance_nm": float
-        "fallback_radius_nm": float
-    or None if nothing found.
+        A dict shaped like a TAF "props" block plus:
+          "is_fallback": True
+          "fallback_distance_nm": float
+          "fallback_radius_nm": float
+        or None if nothing usable was found.
     """
-
     station_id = (station_id or "").upper().strip()
     if not station_id:
         return None
 
-    # 1. Get our "home" coords. This already prefers Airport TZ.txt, which fixes
-    #    CYSA=Stratford vs CYSA=Sable Island, etc.
+    # Step 1: where are we?
     base_coords = _lookup_station_coordinates(station_id)
     if not base_coords:
         return None
@@ -894,101 +924,83 @@ def _fetch_nearby_taf_report(station_id: str) -> Optional[Dict[str, Any]]:
     best_entry: Optional[Dict[str, Any]] = None
     best_distance: Optional[float] = None
 
-    base_url = "https://aviationweather.gov/adds/dataserver_current/httpparam"
+    taf_url = "https://aviationweather.gov/api/data/taf"
 
-    def _request_with_coords(lat: float, lon: float, radius_nm: float) -> List[Dict[str, Any]]:
-        """
-        Call ADDS tafs radialDistance=<radius>;<lat,lon>.
-        We ask for up to ~12 hours back so we can still get the most recent issuance.
-        """
+    for radius_nm in FALLBACK_TAF_SEARCH_RADII_NM:
+        bbox_str = _make_bbox(base_lat, base_lon, radius_nm)
+
         params = {
-            "dataSource": "tafs",
-            "requestType": "retrieve",
-            "format": "JSON",
-            "radialDistance": f"{radius_nm};{lat},{lon}",
-            "hoursBeforeNow": "12",
+            "bbox": bbox_str,
+            "time": "issue",   # "issue" = most recent issuance
+            "format": "raw",   # we want plain text TAFs
         }
 
         try:
-            resp = requests.get(base_url, params=params, timeout=10)
+            resp = requests.get(taf_url, params=params, timeout=10)
+            # If the API gives 204 No Content or empty text, skip
+            if resp.status_code == 204 or not resp.text.strip():
+                continue
             resp.raise_for_status()
         except requests.RequestException:
-            return []
+            continue
 
-        try:
-            data = resp.json()
-        except ValueError:
-            return []
-
-        # normalize to a list of taf dicts
-        tafs = [taf for taf in _normalize_aviationweather_features(data)]
-        return tafs
-
-    # 2. Expand radius and keep the closest usable TAF
-    for radius_nm in FALLBACK_TAF_SEARCH_RADII_NM:
-        taf_candidates = _request_with_coords(base_lat, base_lon, radius_nm)
-        if not taf_candidates:
+        raw_text = resp.text or ""
+        bulletins = _parse_raw_taf_bulletins(raw_text)
+        if not bulletins:
             continue
 
         found_any_here = False
 
-        for taf in taf_candidates:
-            # Look up the station that issued THIS TAF
-            taf_station = (
+        for taf in bulletins:
+            # taf from _parse_raw_taf_bulletins() has keys like:
+            #   "station", "rawTAF", "issueTime", "validTimeFrom", "validTimeTo", ...
+            taf_station = str(
                 taf.get("station")
                 or taf.get("stationId")
                 or taf.get("station_id")
                 or taf.get("icaoId")
                 or taf.get("icao_id")
                 or ""
-            )
-            taf_station = str(taf_station).upper().strip()
+            ).upper().strip()
             if not taf_station:
                 continue
 
-            # Don't "fallback" to the same station ID. (If the airport actually
-            # issues a TAF, we shouldn't be here anyway — but also this prevents
-            # weird NOAA alias collisions from picking itself.)
+            # Don't return ourselves as a "fallback"
             if taf_station == station_id:
                 continue
 
-            # distance: ADDS sometimes returns "distance" or "distanceNm".
-            distance_nm = _coerce_float(
-                taf.get("distanceNm")
-                or taf.get("distance_nm")
-                or taf.get("distance")
-            )
+            # Measure distance
+            their_coords = _lookup_station_coordinates(taf_station)
+            if their_coords:
+                dist_nm = _haversine_distance_nm(
+                    base_lat, base_lon,
+                    their_coords[0], their_coords[1],
+                )
+            else:
+                dist_nm = None
 
-            if distance_nm is None:
-                # If the API didn't give us the distance, compute it using coords.
-                their_coords = _lookup_station_coordinates(taf_station)
-                if their_coords:
-                    distance_nm = _haversine_distance_nm(
-                        base_lat, base_lon,
-                        their_coords[0], their_coords[1],
-                    )
-
-            # compare vs best so far
-            if best_distance is not None:
-                # we already have a candidate
-                if distance_nm is None:
-                    # can't compare, skip
-                    continue
-                if distance_nm >= best_distance:
+            if dist_nm is None:
+                # If we can't measure distance, it's not very helpful;
+                # skip unless we literally have no better candidate.
+                if best_entry is not None:
                     continue
 
-            # It's our new best!
+            # Decide if this is better than what we had
+            if best_distance is not None and dist_nm is not None:
+                if dist_nm >= best_distance:
+                    continue
+
+            # new best candidate
             candidate = dict(taf)
             candidate["is_fallback"] = True
-            candidate["fallback_distance_nm"] = distance_nm
+            candidate["fallback_distance_nm"] = dist_nm
             candidate["fallback_radius_nm"] = radius_nm
 
             best_entry = candidate
-            best_distance = distance_nm if distance_nm is not None else best_distance
+            best_distance = dist_nm if dist_nm is not None else best_distance
             found_any_here = True
 
-        # As soon as we found at least one good candidate in this radius,
-        # we stop growing the circle.
+        # stop expanding once we found at least one viable TAF in this radius
         if found_any_here and best_entry is not None:
             break
 
