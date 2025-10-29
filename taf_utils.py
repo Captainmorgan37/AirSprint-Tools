@@ -821,14 +821,26 @@ def _fallback_parse_raw_taf(
 
         segments.append(
             {
+                # readable strings
                 "from_display": segment_start.strftime("%b %d %Y, %H:%MZ"),
+                "to_display": (
+                    segment_end.strftime("%b %d %Y, %H:%MZ") if segment_end else "N/A"
+                ),
+        
+                # datetime objects (original keys)
                 "from_time": segment_start,
-                "to_display": segment_end.strftime("%b %d %Y, %H:%MZ") if segment_end else "N/A",
                 "to_time": segment_end,
+        
+                # NEW: alias keys that _extract_time_field() will actually pick up
+                "time_from": segment_start,
+                "time_to": segment_end,
+        
+                # details
                 "details": prevailing_details,
                 "tempo": tempo_blocks,
             }
         )
+
 
     return segments
 
