@@ -120,7 +120,7 @@ def parse_df(df: pd.DataFrame):
     return df
 
 
-def get_current(df: pd.DataFrame, window_min: int = 20):
+def get_current(df: pd.DataFrame, window_min: int = 25):
     now = datetime.now(LOCAL_TZ)
     return df[(now - df["Last Seen (MT)"]) <= timedelta(minutes=window_min)].copy()
 
