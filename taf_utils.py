@@ -69,11 +69,22 @@ def _guess_datetime_from_tokens(
 
 
 def _parse_raw_taf_bulletins(raw_text: str) -> List[Dict[str, Any]]:
+    """
+    Parse a raw (text) response from aviationweather.gov/api/data/taf?bbox=...&format=raw
+    into a list of bulletin dicts that look like the structured API output.
+
+    We now ALSO generate a 'forecast' list for each bulletin by running the same
+    fallback segment builder (_fallback_parse_raw_taf) that the rest of the app
+    already understands. That way downstream code (like Arrival Weather) sees
+    per-period forecast segments with start/end times, winds, vis, etc.
+    """
+
     pattern = re.compile(r"\bTAF\b.*?(?=(?:\sTAF\b|$))", re.DOTALL)
     bulletins: List[Dict[str, Any]] = []
     reference = datetime.utcnow().replace(tzinfo=timezone.utc)
 
     for block in pattern.findall(raw_text):
+        # Normalize whitespace: collapse newlines, multiple spaces, etc.
         clean = " ".join(block.replace("\n", " ").split())
         if not clean:
             continue
@@ -83,6 +94,7 @@ def _parse_raw_taf_bulletins(raw_text: str) -> List[Dict[str, Any]]:
             continue
 
         idx = 1
+        # Skip AMD/COR/RTD tokens after "TAF"
         while idx < len(tokens) and tokens[idx] in {"AMD", "COR", "RTD"}:
             idx += 1
 
@@ -93,40 +105,55 @@ def _parse_raw_taf_bulletins(raw_text: str) -> List[Dict[str, Any]]:
         if not station:
             continue
 
+        # We'll track both ISO8601 strings (for format_iso_timestamp downstream)
+        # AND dt objects (so we can feed fallback segment builder).
         issue_iso: Optional[str] = None
         valid_from_iso: Optional[str] = None
         valid_to_iso: Optional[str] = None
 
+        issue_dt: Optional[datetime] = None
+        start_dt: Optional[datetime] = None
+        end_dt: Optional[datetime] = None
+
+        # tokens[idx + 1] is usually the issue time, like "281340Z"
         if idx + 1 < len(tokens):
             match = re.match(r"^(\d{2})(\d{2})(\d{2})Z$", tokens[idx + 1])
             if match:
-                dt = _guess_datetime_from_tokens(
-                    int(match.group(1)),
-                    int(match.group(2)),
-                    int(match.group(3)),
+                guess = _guess_datetime_from_tokens(
+                    int(match.group(1)),  # day
+                    int(match.group(2)),  # hour
+                    int(match.group(3)),  # minute
                     reference=reference,
                 )
-                if dt:
-                    issue_iso = dt.isoformat()
+                if guess:
+                    issue_dt = guess
+                    # Store ISO with timezone so format_iso_timestamp() can parse it
+                    issue_iso = guess.isoformat()
 
+        # tokens[idx + 2] is usually the validity range, like "2814/2914"
         if idx + 2 < len(tokens):
             match = re.match(r"^(\d{2})(\d{2})/(\d{2})(\d{2})$", tokens[idx + 2])
             if match:
-                start_dt = _guess_datetime_from_tokens(
-                    int(match.group(1)),
-                    int(match.group(2)),
+                start_guess = _guess_datetime_from_tokens(
+                    int(match.group(1)),  # start day
+                    int(match.group(2)),  # start hour
                     reference=reference,
                 )
-                end_dt = _guess_datetime_from_tokens(
-                    int(match.group(3)),
-                    int(match.group(4)),
+                end_guess = _guess_datetime_from_tokens(
+                    int(match.group(3)),  # end day
+                    int(match.group(4)),  # end hour
                     reference=reference,
                 )
-                if start_dt:
-                    valid_from_iso = start_dt.isoformat()
-                if end_dt:
-                    valid_to_iso = end_dt.isoformat()
 
+                if start_guess:
+                    start_dt = start_guess
+                    valid_from_iso = start_guess.isoformat()
+
+                if end_guess:
+                    end_dt = end_guess
+                    valid_to_iso = end_guess.isoformat()
+
+        # Build the base bulletin "props" dict in the same style as the JSON API
         entry: Dict[str, Any] = {
             "station": station,
             "rawTAF": clean,
@@ -141,9 +168,31 @@ def _parse_raw_taf_bulletins(raw_text: str) -> List[Dict[str, Any]]:
         if valid_to_iso:
             entry["validTimeTo"] = valid_to_iso
 
+        # >>> NEW: synthesize structured forecast periods from raw TAF text <<<
+        #
+        # _fallback_parse_raw_taf() already knows how to:
+        # - split FM/TEMPO/PROB groups
+        # - build prevailing/tempo blocks
+        # - attach from/to timestamps and details
+        #
+        # It expects real datetime objects: issue_dt, start_dt, end_dt.
+        # (Those can be None; the helper safely returns [] if it can't build.)
+        synthesized_segments = _fallback_parse_raw_taf(
+            clean,
+            issue_dt,
+            start_dt,
+            end_dt,
+        )
+
+        # Stick those segments somewhere _iter_forecast_candidates() will find
+        # them later in _build_report_from_props(). That function looks in keys
+        # like 'forecast', 'forecastList', 'periods', etc.
+        entry["forecast"] = synthesized_segments
+
         bulletins.append(entry)
 
     return bulletins
+
 
 
 TAF_FORECAST_FIELDS = [
