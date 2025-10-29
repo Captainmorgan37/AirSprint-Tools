@@ -69,20 +69,11 @@ def _guess_datetime_from_tokens(
 
 
 def _parse_raw_taf_bulletins(raw_text: str) -> List[Dict[str, Any]]:
-    """
-    Parse a raw (text) response from aviationweather.gov/api/data/taf?bbox=...&format=raw
-    into bulletin dicts that mirror the structured API output AND include a 'forecast'
-    list synthesized from the raw text (via _fallback_parse_raw_taf).
-
-    This version also correctly handles validity ranges like `2912/2924`, where
-    `24` means "00Z on the next day".
-    """
     pattern = re.compile(r"\bTAF\b.*?(?=(?:\sTAF\b|$))", re.DOTALL)
     bulletins: List[Dict[str, Any]] = []
     reference = datetime.utcnow().replace(tzinfo=timezone.utc)
 
     for block in pattern.findall(raw_text):
-        # Collapse whitespace/newlines
         clean = " ".join(block.replace("\n", " ").split())
         if not clean:
             continue
@@ -91,10 +82,10 @@ def _parse_raw_taf_bulletins(raw_text: str) -> List[Dict[str, Any]]:
         if not tokens or tokens[0] != "TAF":
             continue
 
-        # After "TAF", skip AMD/COR/RTD if present
         idx = 1
         while idx < len(tokens) and tokens[idx] in {"AMD", "COR", "RTD"}:
             idx += 1
+
         if idx >= len(tokens):
             continue
 
@@ -102,72 +93,47 @@ def _parse_raw_taf_bulletins(raw_text: str) -> List[Dict[str, Any]]:
         if not station:
             continue
 
-        # We'll keep ISO strings for downstream display (format_iso_timestamp)
-        # and also keep tz-aware datetime objects for _fallback_parse_raw_taf
         issue_iso: Optional[str] = None
         valid_from_iso: Optional[str] = None
         valid_to_iso: Optional[str] = None
 
-        issue_dt: Optional[datetime] = None
-        start_dt: Optional[datetime] = None
-        end_dt: Optional[datetime] = None
-
-        # tokens[idx+1] => issue time like "291146Z"
         if idx + 1 < len(tokens):
-            m_issue = re.match(r"^(\d{2})(\d{2})(\d{2})Z$", tokens[idx + 1])
-            if m_issue:
-                guess = _guess_datetime_from_tokens(
-                    int(m_issue.group(1)),  # day
-                    int(m_issue.group(2)),  # hour
-                    int(m_issue.group(3)),  # minute
+            match = re.match(r"^(\d{2})(\d{2})(\d{2})Z$", tokens[idx + 1])
+            if match:
+                dt = _guess_datetime_from_tokens(
+                    int(match.group(1)),
+                    int(match.group(2)),
+                    int(match.group(3)),
                     reference=reference,
                 )
-                if guess:
-                    issue_dt = guess
-                    issue_iso = guess.isoformat()
+                if dt:
+                    issue_iso = dt.isoformat()
 
-        # tokens[idx+2] => validity range like "2912/2924"
         if idx + 2 < len(tokens):
-            m_val = re.match(r"^(\d{2})(\d{2})/(\d{2})(\d{2})$", tokens[idx + 2])
-            if m_val:
-                start_day = int(m_val.group(1))
-                start_hour = int(m_val.group(2))
-                end_day = int(m_val.group(3))
-                end_hour = int(m_val.group(4))
-
-                # Handle the TAF convention where HH=24 means "next day at 00Z"
-                if start_hour == 24:
-                    start_hour = 0
-                    start_day += 1
-                if end_hour == 24:
-                    end_hour = 0
-                    end_day += 1
-
-                start_guess = _guess_datetime_from_tokens(
-                    start_day,
-                    start_hour,
+            match = re.match(r"^(\d{2})(\d{2})/(\d{2})(\d{2})$", tokens[idx + 2])
+            if match:
+                start_dt = _guess_datetime_from_tokens(
+                    int(match.group(1)),
+                    int(match.group(2)),
                     reference=reference,
                 )
-                end_guess = _guess_datetime_from_tokens(
-                    end_day,
-                    end_hour,
+                end_dt = _guess_datetime_from_tokens(
+                    int(match.group(3)),
+                    int(match.group(4)),
                     reference=reference,
                 )
+                if start_dt:
+                    valid_from_iso = start_dt.isoformat()
+                if end_dt:
+                    valid_to_iso = end_dt.isoformat()
 
-                if start_guess:
-                    start_dt = start_guess
-                    valid_from_iso = start_guess.isoformat()
-                if end_guess:
-                    end_dt = end_guess
-                    valid_to_iso = end_guess.isoformat()
-
-        # Build the "props-like" dict this bulletin should look like
         entry: Dict[str, Any] = {
             "station": station,
             "rawTAF": clean,
             "rawText": clean,
             "raw": clean,
         }
+
         if issue_iso:
             entry["issueTime"] = issue_iso
         if valid_from_iso:
@@ -175,21 +141,9 @@ def _parse_raw_taf_bulletins(raw_text: str) -> List[Dict[str, Any]]:
         if valid_to_iso:
             entry["validTimeTo"] = valid_to_iso
 
-        # Synthesize structured forecast segments from this raw TAF.
-        # IMPORTANT: _fallback_parse_raw_taf needs non-None issue_dt/start_dt/end_dt
-        # to build usable segments. Before, `end_dt` could be None whenever the TAF
-        # ended in "/2924". Now we normalize "24" -> next day 00Z so end_dt is valid.
-        entry["forecast"] = _fallback_parse_raw_taf(
-            clean,
-            issue_dt,
-            start_dt,
-            end_dt,
-        )
-
         bulletins.append(entry)
 
     return bulletins
-
 
 
 TAF_FORECAST_FIELDS = [
@@ -821,26 +775,14 @@ def _fallback_parse_raw_taf(
 
         segments.append(
             {
-                # readable strings
                 "from_display": segment_start.strftime("%b %d %Y, %H:%MZ"),
-                "to_display": (
-                    segment_end.strftime("%b %d %Y, %H:%MZ") if segment_end else "N/A"
-                ),
-        
-                # datetime objects (original keys)
                 "from_time": segment_start,
+                "to_display": segment_end.strftime("%b %d %Y, %H:%MZ") if segment_end else "N/A",
                 "to_time": segment_end,
-        
-                # NEW: alias keys that _extract_time_field() will actually pick up
-                "time_from": segment_start,
-                "time_to": segment_end,
-        
-                # details
                 "details": prevailing_details,
                 "tempo": tempo_blocks,
             }
         )
-
 
     return segments
 
