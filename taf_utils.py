@@ -246,19 +246,43 @@ def format_iso_timestamp(value: Any) -> Tuple[str, datetime | None]:
     if not value_str:
         return "N/A", None
 
-    if value_str.isdigit():
+    # Normalise a handful of non-standard timestamp representations that crop up
+    # in the various aviationweather.gov responses.  We have seen values such as
+    # ``2024-10-24T09:00:00-0400`` (offset without a colon),
+    # ``20241024T0900Z`` (compact Zulu format) and strings that include a
+    # trailing ``[UTC]`` suffix.  Coerce these into ISO-8601 so
+    # ``datetime.fromisoformat`` can handle them reliably.
+    normalized = value_str
+    if normalized.endswith("[UTC]"):
+        normalized = normalized[:-5]
+    if normalized.upper().endswith(" UTC"):
+        normalized = normalized[:-4] + "Z"
+    if normalized.upper().endswith(" Z"):
+        normalized = normalized[:-2] + "Z"
+
+    match = re.match(r"^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})Z$", normalized)
+    if match:
+        normalized = (
+            f"{match.group(1)}-{match.group(2)}-{match.group(3)}"
+            f"T{match.group(4)}:{match.group(5)}Z"
+        )
+
+    if re.search(r"[+-]\d{4}$", normalized) and not re.search(r"[+-]\d{2}:\d{2}$", normalized):
+        normalized = normalized[:-4] + normalized[-4:-2] + ":" + normalized[-2:]
+
+    if normalized.isdigit():
         try:
-            seconds = int(value_str)
+            seconds = int(normalized)
         except ValueError:
             seconds = None
         if seconds is not None:
-            if len(value_str) > 10:
+            if len(normalized) > 10:
                 seconds /= 1000.0
             dt = datetime.fromtimestamp(seconds, tz=timezone.utc)
             return _format(dt)
 
     try:
-        dt = datetime.fromisoformat(value_str.replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
     except ValueError:
         return value_str, None
 
