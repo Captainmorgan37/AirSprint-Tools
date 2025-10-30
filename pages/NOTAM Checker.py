@@ -17,6 +17,8 @@ from flight_leg_utils import (
 )
 from Home import configure_page, password_gate, render_sidebar, require_secret
 from notam_filters import is_taxiway_only_notam
+from taf_utils import get_taf_reports as _taf_core
+from taf_utils import _lookup_station_coordinates
 
 configure_page(page_title="CFPS/FAA NOTAM Viewer")
 password_gate()
@@ -1039,6 +1041,8 @@ def get_metar_reports(icao_codes: tuple[str, ...]):
 
     try:
         response = requests.get(url, params=params, timeout=10)
+        if response.status_code == 204 or not response.content.strip():
+            return {}
         response.raise_for_status()
     except requests.HTTPError as exc:
         status_code = getattr(exc.response, "status_code", None)
@@ -1049,11 +1053,16 @@ def get_metar_reports(icao_codes: tuple[str, ...]):
                 "hours": 3,
             }
             response = requests.get(url, params=fallback_params, timeout=10)
+            if response.status_code == 204 or not response.content.strip():
+                return {}
             response.raise_for_status()
         else:
             raise
 
-    data = response.json()
+    try:
+        data = response.json()
+    except ValueError:
+        return {}
 
     reports = {}
     for props in _normalize_aviationweather_features(data):
@@ -1126,165 +1135,12 @@ def get_metar_reports(icao_codes: tuple[str, ...]):
 
 
 @st.cache_data(ttl=300)
-def get_taf_reports(icao_codes: tuple[str, ...]):
+def get_taf_reports_cached(icao_codes: tuple[str, ...]):
     if not icao_codes:
         return {}
 
-    url = "https://aviationweather.gov/api/data/taf"
-    params = {
-        "ids": ",".join(sorted(set(code.upper() for code in icao_codes))),
-        "format": "json",
-        "mostRecent": "true",
-    }
-
-    try:
-        response = requests.get(url, params=params, timeout=10)
-        response.raise_for_status()
-    except requests.HTTPError as exc:
-        status_code = getattr(exc.response, "status_code", None)
-        if status_code == 400:
-            fallback_params = {
-                "ids": params["ids"],
-                "format": "json",
-            }
-            response = requests.get(url, params=fallback_params, timeout=10)
-            response.raise_for_status()
-        else:
-            raise
-
-    data = response.json()
-
-    taf_reports = {}
-
-    for props in _normalize_aviationweather_features(data):
-        station = (
-            props.get("station")
-            or props.get("stationId")
-            or props.get("icaoId")
-            or props.get("icao_id")
-            or ""
-        ).upper()
-        if not station:
-            continue
-
-        issue_display, issue_dt = format_iso_timestamp(
-            props.get("issueTime")
-            or props.get("issue_time")
-            or props.get("obsTime")
-            or props.get("obs_time")
-            or props.get("bulletinTime")
-        )
-        valid_from_display, valid_from_dt = format_iso_timestamp(
-            props.get("validTimeFrom") or props.get("valid_time_from")
-        )
-        valid_to_display, valid_to_dt = format_iso_timestamp(
-            props.get("validTimeTo") or props.get("valid_time_to")
-        )
-        raw_text = (
-            props.get("rawTAF")
-            or props.get("rawText")
-            or props.get("raw")
-            or props.get("raw_text")
-            or ""
-        )
-
-        forecast_source = (
-            props.get("forecast")
-            or props.get("forecastList")
-            or props.get("periods")
-            or []
-        )
-        if isinstance(forecast_source, dict):
-            nested = []
-            for key in ("data", "period", "periods", "forecast"):
-                value = forecast_source.get(key)
-                if isinstance(value, list):
-                    nested.extend(value)
-            if not nested:
-                nested.extend(
-                    v for v in forecast_source.values() if isinstance(v, dict)
-                )
-            forecast_source = nested
-        if not isinstance(forecast_source, list):
-            forecast_source = []
-
-        forecast_periods = []
-        for fc in forecast_source:
-            if not isinstance(fc, dict):
-                continue
-            fc_from_display, fc_from_dt = format_iso_timestamp(
-                fc.get("fcstTimeFrom")
-                or fc.get("timeFrom")
-                or fc.get("time_from")
-            )
-            fc_to_display, fc_to_dt = format_iso_timestamp(
-                fc.get("fcstTimeTo")
-                or fc.get("timeTo")
-                or fc.get("time_to")
-            )
-            fc_details = build_detail_list(fc, TAF_FORECAST_FIELDS)
-
-            wx = fc.get("wxString") or fc.get("weather")
-            if not wx:
-                wx = fc.get("wx_string")
-            if wx:
-                if isinstance(wx, list):
-                    wx = ", ".join(str(v) for v in wx if v not in (None, ""))
-                fc_details.append(("Weather", wx))
-
-            clouds = (
-                fc.get("clouds")
-                or fc.get("cloudList")
-                or fc.get("skyCondition")
-                or fc.get("sky_condition")
-            )
-            if isinstance(clouds, list):
-                cloud_parts = []
-                for cloud in clouds:
-                    if not isinstance(cloud, dict):
-                        continue
-                    cover = (
-                        cloud.get("cover")
-                        or cloud.get("cloudCover")
-                        or cloud.get("cloud_cover")
-                        or cloud.get("skyCover")
-                    )
-                    base = (
-                        cloud.get("base")
-                        or cloud.get("base_feet")
-                        or cloud.get("cloudBaseFT")
-                        or cloud.get("cloudBaseFt")
-                        or cloud.get("baseFeetAGL")
-                        or cloud.get("base_feet_agl")
-                    )
-                    if cover and base:
-                        cloud_parts.append(f"{cover} {base}ft")
-                    elif cover:
-                        cloud_parts.append(str(cover))
-                if cloud_parts:
-                    fc_details.append(("Clouds", ", ".join(cloud_parts)))
-
-            forecast_periods.append({
-                "from_display": fc_from_display,
-                "from_time": fc_from_dt,
-                "to_display": fc_to_display,
-                "to_time": fc_to_dt,
-                "details": fc_details,
-            })
-
-        taf_reports.setdefault(station, []).append({
-            "station": station,
-            "raw": raw_text,
-            "issue_time_display": issue_display,
-            "issue_time": issue_dt,
-            "valid_from_display": valid_from_display,
-            "valid_from": valid_from_dt,
-            "valid_to_display": valid_to_display,
-            "valid_to": valid_to_dt,
-            "forecast": forecast_periods,
-        })
-
-    return taf_reports
+    # Pass a list, because the util expects a Sequence[str]
+    return _taf_core(list(icao_codes))
 
 
 def _split_taf_into_lines(raw_taf: str) -> list[list[str]]:
@@ -1843,11 +1699,14 @@ with tab2:
             metar_reports = {}
             st.warning(f"Failed to retrieve METAR data: {e}")
 
-        try:
-            taf_reports = get_taf_reports(tuple(unique_codes))
-        except Exception as e:
-            taf_reports = {}
-            st.warning(f"Failed to retrieve TAF data: {e}")
+        st.write("DEBUG requested stations:", unique_codes)
+
+        # call the cached wrapper
+        taf_reports = get_taf_reports_cached(tuple(unique_codes))
+        st.write("DEBUG taf_reports returned:", taf_reports)
+
+        coords_debug = {code: _lookup_station_coordinates(code) for code in unique_codes}
+        st.write("DEBUG coords lookup:", coords_debug)
 
         if not any(metar_reports.get(code) or taf_reports.get(code) for code in unique_codes):
             st.info("No METAR/TAF data returned for the provided stations.")
@@ -1915,6 +1774,16 @@ with tab2:
                             validity_parts.append(taf["valid_to_display"])
                         if validity_parts:
                             header_parts.append("Valid " + " → ".join(validity_parts))
+
+                        if taf.get("is_fallback"):
+                            source_station = taf.get("station")
+                            distance_nm = taf.get("fallback_distance_nm")
+                            note = "Nearest available TAF"
+                            if source_station:
+                                note += f" from {source_station}"
+                            if isinstance(distance_nm, (int, float)):
+                                note += f" (~{distance_nm:.0f} NM)"
+                            header_parts.append(note)
 
                         st.markdown(" · ".join(header_parts))
                         raw_taf = taf.get("raw", "")

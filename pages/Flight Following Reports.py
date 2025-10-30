@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from functools import partial
 from typing import Any, Dict, Iterable, Mapping, Tuple
 
@@ -144,7 +144,11 @@ if submitted:
             st.error(str(exc))
         else:
             with st.spinner("Collecting flights, postflights, and rest data…"):
-                collection = collect_duty_start_snapshots(config, target_date)
+                collection = collect_duty_start_snapshots(
+                    config,
+                    target_date,
+                    min_departure_time_local=time(3, 0),
+                )
                 try:
                     next_day_collection = collect_duty_start_snapshots(
                         config, target_date + timedelta(days=1)

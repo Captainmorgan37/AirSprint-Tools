@@ -3,13 +3,147 @@
 from __future__ import annotations
 
 import calendar
+import csv
 import json
+import math
+import os
 import re
 
-from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, List, MutableMapping, Sequence, Tuple
+from datetime import datetime, timedelta, timezone
+from functools import lru_cache
+from typing import Any, Dict, Iterable, List, MutableMapping, Optional, Sequence, Tuple
 
 import requests
+
+
+EARTH_RADIUS_NM = 3440.065  # nautical miles
+FALLBACK_TAF_SEARCH_RADII_NM = [60, 90, 120, 180]
+
+_AIRPORT_COORDS: Dict[str, Tuple[float, float]] = {}
+
+
+def _coerce_float(value: Any) -> Optional[float]:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _guess_datetime_from_tokens(
+    day: int, hour: int, minute: int = 0, *, reference: Optional[datetime] = None
+) -> Optional[datetime]:
+    if reference is None:
+        reference = datetime.utcnow().replace(tzinfo=timezone.utc)
+
+    year = reference.year
+    month = reference.month
+
+    last_day = calendar.monthrange(year, month)[1]
+    if day > last_day:
+        day = last_day
+
+    try:
+        candidate = datetime(year, month, day, hour, minute, tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+    if reference - candidate > timedelta(days=15):
+        month += 1
+        if month > 12:
+            month = 1
+            year += 1
+    elif candidate - reference > timedelta(days=15):
+        month -= 1
+        if month < 1:
+            month = 12
+            year -= 1
+
+    last_day = calendar.monthrange(year, month)[1]
+    if day > last_day:
+        day = last_day
+
+    try:
+        return datetime(year, month, day, hour, minute, tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def _parse_raw_taf_bulletins(raw_text: str) -> List[Dict[str, Any]]:
+    pattern = re.compile(r"\bTAF\b.*?(?=(?:\sTAF\b|$))", re.DOTALL)
+    bulletins: List[Dict[str, Any]] = []
+    reference = datetime.utcnow().replace(tzinfo=timezone.utc)
+
+    for block in pattern.findall(raw_text):
+        clean = " ".join(block.replace("\n", " ").split())
+        if not clean:
+            continue
+
+        tokens = clean.split()
+        if not tokens or tokens[0] != "TAF":
+            continue
+
+        idx = 1
+        while idx < len(tokens) and tokens[idx] in {"AMD", "COR", "RTD"}:
+            idx += 1
+
+        if idx >= len(tokens):
+            continue
+
+        station = tokens[idx].upper().strip()
+        if not station:
+            continue
+
+        issue_iso: Optional[str] = None
+        valid_from_iso: Optional[str] = None
+        valid_to_iso: Optional[str] = None
+
+        if idx + 1 < len(tokens):
+            match = re.match(r"^(\d{2})(\d{2})(\d{2})Z$", tokens[idx + 1])
+            if match:
+                dt = _guess_datetime_from_tokens(
+                    int(match.group(1)),
+                    int(match.group(2)),
+                    int(match.group(3)),
+                    reference=reference,
+                )
+                if dt:
+                    issue_iso = dt.isoformat()
+
+        if idx + 2 < len(tokens):
+            match = re.match(r"^(\d{2})(\d{2})/(\d{2})(\d{2})$", tokens[idx + 2])
+            if match:
+                start_dt = _guess_datetime_from_tokens(
+                    int(match.group(1)),
+                    int(match.group(2)),
+                    reference=reference,
+                )
+                end_dt = _guess_datetime_from_tokens(
+                    int(match.group(3)),
+                    int(match.group(4)),
+                    reference=reference,
+                )
+                if start_dt:
+                    valid_from_iso = start_dt.isoformat()
+                if end_dt:
+                    valid_to_iso = end_dt.isoformat()
+
+        entry: Dict[str, Any] = {
+            "station": station,
+            "rawTAF": clean,
+            "rawText": clean,
+            "raw": clean,
+        }
+
+        if issue_iso:
+            entry["issueTime"] = issue_iso
+        if valid_from_iso:
+            entry["validTimeFrom"] = valid_from_iso
+        if valid_to_iso:
+            entry["validTimeTo"] = valid_to_iso
+
+        bulletins.append(entry)
+
+    return bulletins
 
 
 TAF_FORECAST_FIELDS = [
@@ -73,6 +207,7 @@ TIME_FROM_FIELDS: Tuple[str, ...] = (
     "time_from",
     "startTime",
     "start_time",
+    "from_time",
     "from",
     "start",
 )
@@ -83,6 +218,7 @@ TIME_TO_FIELDS: Tuple[str, ...] = (
     "time_to",
     "endTime",
     "end_time",
+    "to_time",
     "to",
     "end",
 )
@@ -112,19 +248,43 @@ def format_iso_timestamp(value: Any) -> Tuple[str, datetime | None]:
     if not value_str:
         return "N/A", None
 
-    if value_str.isdigit():
+    # Normalise a handful of non-standard timestamp representations that crop up
+    # in the various aviationweather.gov responses.  We have seen values such as
+    # ``2024-10-24T09:00:00-0400`` (offset without a colon),
+    # ``20241024T0900Z`` (compact Zulu format) and strings that include a
+    # trailing ``[UTC]`` suffix.  Coerce these into ISO-8601 so
+    # ``datetime.fromisoformat`` can handle them reliably.
+    normalized = value_str
+    if normalized.endswith("[UTC]"):
+        normalized = normalized[:-5]
+    if normalized.upper().endswith(" UTC"):
+        normalized = normalized[:-4] + "Z"
+    if normalized.upper().endswith(" Z"):
+        normalized = normalized[:-2] + "Z"
+
+    match = re.match(r"^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})Z$", normalized)
+    if match:
+        normalized = (
+            f"{match.group(1)}-{match.group(2)}-{match.group(3)}"
+            f"T{match.group(4)}:{match.group(5)}Z"
+        )
+
+    if re.search(r"[+-]\d{4}$", normalized) and not re.search(r"[+-]\d{2}:\d{2}$", normalized):
+        normalized = normalized[:-4] + normalized[-4:-2] + ":" + normalized[-2:]
+
+    if normalized.isdigit():
         try:
-            seconds = int(value_str)
+            seconds = int(normalized)
         except ValueError:
             seconds = None
         if seconds is not None:
-            if len(value_str) > 10:
+            if len(normalized) > 10:
                 seconds /= 1000.0
             dt = datetime.fromtimestamp(seconds, tz=timezone.utc)
             return _format(dt)
 
     try:
-        dt = datetime.fromisoformat(value_str.replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
     except ValueError:
         return value_str, None
 
@@ -328,27 +488,50 @@ def _normalise_forecast_segment(segment: MutableMapping[str, Any]) -> MutableMap
     return normalized
 
 
+
+
 def _normalize_aviationweather_features(data: Any) -> Iterable[Dict[str, Any]]:
     if isinstance(data, MutableMapping):
-        for key in ("features", "data", "items", "reports"):
-            if key in data and isinstance(data[key], Iterable):
-                for item in data[key]:
-                    if isinstance(item, MutableMapping):
-                        props = item.get("properties")
-                        if isinstance(props, MutableMapping):
-                            yield props  # type: ignore[misc]
-                        elif isinstance(item, MutableMapping):
-                            yield item  # type: ignore[misc]
-                return
-        yield data  # type: ignore[misc]
-    elif isinstance(data, Iterable):
-        for item in data:
-            if isinstance(item, MutableMapping):
-                props = item.get("properties") if isinstance(item, MutableMapping) else None
+        features = data.get("features")
+        if isinstance(features, Iterable):
+            for item in features:
+                if not isinstance(item, MutableMapping):
+                    continue
+                props = item.get("properties")
                 if isinstance(props, MutableMapping):
                     yield props  # type: ignore[misc]
                 else:
                     yield item  # type: ignore[misc]
+            return
+
+        data_container = data.get("data")
+        if isinstance(data_container, MutableMapping):
+            for value in data_container.values():
+                if isinstance(value, Iterable):
+                    for item in value:
+                        if isinstance(item, MutableMapping):
+                            yield item  # type: ignore[misc]
+            return
+
+        reports = data.get("reports")
+        if isinstance(reports, Iterable):
+            for rep in reports:
+                if isinstance(rep, MutableMapping):
+                    yield rep  # type: ignore[misc]
+            return
+
+        yield data  # type: ignore[misc]
+        return
+
+    if isinstance(data, Iterable):
+        for item in data:
+            if not isinstance(item, MutableMapping):
+                continue
+            props = item.get("properties") if isinstance(item, MutableMapping) else None
+            if isinstance(props, MutableMapping):
+                yield props  # type: ignore[misc]
+            else:
+                yield item  # type: ignore[misc]
 
 
 def _fallback_parse_raw_taf(
@@ -606,16 +789,448 @@ def _fallback_parse_raw_taf(
     return segments
 
 
+def _load_airport_coords_db() -> None:
+    global _AIRPORT_COORDS
+    if _AIRPORT_COORDS:
+        return
+
+    db_path = os.path.join(os.path.dirname(__file__), "Airport TZ.txt")
+
+    try:
+        with open(db_path, newline="", encoding="utf-8") as handle:
+            reader = csv.reader(handle)
+            for row in reader:
+                if not row or len(row) < 9:
+                    continue
+
+                icao = row[0].strip().strip('"').upper()
+                if not icao or icao == "ICAO":
+                    continue
+
+                try:
+                    lat_val = float(row[7])
+                    lon_val = float(row[8])
+                except (ValueError, IndexError):
+                    continue
+
+                _AIRPORT_COORDS[icao] = (lat_val, lon_val)
+    except OSError:
+        pass
+
+
+def _fetch_station_coords_from_api(station: str) -> Optional[Tuple[float, float]]:
+    url = "https://aviationweather.gov/adds/dataserver_current/httpparam"
+    params = {
+        "dataSource": "stations",
+        "requestType": "retrieve",
+        "format": "JSON",
+        "stationString": station,
+    }
+
+    try:
+        resp = requests.get(url, params=params, timeout=30)
+        resp.raise_for_status()
+    except requests.RequestException:
+        return None
+
+    try:
+        data = resp.json()
+    except ValueError:
+        return None
+
+    stations = []
+    if isinstance(data, MutableMapping):
+        stations = data.get("data", {}).get("STATION", [])  # type: ignore[assignment]
+
+    for props in stations:
+        if not isinstance(props, MutableMapping):
+            continue
+
+        lat = _coerce_float(props.get("latitude") or props.get("lat"))
+        lon = _coerce_float(props.get("longitude") or props.get("lon"))
+
+        if lat is not None and lon is not None:
+            return (lat, lon)
+
+    return None
+
+
+@lru_cache(maxsize=512)
+def _lookup_station_coordinates(station: str) -> Optional[Tuple[float, float]]:
+    station = (station or "").upper().strip()
+    if not station:
+        return None
+
+    _load_airport_coords_db()
+    if station in _AIRPORT_COORDS:
+        return _AIRPORT_COORDS[station]
+
+    return _fetch_station_coords_from_api(station)
+
+
+def _haversine_distance_nm(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    rlat1 = math.radians(lat1)
+    rlon1 = math.radians(lon1)
+    rlat2 = math.radians(lat2)
+    rlon2 = math.radians(lon2)
+
+    dlat = rlat2 - rlat1
+    dlon = rlon2 - rlon1
+
+    a = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(rlat1) * math.cos(rlat2) * math.sin(dlon / 2) ** 2
+    )
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+    return EARTH_RADIUS_NM * c
+
+def _make_bbox(lat: float, lon: float, radius_nm: float) -> str:
+    """
+    Build a bounding box string for aviationweather.gov/api/data/taf.
+
+    aviationweather.gov expects bbox as "lat0,lon0,lat1,lon1"
+    where (lat0,lon0) is SW corner and (lat1,lon1) is NE corner.
+
+    We'll approximate a circle with a square:
+      ~60 NM per degree latitude
+      ~60 NM * cos(lat) per degree longitude
+    """
+    # how many degrees of lat/lon ≈ this many NM?
+    dlat = radius_nm / 60.0
+
+    cos_lat = math.cos(math.radians(lat))
+    if abs(cos_lat) < 1e-6:
+        dlon = radius_nm / 60.0
+    else:
+        dlon = radius_nm / (60.0 * cos_lat)
+
+    min_lat = lat - dlat
+    max_lat = lat + dlat
+    min_lon = lon - dlon
+    max_lon = lon + dlon
+
+    return f"{min_lat:.4f},{min_lon:.4f},{max_lat:.4f},{max_lon:.4f}"
+
+
+def _fetch_nearby_taf_report(station_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Find the nearest available TAF if `station_id` itself doesn't have one.
+
+    Steps:
+      1. Get coordinates for the requested station (prefers Airport TZ.txt).
+      2. For increasing radii (60, 90, 120, 180 NM):
+         - Build a lat/lon bbox around that point.
+         - Call aviationweather.gov/api/data/taf with that bbox, asking for raw TAF text.
+         - Parse the returned bulletins with _parse_raw_taf_bulletins.
+         - For each bulletin:
+             * identify its station
+             * skip if it's literally the same as station_id
+             * compute distance to our origin station (using our coord DB)
+         - Keep the closest.
+      3. Return the best match, with fallback metadata.
+
+    Returns:
+        A dict shaped like a TAF "props" block plus:
+          "is_fallback": True
+          "fallback_distance_nm": float
+          "fallback_radius_nm": float
+        or None if nothing usable was found.
+    """
+    station_id = (station_id or "").upper().strip()
+    if not station_id:
+        return None
+
+    # Step 1: where are we?
+    base_coords = _lookup_station_coordinates(station_id)
+    if not base_coords:
+        return None
+    base_lat, base_lon = base_coords
+
+    best_entry: Optional[Dict[str, Any]] = None
+    best_distance: Optional[float] = None
+
+    taf_url = "https://aviationweather.gov/api/data/taf"
+
+    for radius_nm in FALLBACK_TAF_SEARCH_RADII_NM:
+        bbox_str = _make_bbox(base_lat, base_lon, radius_nm)
+
+        params = {
+            "bbox": bbox_str,
+            "time": "issue",   # "issue" = most recent issuance
+            "format": "raw",   # we want plain text TAFs
+        }
+
+        try:
+            resp = requests.get(taf_url, params=params, timeout=10)
+            # If the API gives 204 No Content or empty text, skip
+            if resp.status_code == 204 or not resp.text.strip():
+                continue
+            resp.raise_for_status()
+        except requests.RequestException:
+            continue
+
+        raw_text = resp.text or ""
+        bulletins = _parse_raw_taf_bulletins(raw_text)
+        if not bulletins:
+            continue
+
+        found_any_here = False
+
+        for taf in bulletins:
+            # taf from _parse_raw_taf_bulletins() has keys like:
+            #   "station", "rawTAF", "issueTime", "validTimeFrom", "validTimeTo", ...
+            taf_station = str(
+                taf.get("station")
+                or taf.get("stationId")
+                or taf.get("station_id")
+                or taf.get("icaoId")
+                or taf.get("icao_id")
+                or ""
+            ).upper().strip()
+            if not taf_station:
+                continue
+
+            # Don't return ourselves as a "fallback"
+            if taf_station == station_id:
+                continue
+
+            # Measure distance
+            their_coords = _lookup_station_coordinates(taf_station)
+            if their_coords:
+                dist_nm = _haversine_distance_nm(
+                    base_lat, base_lon,
+                    their_coords[0], their_coords[1],
+                )
+            else:
+                dist_nm = None
+
+            if dist_nm is None:
+                # If we can't measure distance, it's not very helpful;
+                # skip unless we literally have no better candidate.
+                if best_entry is not None:
+                    continue
+
+            # Decide if this is better than what we had
+            if best_distance is not None and dist_nm is not None:
+                if dist_nm >= best_distance:
+                    continue
+
+            # new best candidate
+            candidate = dict(taf)
+            candidate["is_fallback"] = True
+            candidate["fallback_distance_nm"] = dist_nm
+            candidate["fallback_radius_nm"] = radius_nm
+
+            best_entry = candidate
+            best_distance = dist_nm if dist_nm is not None else best_distance
+            found_any_here = True
+
+        # stop expanding once we found at least one viable TAF in this radius
+        if found_any_here and best_entry is not None:
+            break
+
+    return best_entry
+
+
+def _build_report_from_props(
+    props: MutableMapping[str, Any],
+    *,
+    is_fallback: bool = False,
+    fallback_distance_nm: Optional[float] = None,
+    fallback_radius_nm: Optional[float] = None,
+) -> Optional[Dict[str, Any]]:
+
+    # Support both AviationWeather (/api/data/taf) and ADDS (dataserver_current)
+    station = (
+        props.get("station")
+        or props.get("stationId")
+        or props.get("station_id")      # <-- added
+        or props.get("icaoId")
+        or props.get("icao_id")
+        or ""
+    )
+    station = str(station).upper().strip()
+    if not station:
+        return None
+
+    issue_display, issue_dt = format_iso_timestamp(
+        props.get("issueTime")
+        or props.get("issue_time")
+        or props.get("obsTime")
+        or props.get("obs_time")
+        or props.get("bulletinTime")
+    )
+
+    valid_from_display, valid_from_dt = format_iso_timestamp(
+        props.get("validTimeFrom")
+        or props.get("valid_time_from")
+        or props.get("valid_time_from_iso")  # being defensive
+    )
+
+    valid_to_display, valid_to_dt = format_iso_timestamp(
+        props.get("validTimeTo")
+        or props.get("valid_time_to")
+        or props.get("valid_time_to_iso")
+    )
+
+    raw_text = (
+        props.get("rawTAF")
+        or props.get("rawText")
+        or props.get("raw_text")
+        or props.get("raw")
+        or ""
+    )
+
+    # Forecast segments (either structured or fallback-parse the raw TAF)
+    forecast_periods: List[Dict[str, Any]] = []
+    forecast_source = (
+        props.get("forecast")
+        or props.get("forecastList")
+        or props.get("periods")
+        or []
+    )
+    for fc in _iter_forecast_candidates(forecast_source):
+        if not isinstance(fc, MutableMapping):
+            continue
+        fc_processed = _normalise_forecast_segment(fc)
+
+        from_value = _extract_time_field(fc_processed, TIME_FROM_FIELDS)
+        to_value   = _extract_time_field(fc_processed, TIME_TO_FIELDS)
+
+        fc_from_display, fc_from_dt = format_iso_timestamp(from_value)
+        fc_to_display,   fc_to_dt   = format_iso_timestamp(to_value)
+
+        fc_details = build_detail_list(fc_processed, TAF_FORECAST_FIELDS)
+
+        wx = (
+            fc_processed.get("wxString")
+            or fc_processed.get("weather")
+            or fc_processed.get("wx_string")
+        )
+        if wx:
+            if isinstance(wx, Iterable) and not isinstance(wx, (str, bytes, bytearray)):
+                parts = []
+                for item in wx:
+                    simplified = _simplify_detail_value(item)
+                    if simplified not in (None, "", []):
+                        parts.append(str(simplified))
+                wx = ", ".join(parts)
+            fc_details.append(("Weather", wx))
+
+        clouds = (
+            fc_processed.get("clouds")
+            or fc_processed.get("cloudList")
+            or fc_processed.get("skyCondition")
+            or fc_processed.get("sky_condition")
+        )
+
+        if isinstance(clouds, str):
+            try:
+                parsed_clouds = json.loads(clouds)
+            except (TypeError, ValueError):
+                parsed_clouds = []
+            clouds = parsed_clouds
+
+        if isinstance(clouds, Iterable) and not isinstance(clouds, (str, bytes, bytearray)):
+            cloud_parts: List[str] = []
+            for cloud in clouds:
+                if not isinstance(cloud, MutableMapping):
+                    continue
+                cover = (
+                    cloud.get("cover")
+                    or cloud.get("cloudCover")
+                    or cloud.get("cloud_cover")
+                    or cloud.get("skyCover")
+                    or cloud.get("amount")
+                    or cloud.get("repr")
+                )
+                base = (
+                    cloud.get("base")
+                    or cloud.get("base_feet")
+                    or cloud.get("cloudBaseFT")
+                    or cloud.get("cloudBaseFt")
+                    or cloud.get("baseFeetAGL")
+                    or cloud.get("base_feet_agl")
+                    or cloud.get("baseFeet")
+                )
+                if isinstance(base, MutableMapping):
+                    base = (
+                        base.get("value")
+                        or base.get("feet")
+                        or base.get("repr")
+                        or base.get("minValue")
+                        or base.get("maxValue")
+                    )
+                if cover and base:
+                    cloud_parts.append(f"{cover} {base}ft")
+                elif cover:
+                    cloud_parts.append(str(cover))
+
+            if cloud_parts:
+                fc_details.append(("Clouds", ", ".join(cloud_parts)))
+
+        forecast_periods.append(
+            {
+                "from_display": fc_from_display,
+                "from_time": fc_from_dt,
+                "to_display": fc_to_display,
+                "to_time": fc_to_dt,
+                "details": fc_details,
+            }
+        )
+
+    if not forecast_periods:
+        # fall back to manual TAF parser if we didn't get structured segments
+        forecast_periods = _fallback_parse_raw_taf(
+            raw_text,
+            issue_dt,
+            valid_from_dt,
+            valid_to_dt,
+        )
+
+    report: Dict[str, Any] = {
+        "station": station,
+        "raw": raw_text,
+        "issue_time_display": issue_display,
+        "issue_time": issue_dt,
+        "valid_from_display": valid_from_display,
+        "valid_from": valid_from_dt,
+        "valid_to_display": valid_to_display,
+        "valid_to": valid_to_dt,
+        "forecast": forecast_periods,
+        "is_fallback": is_fallback,
+    }
+
+    if is_fallback:
+        if fallback_distance_nm is not None:
+            report["fallback_distance_nm"] = fallback_distance_nm
+        if fallback_radius_nm is not None:
+            report["fallback_radius_nm"] = fallback_radius_nm
+
+    return report
+
+
+
 def get_taf_reports(icao_codes: Sequence[str]) -> Dict[str, List[Dict[str, Any]]]:
-    if not icao_codes:
+    clean_codes: List[str] = []
+    for code in icao_codes:
+        if not code:
+            continue
+        up = code.strip().upper()
+        if up and up not in clean_codes:
+            clean_codes.append(up)
+
+    if not clean_codes:
         return {}
 
-    url = "https://aviationweather.gov/api/data/taf"
     params = {
-        "ids": ",".join(sorted({code.upper() for code in icao_codes if code})),
+        "ids": ",".join(sorted(clean_codes)),
         "format": "json",
         "mostRecent": "true",
     }
+
+    url = "https://aviationweather.gov/api/data/taf"
 
     try:
         response = requests.get(url, params=params, timeout=10)
@@ -629,161 +1244,69 @@ def get_taf_reports(icao_codes: Sequence[str]) -> Dict[str, List[Dict[str, Any]]
         else:
             raise
 
-    data = response.json()
-    taf_reports: Dict[str, List[Dict[str, Any]]] = {}
+    try:
+        data = response.json()
+    except ValueError:
+        text = response.text or ""
+        stripped = text.strip()
+        if stripped:
+            if "TAF" in stripped:
+                bulletins = _parse_raw_taf_bulletins(stripped)
+                data = {"reports": bulletins}
+            else:
+                data = []
+        else:
+            data = []
 
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
     for props in _normalize_aviationweather_features(data):
-        station = (
-            props.get("station")
-            or props.get("stationId")
-            or props.get("icaoId")
-            or props.get("icao_id")
-            or ""
+        if not isinstance(props, MutableMapping):
+            continue
+        report = _build_report_from_props(props)
+        if not report:
+            continue
+        grouped.setdefault(report["station"], []).append(report)
+
+    for station, reports in list(grouped.items()):
+        reports_sorted = sorted(
+            reports,
+            key=lambda r: r.get("issue_time")
+            or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True,
         )
-        station = str(station).upper()
-        if not station:
+        grouped[station] = [reports_sorted[0]]
+
+    results: Dict[str, List[Dict[str, Any]]] = {code: [] for code in clean_codes}
+
+    for code in clean_codes:
+        if code in grouped:
+            entry = dict(grouped[code][0])
+            entry["is_fallback"] = False
+            entry.pop("fallback_distance_nm", None)
+            entry.pop("fallback_radius_nm", None)
+            entry["requested_station"] = code
+            results[code] = [entry]
             continue
 
-        issue_display, issue_dt = format_iso_timestamp(
-            props.get("issueTime")
-            or props.get("issue_time")
-            or props.get("obsTime")
-            or props.get("obs_time")
-            or props.get("bulletinTime")
-        )
-        valid_from_display, valid_from_dt = format_iso_timestamp(
-            props.get("validTimeFrom") or props.get("valid_time_from")
-        )
-        valid_to_display, valid_to_dt = format_iso_timestamp(
-            props.get("validTimeTo") or props.get("valid_time_to")
-        )
-        raw_text = (
-            props.get("rawTAF")
-            or props.get("rawText")
-            or props.get("raw")
-            or props.get("raw_text")
-            or ""
+        fallback = _fetch_nearby_taf_report(code)
+        if not fallback:
+            continue
+
+        report = _build_report_from_props(
+            dict(fallback),
+            is_fallback=True,
+            fallback_distance_nm=fallback.get("fallback_distance_nm"),
+            fallback_radius_nm=fallback.get("fallback_radius_nm"),
         )
 
-        forecast_periods: List[Dict[str, Any]] = []
-        forecast_source = (
-            props.get("forecast")
-            or props.get("forecastList")
-            or props.get("periods")
-            or []
-        )
-        for fc in _iter_forecast_candidates(forecast_source):
-            if not isinstance(fc, MutableMapping):
-                continue
-            fc_processed = _normalise_forecast_segment(fc)
-            from_value = _extract_time_field(fc_processed, TIME_FROM_FIELDS)
-            to_value = _extract_time_field(fc_processed, TIME_TO_FIELDS)
-            fc_from_display, fc_from_dt = format_iso_timestamp(from_value)
-            fc_to_display, fc_to_dt = format_iso_timestamp(to_value)
-            fc_details = build_detail_list(fc_processed, TAF_FORECAST_FIELDS)
+        if report:
+            report.setdefault("issue_time_display", fallback.get("issue_time_display", "N/A"))
+            report.setdefault("valid_from_display", fallback.get("valid_from_display", "N/A"))
+            report.setdefault("valid_to_display", fallback.get("valid_to_display", "N/A"))
+            report["requested_station"] = code
+            results[code] = [report]
 
-            wx = (
-                fc_processed.get("wxString")
-                or fc_processed.get("weather")
-                or fc_processed.get("wx_string")
-            )
-            if wx:
-                if isinstance(wx, Iterable) and not isinstance(wx, (str, bytes, bytearray)):
-                    parts = []
-                    for item in wx:
-                        simplified = _simplify_detail_value(item)
-                        if simplified in (None, "", []):
-                            continue
-                        parts.append(str(simplified))
-                    wx = ", ".join(parts)
-                fc_details.append(("Weather", wx))
-
-            clouds = (
-                fc_processed.get("clouds")
-                or fc_processed.get("cloudList")
-                or fc_processed.get("skyCondition")
-                or fc_processed.get("sky_condition")
-            )
-            if isinstance(clouds, str):
-                try:
-                    parsed_clouds = json.loads(clouds)
-                except (TypeError, ValueError):
-                    parsed_clouds = []
-                clouds = parsed_clouds
-            if isinstance(clouds, Iterable) and not isinstance(clouds, (str, bytes, bytearray)):
-                cloud_iterable = clouds
-            else:
-                cloud_iterable = []
-            if isinstance(cloud_iterable, Iterable):
-                cloud_parts: List[str] = []
-                for cloud in cloud_iterable:
-                    if not isinstance(cloud, MutableMapping):
-                        continue
-                    cover = (
-                        cloud.get("cover")
-                        or cloud.get("cloudCover")
-                        or cloud.get("cloud_cover")
-                        or cloud.get("skyCover")
-                        or cloud.get("amount")
-                        or cloud.get("repr")
-                    )
-                    base = (
-                        cloud.get("base")
-                        or cloud.get("base_feet")
-                        or cloud.get("cloudBaseFT")
-                        or cloud.get("cloudBaseFt")
-                        or cloud.get("baseFeetAGL")
-                        or cloud.get("base_feet_agl")
-                        or cloud.get("baseFeet")
-                    )
-                    if isinstance(base, MutableMapping):
-                        base = (
-                            base.get("value")
-                            or base.get("feet")
-                            or base.get("repr")
-                            or base.get("minValue")
-                            or base.get("maxValue")
-                        )
-                    if cover and base:
-                        cloud_parts.append(f"{cover} {base}ft")
-                    elif cover:
-                        cloud_parts.append(str(cover))
-                if cloud_parts:
-                    fc_details.append(("Clouds", ", ".join(cloud_parts)))
-
-            forecast_periods.append(
-                {
-                    "from_display": fc_from_display,
-                    "from_time": fc_from_dt,
-                    "to_display": fc_to_display,
-                    "to_time": fc_to_dt,
-                    "details": fc_details,
-                }
-            )
-
-        if not forecast_periods:
-            forecast_periods = _fallback_parse_raw_taf(
-                raw_text,
-                issue_dt,
-                valid_from_dt,
-                valid_to_dt,
-            )
-
-        taf_reports.setdefault(station, []).append(
-            {
-                "station": station,
-                "raw": raw_text,
-                "issue_time_display": issue_display,
-                "issue_time": issue_dt,
-                "valid_from_display": valid_from_display,
-                "valid_from": valid_from_dt,
-                "valid_to_display": valid_to_display,
-                "valid_to": valid_to_dt,
-                "forecast": forecast_periods,
-            }
-        )
-
-    return taf_reports
+    return results
 
 
 __all__ = ["TAF_FORECAST_FIELDS", "build_detail_list", "format_iso_timestamp", "get_taf_reports"]

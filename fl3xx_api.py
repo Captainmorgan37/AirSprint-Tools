@@ -521,7 +521,7 @@ def extract_missing_qualifications_from_preflight(
 
             if (
                 msg_type == "QUALIFICATION"
-                and msg_status == "MISSING"
+                and msg_status in {"MISSING", "EXPIRED"}
                 and isinstance(qual_name, str)
             ):
                 cleaned_name = qual_name.strip()
