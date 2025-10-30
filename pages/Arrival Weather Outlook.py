@@ -1,8 +1,10 @@
+import csv
 import hashlib
 import html
 import json
 from collections import defaultdict
 from datetime import date, datetime, time, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import requests
@@ -145,7 +147,11 @@ st.markdown(
                         box-shadow:0 0 0 2px rgba(34, 197, 94, 0.45), 0 12px 24px rgba(22, 101, 52, 0.35);}
     .flight-card--arrival-elapsed {background:rgba(202, 138, 4, 0.78); border-color:rgba(250, 204, 21, 0.82);
                                    box-shadow:0 0 0 2px rgba(250, 204, 21, 0.45), 0 12px 24px rgba(161, 98, 7, 0.35);}
+    .flight-card__header {display:flex; justify-content:space-between; align-items:flex-start; gap:0.75rem;}
     .flight-card h4 {margin:0 0 0.35rem 0; font-size:1.05rem; color:#f8fafc;}
+    .flight-card__runway {font-size:0.75rem; color:#e2e8f0; background:rgba(30, 64, 175, 0.35);
+                          border-radius:0.6rem; padding:0.2rem 0.55rem; white-space:nowrap;
+                          font-weight:600; letter-spacing:0.03em;}
     .flight-card .times {font-family:"Source Code Pro", Menlo, Consolas, monospace; font-size:0.9rem;
                          margin-bottom:0.45rem; line-height:1.35; color:#cbd5f5;}
     .flight-card .past-flag {display:inline-block; padding:0.25rem 0.55rem; margin-bottom:0.5rem;
@@ -181,6 +187,32 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
+
+@st.cache_data(show_spinner=False)
+def load_longest_runways() -> Dict[str, int]:
+    runway_map: Dict[str, int] = {}
+    try:
+        runways_path = Path(__file__).resolve().parents[1] / "runways.csv"
+        with runways_path.open(newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            for row in reader:
+                ident = (row.get("airport_ident") or "").strip().upper()
+                if not ident:
+                    continue
+                length_text = (row.get("length_ft") or "").strip()
+                try:
+                    length_val = int(float(length_text))
+                except ValueError:
+                    continue
+                if length_val <= 0:
+                    continue
+                current = runway_map.get(ident)
+                if current is None or length_val > current:
+                    runway_map[ident] = length_val
+    except FileNotFoundError:
+        return {}
+    return runway_map
 
 
 def _default_date_range(now: Optional[datetime] = None) -> Tuple[date, date]:
@@ -759,9 +791,25 @@ def _build_flight_card(flight: Dict[str, Any], taf_html: str) -> str:
             f"<span class='badge'>{badge}</span>" for badge in badges
         ) + "</div>"
 
+    runway_html = ""
+    longest_runway = flight.get("longest_runway_ft")
+    if longest_runway:
+        runway_html = (
+            "<span class='flight-card__runway'>"
+            f"Longest RWY {longest_runway:,} ft"
+            "</span>"
+        )
+
+    header_html = (
+        "<div class='flight-card__header'>"
+        f"<h4>{html.escape(route)}</h4>"
+        f"{runway_html}"
+        "</div>"
+    )
+
     return (
         f"<div class='{' '.join(card_classes)}'>"
-        f"<h4>{html.escape(route)}</h4>"
+        f"{header_html}"
         f"{badge_html}"
         f"{past_flag_html}"
         f"<div class='times'>{html.escape(dep_line)}<br>{html.escape(arr_line)}</div>"
@@ -814,6 +862,8 @@ except requests.HTTPError as exc:
 window_start_local = datetime.combine(window_start_date, time.min, tzinfo=MOUNTAIN_TZ)
 window_end_local = datetime.combine(window_end_date + timedelta(days=1), time.min, tzinfo=MOUNTAIN_TZ)
 
+runway_lengths = load_longest_runways()
+
 processed_flights: List[Dict[str, Any]] = []
 today_local_date = datetime.now(tz=MOUNTAIN_TZ).date()
 for row in flight_rows:
@@ -846,6 +896,7 @@ for row in flight_rows:
             "raw": row,
             "local_service_date": candidate_date,
             "is_today": candidate_date == today_local_date,
+            "longest_runway_ft": runway_lengths.get(arrival_airport or ""),
         }
     )
 
