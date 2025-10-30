@@ -168,6 +168,10 @@ st.markdown(
                               overflow:auto; color:#cbd5f5;}
     .flight-card .taf-missing {color:#fca5a5; font-style:italic;}
     .flight-card .taf-warning {margin-top:0.35rem; color:#facc15; font-weight:600;}
+    .taf-fallback-banner {margin-bottom:0.5rem; padding:0.35rem 0.55rem; border-radius:0.4rem;
+                          background:rgba(251, 191, 36, 0.18); border:1px solid rgba(251, 191, 36, 0.45);
+                          color:#facc15; font-size:0.8rem; font-weight:600; letter-spacing:0.03em;
+                          text-transform:uppercase; display:inline-block;}
     .taf-highlight {font-weight:600;}
     .taf-highlight--red {color:#c41230;}
     .taf-highlight--yellow {color:#b8860b;}
@@ -598,11 +602,23 @@ def _build_taf_html(
     if report is None:
         return "<div class='taf taf-missing'>No TAF segment matched the arrival window.</div>"
 
+    fallback_banner = ""
+    if report.get("is_fallback"):
+        fallback_station = str(report.get("station") or "").strip().upper()
+        distance_val = _try_float(report.get("fallback_distance_nm"))
+        distance_text = ""
+        if distance_val is not None:
+            distance_text = f" {int(round(distance_val))} nm away"
+        station_text = html.escape(fallback_station) if fallback_station else "Unknown"
+        banner_text = f"USING NEARBY TAF {station_text}{html.escape(distance_text)}"
+        fallback_banner = f"<div class='taf-fallback-banner'>{banner_text}</div>"
+
     if period is None:
         raw_taf = html.escape(str(report.get("raw") or ""))
         issue_display = html.escape(str(report.get("issue_time_display") or ""))
         parts = [
             "<div class='taf'>",
+            fallback_banner,
             "<div class='taf-missing'>No structured TAF segment matched the arrival window.</div>",
         ]
         if issue_display:
@@ -647,7 +663,10 @@ def _build_taf_html(
         )
     summary_items = _summarise_period(period, arrival_dt, airport_code)
 
-    lines = [f"<div><strong>Forecast window:</strong> {html.escape(window_text)}</div>"]
+    lines: List[str] = []
+    if fallback_banner:
+        lines.append(fallback_banner)
+    lines.append(f"<div><strong>Forecast window:</strong> {html.escape(window_text)}</div>")
     if warning_html:
         lines.append(warning_html)
     details_html = ""
