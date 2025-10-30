@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pathlib
 import sys
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timezone
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
@@ -13,12 +13,14 @@ from flight_following_reports import (
     _merge_split_duty_information,
     _parse_pilot_blocks,
     build_rest_before_index,
+    collect_duty_start_snapshots,
     DutyStartCollection,
     DutyStartPilotSnapshot,
     DutyStartSnapshot,
     summarize_split_duty_days,
     summarize_tight_turnarounds,
 )
+from fl3xx_api import Fl3xxApiConfig, MOUNTAIN_TIME_ZONE
 
 
 def test_parse_pilot_blocks_reads_time_dtls2() -> None:
@@ -141,6 +143,51 @@ def test_merge_split_duty_information_updates_existing_snapshot() -> None:
 
     updated_sic = pilot_lookup["P2"]
     assert updated_sic.split_duty is True
+
+
+def test_collect_duty_start_snapshots_respects_min_departure_time() -> None:
+    target_date = date(2024, 4, 1)
+    early_block = datetime(2024, 4, 1, 2, 30, tzinfo=MOUNTAIN_TIME_ZONE).astimezone(
+        timezone.utc
+    )
+    late_block = datetime(2024, 4, 1, 3, 5, tzinfo=MOUNTAIN_TIME_ZONE).astimezone(
+        timezone.utc
+    )
+
+    flights = [
+        {
+            "flightId": "before",
+            "registrationNumber": "C-GMTST",
+            "blockOffEstUTC": early_block.isoformat(),
+        },
+        {
+            "flightId": "after",
+            "registrationNumber": "C-GMTST",
+            "blockOffEstUTC": late_block.isoformat(),
+        },
+    ]
+
+    collection = collect_duty_start_snapshots(
+        Fl3xxApiConfig(),
+        target_date,
+        flights=flights,
+        postflight_fetcher=lambda *_: {},
+        min_departure_time_local=time(3, 0),
+    )
+
+    assert collection.start_utc == datetime.combine(
+        target_date, time(3, 0), tzinfo=MOUNTAIN_TIME_ZONE
+    ).astimezone(timezone.utc)
+    assert len(collection.snapshots) == 1
+    assert collection.snapshots[0].flight_id == "after"
+
+    grouped = collection.grouped_flights.get("C-GMTST", [])
+    assert len(grouped) == 1
+    assert grouped[0]["flight_id"] == "after"
+
+    skipped = (collection.ingestion_diagnostics or {}).get("skipped", {})
+    outside_window = skipped.get("outside_window", {})
+    assert outside_window.get("count") == 1
 
 
 def _build_collection_with_snapshot(snapshot: DutyStartSnapshot) -> DutyStartCollection:

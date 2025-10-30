@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, timezone, tzinfo
+from datetime import date, datetime, time, timedelta, timezone, tzinfo
 import re
 from typing import (
     Any,
@@ -18,7 +18,12 @@ from typing import (
     Tuple,
 )
 
-from fl3xx_api import Fl3xxApiConfig, fetch_flights, fetch_postflight
+from fl3xx_api import (
+    Fl3xxApiConfig,
+    MOUNTAIN_TIME_ZONE,
+    fetch_flights,
+    fetch_postflight,
+)
 from flight_leg_utils import compute_mountain_day_window_utc, safe_parse_dt
 from short_turn_utils import (
     DEFAULT_TURN_THRESHOLD_MIN as _SHORT_TURN_THRESHOLD_MINUTES,
@@ -202,6 +207,7 @@ def collect_duty_start_snapshots(
     *,
     flights: Optional[Iterable[Dict[str, Any]]] = None,
     postflight_fetcher: Optional[Callable[[Fl3xxApiConfig, Any], Any]] = None,
+    min_departure_time_local: Optional[time] = None,
 ) -> DutyStartCollection:
     """Return duty snapshots for each crew duty start on the target date."""
 
@@ -209,6 +215,14 @@ def collect_duty_start_snapshots(
         target_date = target_date.astimezone(UTC).date()
 
     start_utc, end_utc = compute_mountain_day_window_utc(target_date)
+
+    if isinstance(min_departure_time_local, time):
+        local_start = datetime.combine(target_date, min_departure_time_local).replace(
+            tzinfo=MOUNTAIN_TIME_ZONE
+        )
+        min_start_utc = local_start.astimezone(UTC)
+        if min_start_utc > start_utc:
+            start_utc = min_start_utc
 
     flights_metadata: Dict[str, Any] = {}
     if flights is None:
@@ -219,6 +233,14 @@ def collect_duty_start_snapshots(
         )
     else:
         fetched_flights = list(flights)
+
+    flights_metadata = dict(flights_metadata or {})
+    if isinstance(min_departure_time_local, time):
+        filters = flights_metadata.get("filters")
+        if not isinstance(filters, dict):
+            filters = {}
+        filters["min_departure_time_local"] = min_departure_time_local.isoformat()
+        flights_metadata["filters"] = filters
 
     grouped, ingestion_diagnostics = _group_flights_by_tail(
         fetched_flights, start_utc, end_utc
