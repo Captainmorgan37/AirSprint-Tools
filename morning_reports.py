@@ -495,6 +495,25 @@ _RUNWAY_DATA_PATH = Path(__file__).with_name("runways.csv")
 _RUNWAY_LENGTH_CACHE: Optional[Dict[str, int]] = None
 
 _PRIORITY_CHECKIN_THRESHOLD_MINUTES = 90
+_PRIORITY_DUTY_REST_THRESHOLD_MINUTES = 9 * 60
+
+
+@dataclass
+class _DutyState:
+    duty_id: int
+    earliest_departure: datetime
+    last_completion_dt: Optional[datetime] = None
+    last_arrival_dt: Optional[datetime] = None
+    last_arrival_row: Optional[Mapping[str, Any]] = None
+
+
+@dataclass
+class _DutyAssignment:
+    tail_key: str
+    duty_id: int
+    earliest_departure: datetime
+    previous_arrival_dt: Optional[datetime]
+    previous_arrival_row: Optional[Mapping[str, Any]]
 
 
 def run_morning_reports(
@@ -1031,46 +1050,95 @@ def _build_priority_status_report(
 ) -> MorningReportResult:
     sorted_rows = _sort_rows(rows)
 
-    earliest_departure: Dict[Tuple[str, date], datetime] = {}
-    for row in sorted_rows:
+    duty_states: Dict[str, _DutyState] = {}
+    duty_assignments: List[Optional[_DutyAssignment]] = [None] * len(sorted_rows)
+
+    for index, row in enumerate(sorted_rows):
         tail = _extract_tail(row)
         dep_dt = _extract_departure_dt(row)
+        arr_dt = _extract_arrival_dt(row)
+
         if not tail or dep_dt is None:
+            if tail and arr_dt is not None:
+                tail_key = tail.upper() if isinstance(tail, str) else str(tail).upper()
+                state = duty_states.get(tail_key)
+                if state is not None:
+                    state.last_completion_dt = arr_dt
+                    state.last_arrival_dt = arr_dt
+                    state.last_arrival_row = row
             continue
-        key = (tail.upper(), dep_dt.date())
-        current = earliest_departure.get(key)
-        if current is None or dep_dt < current:
-            earliest_departure[key] = dep_dt
+
+        tail_key = tail.upper() if isinstance(tail, str) else str(tail).upper()
+        state = duty_states.get(tail_key)
+        previous_arrival_dt = state.last_arrival_dt if state else None
+        previous_arrival_row = state.last_arrival_row if state else None
+        rest_minutes: Optional[float] = None
+        if state and state.last_completion_dt is not None:
+            rest_minutes = (dep_dt - state.last_completion_dt).total_seconds() / 60.0
+
+        new_duty = state is None
+        if not new_duty:
+            if rest_minutes is None:
+                new_duty = False
+            elif rest_minutes < 0:
+                new_duty = True
+            elif rest_minutes >= _PRIORITY_DUTY_REST_THRESHOLD_MINUTES:
+                new_duty = True
+            else:
+                new_duty = False
+
+        if new_duty:
+            duty_id = 0 if state is None else state.duty_id + 1
+            state = _DutyState(duty_id=duty_id, earliest_departure=dep_dt)
+            duty_states[tail_key] = state
+            previous_arrival_dt = None
+            previous_arrival_row = None
+        else:
+            duty_id = state.duty_id
+            if dep_dt < state.earliest_departure:
+                state.earliest_departure = dep_dt
+
+        duty_assignments[index] = _DutyAssignment(
+            tail_key=tail_key,
+            duty_id=duty_id,
+            earliest_departure=state.earliest_departure,
+            previous_arrival_dt=previous_arrival_dt,
+            previous_arrival_row=previous_arrival_row,
+        )
+
+        completion_dt = arr_dt or dep_dt
+        state.last_completion_dt = completion_dt
+        if arr_dt is not None:
+            state.last_arrival_dt = arr_dt
+            state.last_arrival_row = row
 
     priority_candidates: List[Dict[str, Any]] = []
-    last_arrival_by_tail: Dict[str, Dict[str, Any]] = {}
-    for row in sorted_rows:
+    for index, row in enumerate(sorted_rows):
         formatted = _format_report_row(row, include_tail=True)
         tail = formatted.get("tail")
         dep_dt = _extract_departure_dt(row)
-        dep_date = dep_dt.date() if dep_dt else None
-        tail_key = tail.upper() if tail else None
-        previous_arrival_entry = last_arrival_by_tail.get(tail_key) if tail_key else None
+        dep_date = _mountain_date_from_datetime(dep_dt) if dep_dt else None
+        assignment = duty_assignments[index]
+
+        tail_key: Optional[str] = None
         previous_arrival_dt: Optional[datetime] = None
         previous_arrival_row: Optional[Mapping[str, Any]] = None
-        if previous_arrival_entry:
-            previous_arrival_dt = previous_arrival_entry.get("arrival_dt")
-            previous_arrival_row = previous_arrival_entry.get("row")
-
         is_first_departure = False
-        if tail_key and dep_date and dep_dt is not None:
-            key = (tail_key, dep_date)
-            earliest = earliest_departure.get(key)
-            if earliest is not None:
+
+        if assignment is not None:
+            tail_key = assignment.tail_key
+            previous_arrival_dt = assignment.previous_arrival_dt
+            previous_arrival_row = assignment.previous_arrival_row
+            if dep_dt is not None:
+                earliest = assignment.earliest_departure
                 delta = abs((dep_dt - earliest).total_seconds())
                 if delta < 1.0:
                     is_first_departure = True
+        else:
+            tail_key = tail.upper() if tail else None
 
         is_priority, priority_label = _row_priority_info(row)
         if is_priority:
-            if is_first_departure:
-                previous_arrival_dt = None
-                previous_arrival_row = None
             priority_candidates.append(
                 {
                     "row": row,
@@ -1084,10 +1152,6 @@ def _build_priority_status_report(
                     "previous_arrival_row": previous_arrival_row,
                 }
             )
-
-        arrival_dt = _extract_arrival_dt(row)
-        if tail_key and arrival_dt is not None:
-            last_arrival_by_tail[tail_key] = {"arrival_dt": arrival_dt, "row": row}
 
     if not priority_candidates:
         return MorningReportResult(

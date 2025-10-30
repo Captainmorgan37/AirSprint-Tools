@@ -141,6 +141,104 @@ def test_priority_report_validates_turn_time_for_subsequent_leg():
     assert row["has_issue"] is False
 
 
+def test_priority_report_handles_priority_leg_after_utc_rollover():
+    first_departure = dt.datetime(2024, 6, 1, 15, 0, tzinfo=UTC)
+    first_arrival = first_departure + dt.timedelta(hours=2)
+    priority_departure = dt.datetime(2024, 6, 2, 0, 30, tzinfo=UTC)
+
+    rows = [
+        {
+            "dep_time": _iso(first_departure),
+            "arr_time": _iso(first_arrival),
+            "tail": "C-GROL",
+            "bookingIdentifier": "BK-0500",
+        },
+        {
+            "dep_time": _iso(priority_departure),
+            "tail": "C-GROL",
+            "priority_label": "Priority Owner",
+            "bookingIdentifier": "BK-0501",
+        },
+    ]
+
+    config = Fl3xxApiConfig(api_token="token")
+
+    report = mr._build_priority_status_report(
+        rows,
+        config,
+        fetch_postflight_fn=lambda *_args, **_kwargs: {},
+    )
+
+    assert report.metadata["total_priority_flights"] == 1
+    assert report.metadata["validation_required"] == 1
+    assert report.metadata["validated_without_issue"] == 1
+    assert report.metadata["issues_found"] == 0
+
+    row = report.rows[0]
+    assert row["is_first_departure"] is False
+    assert row["turn_gap_minutes"] == 450.0
+    assert row["needs_validation"] is True
+    assert row["has_issue"] is False
+    assert row["checkin_count"] is None
+
+
+def test_priority_report_treats_long_rest_as_new_duty_day():
+    last_departure = dt.datetime(2024, 6, 1, 0, 30, tzinfo=UTC)
+    final_arrival = last_departure + dt.timedelta(hours=1)
+    priority_departure = final_arrival + dt.timedelta(hours=10, minutes=30)
+    earliest_checkin = priority_departure - dt.timedelta(hours=2)
+    latest_checkin = priority_departure - dt.timedelta(hours=1, minutes=20)
+
+    rows = [
+        {
+            "dep_time": _iso(last_departure),
+            "arr_time": _iso(final_arrival),
+            "tail": "C-GREST",
+            "bookingIdentifier": "BK-REST-1",
+        },
+        {
+            "dep_time": _iso(priority_departure),
+            "tail": "C-GREST",
+            "priority_label": "Priority Owner",
+            "bookingIdentifier": "BK-REST-2",
+            "flightId": "LEG-REST",
+        },
+    ]
+
+    config = Fl3xxApiConfig(api_token="token")
+    fetch_calls: List[str] = []
+
+    def fake_fetch(config_arg, flight_identifier):
+        fetch_calls.append(flight_identifier)
+        assert config_arg is config
+        assert flight_identifier == "LEG-REST"
+        return {
+            "crew": [
+                {"checkin": earliest_checkin.timestamp()},
+                {"checkin": latest_checkin.timestamp()},
+            ]
+        }
+
+    report = mr._build_priority_status_report(
+        rows,
+        config,
+        fetch_postflight_fn=fake_fetch,
+    )
+
+    assert fetch_calls == ["LEG-REST"]
+    assert report.metadata["total_priority_flights"] == 1
+    assert report.metadata["validation_required"] == 1
+    assert report.metadata["validated_without_issue"] == 1
+    assert report.metadata["issues_found"] == 0
+
+    row = report.rows[0]
+    assert row["is_first_departure"] is True
+    assert row["turn_gap_minutes"] is None
+    assert row["previous_arrival_time"] is None
+    assert row["checkin_count"] == 2
+    assert row["status"].startswith("Meets threshold")
+
+
 def test_priority_report_uses_nested_arrival_timestamp():
     first_departure = dt.datetime(2024, 4, 1, 8, 0, tzinfo=UTC)
     first_arrival = first_departure + dt.timedelta(hours=2)
