@@ -14,6 +14,8 @@ from fl3xx_api import (
     MissingQualificationAlert,
     PreflightChecklistStatus,
     PreflightCrewCheckin,
+    PreflightConflictAlert,
+    extract_conflicts_from_preflight,
     extract_missing_qualifications_from_preflight,
     parse_postflight_payload,
     parse_preflight_payload,
@@ -279,3 +281,51 @@ def test_extract_missing_qualifications_from_preflight_returns_alerts() -> None:
 def test_extract_missing_qualifications_handles_missing_blocks() -> None:
     alerts = extract_missing_qualifications_from_preflight({})
     assert alerts == []
+
+
+def test_extract_conflicts_from_preflight_returns_conflicts() -> None:
+    payload = {
+        "crewAssign": {
+            "warnings": {
+                "messages": [
+                    {
+                        "type": "flight",
+                        "status": "conflict",
+                        "name": "Location disconnect: CYUL ≠ CYEG",
+                    }
+                ]
+            },
+            "commander": {
+                "warnings": {
+                    "messages": [
+                        {
+                            "type": "FLIGHT",
+                            "status": "CONFLICT",
+                            "description": "Duty overlap",
+                        }
+                    ]
+                }
+            },
+        }
+    }
+
+    conflicts = extract_conflicts_from_preflight(payload)
+
+    assert conflicts == [
+        PreflightConflictAlert(
+            seat=None,
+            category="FLIGHT",
+            status="CONFLICT",
+            description="Location disconnect: CYUL ≠ CYEG",
+        ),
+        PreflightConflictAlert(
+            seat="PIC",
+            category="FLIGHT",
+            status="CONFLICT",
+            description="Duty overlap",
+        ),
+    ]
+
+
+def test_extract_conflicts_from_preflight_handles_missing_blocks() -> None:
+    assert extract_conflicts_from_preflight({}) == []
