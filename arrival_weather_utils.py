@@ -67,6 +67,14 @@ def _parse_visibility_value(value) -> Optional[float]:
     if "SM" in text:
         text = text.replace("SM", "").strip()
 
+    mixed_fraction_match = re.search(r"\b(\d+)\s+(\d+/\d+)\b", text)
+    if mixed_fraction_match:
+        integer_part = mixed_fraction_match.group(1)
+        fraction_part = mixed_fraction_match.group(2)
+        frac_val = _parse_fraction(fraction_part)
+        if frac_val is not None:
+            return float(integer_part) + frac_val
+
     if " " in text:
         parts = text.split()
         total = 0.0
