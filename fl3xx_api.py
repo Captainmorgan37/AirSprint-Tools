@@ -520,7 +520,7 @@ def extract_missing_qualifications_from_preflight(
             qual_name = message.get("name")
 
             if (
-                msg_type == "QUALIFICATION"
+                msg_type in {"QUALIFICATION", "RECENCY"}
                 and msg_status in {"MISSING", "EXPIRED"}
                 and isinstance(qual_name, str)
             ):

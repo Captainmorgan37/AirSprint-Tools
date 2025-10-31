@@ -225,6 +225,11 @@ def test_extract_missing_qualifications_from_preflight_returns_alerts() -> None:
                             "status": "expired",
                             "name": "TP Performance Airspace: RNP 10",
                         },
+                        {
+                            "type": "RECENCY",
+                            "status": "EXPIRED",
+                            "name": "(6m) 5 Night TO/Ldg",
+                        },
                         {"type": "duty", "status": "setup", "name": "Duty_0"},
                     ]
                 },
@@ -244,7 +249,7 @@ def test_extract_missing_qualifications_from_preflight_returns_alerts() -> None:
 
     alerts = extract_missing_qualifications_from_preflight(payload)
 
-    assert len(alerts) == 3
+    assert len(alerts) == 4
     assert alerts[0] == MissingQualificationAlert(
         seat="PIC",
         pilot_name="Alex Commander",
@@ -258,6 +263,12 @@ def test_extract_missing_qualifications_from_preflight_returns_alerts() -> None:
         qualification_name="TP Performance Airspace: RNP 10",
     )
     assert alerts[2] == MissingQualificationAlert(
+        seat="PIC",
+        pilot_name="Alex Commander",
+        pilot_id="111",
+        qualification_name="(6m) 5 Night TO/Ldg",
+    )
+    assert alerts[3] == MissingQualificationAlert(
         seat="SIC",
         pilot_name="Sam",
         pilot_id="222",
