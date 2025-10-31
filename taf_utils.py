@@ -622,7 +622,12 @@ def _fallback_parse_raw_taf(
         weather_codes: List[str] = []
         cloud_layers: List[str] = []
 
-        for token in tokens_list:
+        idx_local = 0
+        token_count = len(tokens_list)
+        while idx_local < token_count:
+            token = tokens_list[idx_local]
+            idx_local += 1
+
             wind_match = wind_re.match(token)
             if wind_match and wind_spd is None:
                 wind_dir = wind_match.group("dir")
@@ -630,9 +635,24 @@ def _fallback_parse_raw_taf(
                 wind_gust = wind_match.group("gst")
                 continue
 
-            if visibility is None and (token.endswith("SM") or token == "P6SM"):
-                visibility = token
-                continue
+            if visibility is None:
+                if token.endswith("SM") or token == "P6SM":
+                    visibility = token
+                    continue
+
+                if re.fullmatch(r"\d+", token):
+                    if idx_local < token_count:
+                        next_token = tokens_list[idx_local]
+                        if next_token.endswith("SM") and "/" in next_token:
+                            visibility = f"{token} {next_token}"
+                            idx_local += 1
+                            continue
+
+                        if "/" in next_token and not next_token.endswith("SM"):
+                            if idx_local + 1 < token_count and tokens_list[idx_local + 1] == "SM":
+                                visibility = f"{token} {next_token}SM"
+                                idx_local += 2
+                                continue
 
             cloud_match = cloud_re.match(token)
             if cloud_match:

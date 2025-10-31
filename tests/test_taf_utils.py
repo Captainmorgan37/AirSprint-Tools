@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict
 
@@ -60,6 +60,21 @@ def _build_modern_segment(start: str, end: str, *, gust: int | None = None) -> D
     if gust is not None:
         segment["wind"]["gust"] = {"value": gust}
     return segment
+
+
+def test_fallback_parser_preserves_mixed_fraction_visibility():
+    issue_dt = datetime(2025, 10, 31, 15, 0, tzinfo=timezone.utc)
+    valid_from = issue_dt
+    valid_to = issue_dt + timedelta(days=1)
+    raw_taf = "TAF CYYZ 311440Z 3115/0118 35010KT 2 1/2SM RA BR OVC007"
+
+    segments = taf_utils._fallback_parse_raw_taf(raw_taf, issue_dt, valid_from, valid_to)
+
+    assert segments, "Expected fallback parser to return at least one segment"
+    first_segment = segments[0]
+    details = dict(first_segment.get("details", []))
+
+    assert details.get("Visibility") == "2 1/2SM"
 
 
 def test_format_iso_timestamp_handles_offset_without_colon():
