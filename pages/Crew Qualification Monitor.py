@@ -8,6 +8,7 @@ import math
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import requests
@@ -15,6 +16,7 @@ import streamlit as st
 
 from fl3xx_api import (
     MOUNTAIN_TIME_ZONE,
+    extract_conflicts_from_preflight,
     extract_missing_qualifications_from_preflight,
     fetch_flights,
     fetch_preflight,
@@ -25,6 +27,7 @@ from flight_leg_utils import (
     filter_out_subcharter_rows,
     normalize_fl3xx_payload,
     safe_parse_dt,
+    load_airport_tz_lookup,
 )
 from Home import configure_page, password_gate, render_sidebar
 
@@ -117,13 +120,28 @@ def _normalise_identifier(value: Any) -> Optional[str]:
     return str(value)
 
 
-def _parse_leg_time(value: Any) -> Optional[datetime]:
+_AIRPORT_TZ_LOOKUP = load_airport_tz_lookup()
+
+
+def _resolve_airport_timezone(airport_code: Optional[str], fallback: timezone) -> timezone:
+    if airport_code:
+        tz_name = _AIRPORT_TZ_LOOKUP.get(airport_code)
+        if tz_name:
+            try:
+                return ZoneInfo(tz_name)
+            except Exception:  # pragma: no cover - fallback to default if zone data missing
+                pass
+    return fallback
+
+
+def _parse_leg_time(value: Any, airport_code: Optional[str] = None) -> Optional[datetime]:
     if value in (None, ""):
         return None
     dt = safe_parse_dt(str(value))
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(MOUNTAIN_TIME_ZONE)
+    target_tz = _resolve_airport_timezone(airport_code, dt.tzinfo or MOUNTAIN_TIME_ZONE)
+    return dt.astimezone(target_tz)
 
 
 def _format_local(dt: Optional[datetime]) -> str:
@@ -282,6 +300,7 @@ status_placeholder = st.empty()
 progress_bar = st.progress(0)
 
 missing_rows: List[Dict[str, Any]] = []
+conflict_rows: List[Dict[str, Any]] = []
 errors: List[Dict[str, str]] = []
 
 session: Optional[requests.Session] = None
@@ -303,12 +322,11 @@ try:
             continue
 
         alerts = extract_missing_qualifications_from_preflight(payload)
-        if not alerts:
+        conflicts = extract_conflicts_from_preflight(payload)
+        if not alerts and not conflicts:
             continue
 
         primary_leg = _select_primary_leg(flight_legs)
-        dep_local = _parse_leg_time(primary_leg.get("dep_time"))
-        arr_local = _parse_leg_time(primary_leg.get("arrival_time"))
         dep_airport = _coerce_code(
             primary_leg.get("departure_airport")
             or primary_leg.get("departureAirport")
@@ -319,6 +337,8 @@ try:
             or primary_leg.get("arrivalAirport")
             or primary_leg.get("airportTo")
         )
+        dep_local = _parse_leg_time(primary_leg.get("dep_time"), dep_airport)
+        arr_local = _parse_leg_time(primary_leg.get("arrival_time"), arr_airport)
         tail = str(primary_leg.get("tail") or "").strip()
         leg_id = primary_leg.get("leg_id") or primary_leg.get("legId") or ""
 
@@ -334,6 +354,22 @@ try:
                     "Seat": alert.seat,
                     "Crew member": alert.pilot_name or "Unknown",
                     "Missing qualification": alert.qualification_name,
+                }
+            )
+
+        for conflict in conflicts:
+            conflict_rows.append(
+                {
+                    "Flight ID": flight_id,
+                    "Leg": leg_id,
+                    "Tail": tail or "—",
+                    "Route": f"{dep_airport or 'UNK'} → {arr_airport or 'UNK'}",
+                    "Departure": _format_local(dep_local),
+                    "Arrival": _format_local(arr_local),
+                    "Seat": conflict.seat or "—",
+                    "Type": conflict.category,
+                    "Status": conflict.status,
+                    "Conflict": conflict.description,
                 }
             )
 finally:
@@ -355,3 +391,13 @@ else:
         f"across {len({row['Flight ID'] for row in missing_rows})} flight{'s' if len({row['Flight ID'] for row in missing_rows}) != 1 else ''}."
     )
     st.dataframe(issues_df, use_container_width=True, hide_index=True)
+
+if conflict_rows:
+    st.error(
+        f"Detected {len(conflict_rows)} preflight conflict entry{'ies' if len(conflict_rows) != 1 else ''} "
+        f"across {len({row['Flight ID'] for row in conflict_rows})} flight{'s' if len({row['Flight ID'] for row in conflict_rows}) != 1 else ''}."
+    )
+    conflict_df = pd.DataFrame(conflict_rows)
+    st.dataframe(conflict_df, use_container_width=True, hide_index=True)
+else:
+    st.success("No preflight conflicts detected for the selected flights.")
