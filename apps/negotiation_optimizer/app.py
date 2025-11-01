@@ -5,14 +5,17 @@ from __future__ import annotations
 from datetime import date
 
 from collections import Counter
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
 
 from Home import configure_page, password_gate, render_sidebar
+from core.airports import load_airports
 from core.neg_scheduler import LeverPolicy, NegotiationScheduler
 from core.neg_scheduler.model import _class_compatible
+from core.reposition import build_reposition_matrix
 from flight_leg_utils import FlightDataError
 from integrations.fl3xx_adapter import NegotiationData, fetch_negotiation_data, get_demo_data
 
@@ -251,6 +254,21 @@ def draw_gantt(
     st.pyplot(fig, clear_figure=True)
 
 
+@st.cache_data(show_spinner=False)
+def airports_index() -> dict[str, dict[str, object]]:
+    """Load the airport reference table used for reposition calculations."""
+
+    reference_path = Path(__file__).resolve().parents[2] / "Airport TZ.txt"
+    try:
+        return load_airports(reference_path)
+    except FileNotFoundError:
+        return {}
+    except Exception:
+        # Streamlit will surface detailed errors when the solver runs; keep the
+        # cache resilient here so the UI can continue to operate.
+        return {}
+
+
 def render_page() -> None:
     configure_page(page_title="Negotiation Optimizer")
     password_gate()
@@ -265,6 +283,7 @@ def render_page() -> None:
         max_plus = st.slider("Max shift + (min)", 0, 240, 30, 5)
         max_minus = st.slider("Max shift - (min)", 0, 180, 30, 5)
         cost_per_min = st.slider("Cost per shifted minute", 0, 10, 2)
+        reposition_cost = st.slider("Reposition cost / min", 0, 10, 2, 1)
         outsource_cost = st.number_input("Outsource cost proxy", 0, 10000, 1800, 50)
 
     fl3xx_settings: dict[str, object] | None = None
@@ -292,6 +311,7 @@ def render_page() -> None:
         cost_per_min_shift=cost_per_min,
         outsource_cost=outsource_cost,
         turn_min=turn_min,
+        reposition_cost_per_min=reposition_cost,
     )
 
     legs: list = []
@@ -495,8 +515,32 @@ def render_page() -> None:
                 + str(incompatible_refs[:6])
                 + ("…" if len(incompatible_refs) > 6 else "")
             )
+        airport_codes = {
+            code
+            for flight in solver_flights
+            for code in (flight.origin, flight.dest)
+            if code
+        }
+        airport_catalog = airports_index()
+        relevant_airports = {
+            code: airport_catalog[code] for code in airport_codes if code in airport_catalog
+        }
+        missing_codes = sorted(code for code in airport_codes if code not in airport_catalog)
+        if missing_codes:
+            display_limit = 6
+            suffix = "…" if len(missing_codes) > display_limit else ""
+            listed = ", ".join(missing_codes[:display_limit])
+            st.info(
+                "Missing coordinates for airports: " + listed + suffix + 
+                ". Using fallback reposition penalties."
+            )
         try:
-            scheduler = NegotiationScheduler(solver_flights, tails, policy)
+            repo_matrix = build_reposition_matrix(
+                solver_flights, relevant_airports or airport_catalog
+            )
+            scheduler = NegotiationScheduler(
+                solver_flights, tails, policy, reposition_min=repo_matrix
+            )
             status, solution = scheduler.solve()
         except Exception as exc:  # pragma: no cover - surfaced in UI
             st.error(f"Solver error: {exc}")
