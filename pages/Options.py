@@ -26,7 +26,6 @@ Run locally:
 Note: This is a minimal pedagogical build. It uses toy data and simplified legality.
 Integrate with FL3XX later by swapping `load_data()` with API pulls and mapping legs/crews.
 """
-from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Dict, Tuple, Optional
 
@@ -414,7 +413,6 @@ if __name__ == "__main__":
 
 # 2) core/neg_scheduler/contracts.py
 # ----------------------------------
-from __future__ import annotations
 from pydantic import BaseModel
 from typing import Optional, Set
 from datetime import datetime
@@ -439,7 +437,6 @@ class Tail(BaseModel):
 
 # 3) core/neg_scheduler/model.py (CP-SAT core extracted)
 # ------------------------------------------------------
-from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Optional
 import math
@@ -552,7 +549,6 @@ class NegotiationScheduler:
 
 # 4) integrations/fl3xx_adapter.py (thin wrapper to your existing utils)
 # ---------------------------------------------------------------------
-from __future__ import annotations
 from typing import List
 from .neg_scheduler.contracts import Leg, Tail
 
@@ -579,7 +575,6 @@ def get_demo_data() -> tuple[list[Leg], list[Tail]]:
 
 # 5) apps/negotiation_optimizer/app.py (Streamlit page)
 # ----------------------------------------------------
-from __future__ import annotations
 import streamlit as st
 import pandas as pd
 from core.neg_scheduler.model import NegotiationScheduler, LeverPolicy
