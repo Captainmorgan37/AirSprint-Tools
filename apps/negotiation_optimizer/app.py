@@ -113,6 +113,7 @@ def render_page() -> None:
     schedule_rows: list[dict[str, object]] = []
     add_line_rows: list[dict[str, object]] = []
     fetch_metadata: dict[str, object] = {}
+    selected_unscheduled_ids: set[str] | None = None
 
     if dataset == "Demo":
         legs, tails = get_demo_data()
@@ -173,13 +174,60 @@ def render_page() -> None:
         unscheduled_df = _format_leg_rows(add_line_rows)
         if not unscheduled_df.empty:
             st.markdown("**Add-line demand (solver targets)**")
-            st.dataframe(unscheduled_df, use_container_width=True)
+
+            def _row_identifier(row: dict[str, object]) -> str:
+                for key in ("leg_id", "flightId", "bookingReference", "bookingId", "id"):
+                    value = row.get(key)
+                    if value not in (None, ""):
+                        return str(value)
+                return f"LEG-{hash(frozenset(row.items())) & 0xFFFF:04X}"
+
+            unscheduled_df = unscheduled_df.copy()
+            unscheduled_df.index = [_row_identifier(row) for row in add_line_rows]
+            unscheduled_df.index.name = "Flight"
+
+            selector_df = unscheduled_df.copy()
+            selector_df.insert(0, "Solve?", True)
+
+            edited_df = st.data_editor(
+                selector_df,
+                hide_index=True,
+                use_container_width=True,
+                column_config={
+                    "Solve?": st.column_config.CheckboxColumn(
+                        "Solve?",
+                        help="Uncheck to skip this add-line request when running the solver.",
+                        default=True,
+                    )
+                },
+            )
+
+            selected_unscheduled_ids = {
+                str(idx)
+                for idx, include in edited_df["Solve?"].items()
+                if bool(include)
+            }
+
+            st.caption(
+                f"{len(selected_unscheduled_ids)} of {len(edited_df)} add-line legs selected for solving."
+            )
         else:
             st.info("No add-line legs found in the selected window.")
 
     if st.button("Run Solver", type="primary"):
+        solver_flights = legs
+        if selected_unscheduled_ids is not None:
+            solver_flights = [
+                flight
+                for flight in legs
+                if not (
+                    flight.current_tail_id is None
+                    and flight.allow_tail_swap
+                    and flight.id not in selected_unscheduled_ids
+                )
+            ]
         try:
-            scheduler = NegotiationScheduler(legs, tails, policy)
+            scheduler = NegotiationScheduler(solver_flights, tails, policy)
             status, solution = scheduler.solve()
         except Exception as exc:  # pragma: no cover - surfaced in UI
             st.error(f"Solver error: {exc}")
