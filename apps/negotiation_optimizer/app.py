@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import date
+from dataclasses import replace
+from datetime import date, datetime, timezone
 
 from collections import Counter
 from pathlib import Path
@@ -19,6 +20,37 @@ from core.neg_scheduler.model import _class_compatible
 from core.reposition import build_reposition_matrix
 from flight_leg_utils import FlightDataError
 from integrations.fl3xx_adapter import NegotiationData, fetch_negotiation_data, get_demo_data
+
+
+_FL3XX_SNAPSHOT_KEY = "negotiation_optimizer_fl3xx_snapshot"
+
+
+def _store_fl3xx_snapshot(data: NegotiationData, day: date) -> None:
+    st.session_state[_FL3XX_SNAPSHOT_KEY] = {
+        "data": data,
+        "day": day,
+        "fetched_at": datetime.now(timezone.utc),
+    }
+
+
+def _get_fl3xx_snapshot() -> dict[str, object] | None:
+    snapshot = st.session_state.get(_FL3XX_SNAPSHOT_KEY)
+    if isinstance(snapshot, dict) and isinstance(snapshot.get("data"), NegotiationData):
+        return snapshot
+    return None
+
+
+def _apply_policy_to_snapshot(data: NegotiationData, policy: LeverPolicy) -> NegotiationData:
+    adjusted_flights = [
+        replace(
+            flight,
+            shift_cost_per_min=(
+                policy.cost_per_min_shift + 1 if flight.current_tail_id else policy.cost_per_min_shift
+            ),
+        )
+        for flight in data.flights
+    ]
+    return replace(data, flights=adjusted_flights)
 
 
 TAIL_SCHEDULE_ORDER: tuple[str, ...] = (
@@ -383,35 +415,62 @@ def render_page() -> None:
     render_sidebar()
     st.title("🧩 Negotiation-Aware Scheduler")
 
+    snapshot = _get_fl3xx_snapshot()
+    fetch_requested = False
+
     with st.sidebar:
         st.header("Inputs")
-        dataset = st.selectbox("Data source", ("Demo", "FL3XX"), index=0)
+        dataset = st.selectbox("Data source", ("Demo", "FL3XX"), index=1)
         schedule_day = st.date_input("Schedule day (08Z window)", date.today())
-        turn_min = st.slider("Turn buffer (min)", 0, 120, 30, 5)
+        turn_min = st.slider("Turn buffer (min)", 0, 120, 45, 5)
         max_plus = st.slider("Max shift + (min)", 0, 240, 30, 5)
         max_minus = st.slider("Max shift - (min)", 0, 180, 30, 5)
-        cost_per_min = st.slider("Cost per shifted minute", 0, 10, 2)
+        cost_per_min = st.slider("Cost per shifted minute", 0, 10, 5)
         reposition_cost = st.slider("Reposition cost / min", 0, 10, 2, 1)
         outsource_cost = st.number_input("Outsource cost proxy", 0, 10000, 1800, 50)
 
+        if dataset == "FL3XX":
+            fetch_requested = st.button("Fetch FL3XX data", use_container_width=True)
+            snapshot_day = snapshot.get("day") if snapshot else None
+            if isinstance(snapshot_day, date):
+                if snapshot_day == schedule_day:
+                    fetched_at = snapshot.get("fetched_at") if snapshot else None
+                    if isinstance(fetched_at, datetime):
+                        st.caption(
+                            "Loaded FL3XX snapshot fetched at %s"
+                            % fetched_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%MZ")
+                        )
+                    else:
+                        st.caption("Loaded cached FL3XX snapshot for this day.")
+                else:
+                    st.caption(
+                        "Cached data is for %s. Fetch to load %s."
+                        % (snapshot_day.isoformat(), schedule_day.isoformat())
+                    )
+
     fl3xx_settings: dict[str, object] | None = None
+    snapshot_day = snapshot.get("day") if snapshot else None
+    snapshot_valid = isinstance(snapshot_day, date) and snapshot_day == schedule_day
+
     if dataset == "FL3XX":
-        try:
-            secrets_section = st.secrets.get("fl3xx_api")  # type: ignore[attr-defined]
-        except Exception:
-            secrets_section = None
+        require_settings = fetch_requested
+        if require_settings:
+            try:
+                secrets_section = st.secrets.get("fl3xx_api")  # type: ignore[attr-defined]
+            except Exception:
+                secrets_section = None
 
-        if not secrets_section:
-            st.error(
-                "Add FL3XX credentials to `.streamlit/secrets.toml` under `[fl3xx_api]` to fetch flights."
-            )
-            return
+            if not secrets_section:
+                st.error(
+                    "Add FL3XX credentials to `.streamlit/secrets.toml` under `[fl3xx_api]` to fetch flights."
+                )
+                return
 
-        try:
-            fl3xx_settings = dict(secrets_section)
-        except (TypeError, ValueError):
-            st.error("FL3XX API secrets must be provided as key/value pairs.")
-            return
+            try:
+                fl3xx_settings = dict(secrets_section)
+            except (TypeError, ValueError):
+                st.error("FL3XX API secrets must be provided as key/value pairs.")
+                return
 
     policy = LeverPolicy(
         max_shift_plus_min=max_plus,
@@ -432,14 +491,30 @@ def render_page() -> None:
     if dataset == "Demo":
         legs, tails = get_demo_data()
     else:
-        with st.spinner("Fetching FL3XX flights…"):
-            try:
-                data: NegotiationData = fetch_negotiation_data(
-                    schedule_day, settings=fl3xx_settings, policy=policy
-                )
-            except FlightDataError as exc:
-                st.error(f"Unable to load FL3XX flights: {exc}")
-                return
+        if fetch_requested:
+            with st.spinner("Fetching FL3XX flights…"):
+                try:
+                    data = fetch_negotiation_data(
+                        schedule_day, settings=fl3xx_settings, policy=policy
+                    )
+                except FlightDataError as exc:
+                    st.error(f"Unable to load FL3XX flights: {exc}")
+                    return
+            _store_fl3xx_snapshot(data, schedule_day)
+            snapshot = _get_fl3xx_snapshot()
+            snapshot_day = snapshot.get("day") if snapshot else None
+            snapshot_valid = isinstance(snapshot_day, date) and snapshot_day == schedule_day
+
+        if not snapshot_valid or not snapshot:
+            st.info('Press "Fetch FL3XX data" to load flights for the selected window.')
+            return
+
+        raw_data = snapshot.get("data")
+        if not isinstance(raw_data, NegotiationData):
+            st.error("Cached FL3XX snapshot is invalid. Please fetch the data again.")
+            return
+
+        data = _apply_policy_to_snapshot(raw_data, policy)
 
         legs = data.flights
         tails = data.tails
@@ -448,6 +523,12 @@ def render_page() -> None:
         fetch_metadata = data.metadata
 
         st.subheader("FL3XX window snapshot")
+        fetched_at = snapshot.get("fetched_at") if snapshot else None
+        if isinstance(fetched_at, datetime):
+            st.caption(
+                "Snapshot fetched %s (UTC)."
+                % fetched_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M")
+            )
         col1, col2, col3 = st.columns(3)
         col1.metric("Scheduled legs", fetch_metadata.get("scheduled_count", len(schedule_rows)))
         col2.metric("Add-line legs", fetch_metadata.get("unscheduled_count", len(add_line_rows)))
