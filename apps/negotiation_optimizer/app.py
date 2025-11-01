@@ -7,8 +7,37 @@ from datetime import date
 import pandas as pd
 import streamlit as st
 
+from Home import configure_page, password_gate, render_sidebar
 from core.neg_scheduler import LeverPolicy, NegotiationScheduler
-from integrations.fl3xx_adapter import fetch_demo_from_fl3xx, get_demo_data
+from flight_leg_utils import FlightDataError
+from integrations.fl3xx_adapter import NegotiationData, fetch_negotiation_data, get_demo_data
+
+
+def _format_leg_rows(rows: list[dict[str, object]]) -> pd.DataFrame:
+    if not rows:
+        return pd.DataFrame()
+
+    formatted_rows: list[dict[str, object]] = []
+    for row in rows:
+        formatted_rows.append(
+            {
+                "Tail": row.get("tail"),
+                "Tail (normalized)": row.get("tail_normalized"),
+                "Account": row.get("accountName") or row.get("account"),
+                "Workflow": row.get("workflowCustomName") or row.get("workflow"),
+                "Flight Type": row.get("flightType"),
+                "Booking": row.get("bookingReference") or row.get("bookingId"),
+                "From": row.get("departure_airport"),
+                "To": row.get("arrival_airport"),
+                "Departure (UTC)": row.get("dep_time"),
+                "Arrival (UTC)": row.get("arrival_time"),
+                "Leg ID": row.get("leg_id"),
+                "Flight ID": row.get("flightId"),
+                "PAX": row.get("paxNumber"),
+            }
+        )
+
+    return pd.DataFrame(formatted_rows)
 
 
 def _lever_options(policy: LeverPolicy) -> list[dict[str, object]]:
@@ -37,12 +66,15 @@ def _lever_options(policy: LeverPolicy) -> list[dict[str, object]]:
 
 
 def render_page() -> None:
-    st.set_page_config(page_title="Negotiation Optimizer", layout="wide")
+    configure_page(page_title="Negotiation Optimizer")
+    password_gate()
+    render_sidebar()
     st.title("🧩 Negotiation-Aware Scheduler")
 
     with st.sidebar:
         st.header("Inputs")
         dataset = st.selectbox("Data source", ("Demo", "FL3XX"), index=0)
+        schedule_day = st.date_input("Schedule day (08Z window)", date.today())
         turn_min = st.slider("Turn buffer (min)", 0, 120, 30, 5)
         max_plus = st.slider("Max shift + (min)", 0, 240, 30, 5)
         max_minus = st.slider("Max shift - (min)", 0, 180, 30, 5)
@@ -57,11 +89,72 @@ def render_page() -> None:
         turn_min=turn_min,
     )
 
+    legs: list = []
+    tails: list = []
+    schedule_rows: list[dict[str, object]] = []
+    add_line_rows: list[dict[str, object]] = []
+    fetch_metadata: dict[str, object] = {}
+
     if dataset == "Demo":
         legs, tails = get_demo_data()
     else:
-        st.info("FL3XX integration pending – falling back to demo dataset.")
-        legs, tails = fetch_demo_from_fl3xx(date.today())
+        with st.spinner("Fetching FL3XX flights…"):
+            try:
+                data: NegotiationData = fetch_negotiation_data(schedule_day)
+            except FlightDataError as exc:
+                st.error(f"Unable to load FL3XX flights: {exc}")
+                return
+
+        legs = data.flights
+        tails = data.tails
+        schedule_rows = data.scheduled_rows
+        add_line_rows = data.unscheduled_rows
+        fetch_metadata = data.metadata
+
+        st.subheader("FL3XX window snapshot")
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Scheduled legs", fetch_metadata.get("scheduled_count", len(schedule_rows)))
+        col2.metric("Add-line legs", fetch_metadata.get("unscheduled_count", len(add_line_rows)))
+        col3.metric("Flights sent to solver", len(legs))
+
+        window_start = fetch_metadata.get("window_start_utc")
+        window_end = fetch_metadata.get("window_end_utc")
+        if window_start and window_end:
+            st.caption(f"Window: {window_start} → {window_end} (UTC)")
+
+        skipped_sched = fetch_metadata.get("skipped_scheduled") or []
+        skipped_unsched = fetch_metadata.get("skipped_unscheduled") or []
+        if skipped_sched or skipped_unsched:
+            issues: list[str] = []
+            if skipped_sched:
+                issues.append(f"{len(skipped_sched)} scheduled")
+            if skipped_unsched:
+                issues.append(f"{len(skipped_unsched)} add-line")
+            st.warning(
+                "Skipped %s leg(s) due to missing required timing data."
+                % " and ".join(issues)
+            )
+            with st.expander("View skipped leg identifiers"):
+                if skipped_sched:
+                    st.markdown("**Scheduled**")
+                    st.write("\n".join(skipped_sched))
+                if skipped_unsched:
+                    st.markdown("**Add-line**")
+                    st.write("\n".join(skipped_unsched))
+
+        scheduled_df = _format_leg_rows(schedule_rows)
+        if not scheduled_df.empty:
+            st.markdown("**Scheduled legs (locked to current tails)**")
+            st.dataframe(scheduled_df, use_container_width=True)
+        else:
+            st.info("No scheduled legs detected for the selected window.")
+
+        unscheduled_df = _format_leg_rows(add_line_rows)
+        if not unscheduled_df.empty:
+            st.markdown("**Add-line demand (solver targets)**")
+            st.dataframe(unscheduled_df, use_container_width=True)
+        else:
+            st.info("No add-line legs found in the selected window.")
 
     if st.button("Run Solver", type="primary"):
         try:
