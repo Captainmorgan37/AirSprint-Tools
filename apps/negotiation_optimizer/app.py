@@ -150,11 +150,113 @@ def _lever_options(policy: LeverPolicy) -> list[dict[str, object]]:
     ]
 
 
+def _format_minutes_label(value: object, window_start: object | None) -> str:
+    if value in (None, ""):
+        return "unspecified time"
+
+    minutes = pd.to_numeric(value, errors="coerce")
+    if pd.isna(minutes):
+        return "unspecified time"
+
+    minutes_int = int(minutes)
+    if window_start is not None:
+        ref = _parse_timestamp(window_start)
+    else:
+        ref = None
+
+    if ref is not None:
+        ts = ref + timedelta(minutes=minutes_int)
+        return ts.strftime("%H:%MZ")
+
+    hours, mins = divmod(minutes_int, 60)
+    return f"{hours:02d}:{mins:02d}"
+
+
+def _safe_int(value: object, default: int = 0) -> int:
+    numeric = pd.to_numeric(value, errors="coerce")
+    if pd.isna(numeric):
+        return default
+    return int(numeric)
+
+
+def _build_solution_summary(
+    solution: dict[str, object], window_start_utc: object | None
+) -> list[tuple[str, list[str]]]:
+    sections: list[tuple[str, list[str]]] = []
+
+    assigned_df: pd.DataFrame = solution.get("assigned", pd.DataFrame())
+    reposition_df: pd.DataFrame = solution.get("reposition", pd.DataFrame())
+
+    unscheduled_lines: list[str] = []
+    if not assigned_df.empty and "original_tail" in assigned_df.columns:
+        original_series = assigned_df["original_tail"].fillna("").astype(str)
+        unscheduled_mask = original_series.str.strip() == ""
+        if unscheduled_mask.any():
+            for _, row in assigned_df[unscheduled_mask].sort_values("start_min").iterrows():
+                unscheduled_lines.append(
+                    "- Tail "
+                    f"{row.get('tail')} picks up add-line {row.get('flight')} "
+                    f"{row.get('origin')}→{row.get('dest')} departing "
+                    f"{_format_minutes_label(row.get('start_min'), window_start_utc)}."
+                )
+    sections.append(("Unscheduled tail movements", unscheduled_lines))
+
+    reposition_lines: list[str] = []
+    if reposition_df is not None and not reposition_df.empty:
+        for _, row in reposition_df.sort_values("start_min").iterrows():
+            duration = _safe_int(row.get("duration_min"))
+            reposition_lines.append(
+                "- Tail "
+                f"{row.get('tail')} repositions {row.get('origin')}→{row.get('dest')} "
+                f"({duration} min) between "
+                f"{row.get('source_flight')} and {row.get('target_flight')} "
+                f"starting {_format_minutes_label(row.get('start_min'), window_start_utc)}."
+            )
+    sections.append(("Positioning legs", reposition_lines))
+
+    shift_lines: list[str] = []
+    if not assigned_df.empty:
+        for _, row in assigned_df.sort_values("start_min").iterrows():
+            shift_plus = _safe_int(row.get("shift_plus"))
+            shift_minus = _safe_int(row.get("shift_minus"))
+            if shift_plus > 0 or shift_minus > 0:
+                if shift_plus > 0 and shift_minus > 0:
+                    net = shift_plus - shift_minus
+                elif shift_plus > 0:
+                    net = shift_plus
+                else:
+                    net = -shift_minus
+
+                if net > 0:
+                    direction = f"+{net} min"
+                elif net < 0:
+                    direction = f"{net} min"
+                else:
+                    direction = f"+{shift_plus} / -{shift_minus} min"
+
+                shift_lines.append(
+                    "- Flight "
+                    f"{row.get('flight')} on tail {row.get('tail')} departs "
+                    f"{direction} from the requested time."
+                )
+    sections.append(("Flight time adjustments", shift_lines))
+
+    return sections
+
+
 def _render_solution_details(
     solution: dict[str, object],
     window_start_utc: datetime,
     policy: LeverPolicy,
 ) -> None:
+    st.markdown("### Optimization summary")
+    for heading, lines in _build_solution_summary(solution, window_start_utc):
+        st.markdown(f"**{heading}**")
+        if lines:
+            st.markdown("\n".join(lines))
+        else:
+            st.markdown("- None")
+
     st.subheader("Assigned schedule")
     assigned_df: pd.DataFrame = solution.get("assigned", pd.DataFrame())
     reposition_df: pd.DataFrame = solution.get("reposition", pd.DataFrame())
