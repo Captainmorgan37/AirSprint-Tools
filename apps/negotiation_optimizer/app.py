@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import date
 
+from collections import Counter
+
 import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
@@ -408,6 +410,41 @@ def render_page() -> None:
             )
         else:
             st.info("No add-line legs found in the selected window.")
+
+    flights = legs
+
+    st.markdown("### 60-second diagnostics")
+    # 1) Basic counts
+    st.write(f"n_flights={len(flights)}  n_tails={len(tails)}")
+
+    # 2) Fleet classes present
+    st.write("flight classes:", Counter([f.fleet_class for f in flights]))
+    st.write("tail classes:", Counter([t.fleet_class for t in tails]))
+
+    # 3) Tail availability sanity
+    bad_avail = [t for t in tails if t.available_to_min <= 0 or t.available_from_min >= t.available_to_min]
+    if bad_avail:
+        st.error(
+            f"TAIL AVAIL ISSUE → {[ (t.id, t.available_from_min, t.available_to_min) for t in bad_avail ]}"
+        )
+
+    # 4) For first few add-line legs, list compatible tails
+    adds = [f for f in flights if not f.current_tail_id]
+    tail_by_class: dict[str, list[str]] = {}
+    for t in tails:
+        tail_by_class.setdefault(t.fleet_class, []).append(t.id)
+    for f in adds[:5]:
+        st.write(
+            f"ADD {f.id}: class={f.fleet_class} → compatible tails: {tail_by_class.get(f.fleet_class, [])}"
+        )
+
+    # 5) Check per-flight caps (are scheduled legs allowed tiny moves?)
+    sched = [f for f in flights if f.current_tail_id]
+    caps = [(f.id, f.shift_minus_cap, f.shift_plus_cap) for f in sched[:10]]
+    st.write("sample scheduled caps (−/+):", caps)
+
+    # 6) Show policy numbers in use
+    st.write("turn_min:", policy.turn_min, " outsource_cost:", policy.outsource_cost)
 
     if st.button("Run Solver", type="primary"):
         solver_flights = legs
