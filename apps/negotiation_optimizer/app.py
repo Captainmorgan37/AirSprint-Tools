@@ -6,6 +6,7 @@ from dataclasses import replace
 from datetime import date, datetime, timezone, timedelta
 
 from collections import Counter
+import math
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -147,6 +148,68 @@ def _lever_options(policy: LeverPolicy) -> list[dict[str, object]]:
             "notes": "Zero internal perturbation; highest direct cost.",
         },
     ]
+
+
+def _render_solution_details(
+    solution: dict[str, object],
+    window_start_utc: datetime,
+    policy: LeverPolicy,
+) -> None:
+    st.subheader("Assigned schedule")
+    assigned_df: pd.DataFrame = solution.get("assigned", pd.DataFrame())
+    reposition_df: pd.DataFrame = solution.get("reposition", pd.DataFrame())
+    if assigned_df.empty:
+        st.write("— No internal assignments —")
+    else:
+        table_tab, gantt_tab = st.tabs(["Table", "Gantt"])
+        with table_tab:
+            st.dataframe(assigned_df, use_container_width=True)
+        with gantt_tab:
+            gantt_df = _build_gantt_solution(assigned_df, reposition_df)
+            if gantt_df.empty:
+                st.info("Not enough timing data to display the Gantt view.")
+            else:
+                draw_gantt(
+                    gantt_df,
+                    color_by="assignment_source",
+                    color_palette={
+                        "Added from unscheduled": "#d62728",
+                        "Previously scheduled": "#1f77b4",
+                        "Reposition leg": "#ffbf00",
+                    },
+                    window_start=window_start_utc,
+                )
+
+    st.subheader("Unscheduled / outsourced")
+    outsourced_df: pd.DataFrame = solution.get("outsourced", pd.DataFrame())
+    if outsourced_df.empty:
+        st.write("— All legs scheduled internally —")
+    else:
+        st.dataframe(outsourced_df, use_container_width=True)
+
+    objective_value = solution.get("objective", math.inf)
+    if math.isfinite(objective_value):
+        st.caption(f"Objective value: {objective_value:.0f}")
+    else:
+        st.caption("Objective value: unavailable")
+
+    if not outsourced_df.empty:
+        st.markdown("### 🔧 Lever suggestions")
+        for _, row in outsourced_df.iterrows():
+            st.write(
+                f"**{row['flight']} {row['origin']}→{row['dest']} (Owner {row['owner']})**"
+            )
+            options = _lever_options(policy)
+            options_df = pd.DataFrame(sorted(options, key=lambda d: d["penalty"]))
+            st.dataframe(options_df, use_container_width=True)
+
+            message = (
+                f"Hi Owner {row['owner']},\n\n"
+                "Could you slide departure by 30 minutes? This avoids a tail swap and keeps crew within duty limits.\n"
+                "We can offer a small courtesy credit.\n\n"
+                "— Dispatch\n"
+            )
+            st.code(message)
 
 
 def _parse_timestamp(value: object) -> pd.Timestamp | None:
@@ -758,9 +821,6 @@ def render_page() -> None:
             )
             repo_rows = len(repo_matrix)
             repo_cols = len(repo_matrix[0]) if repo_matrix else 0
-            st.write(
-                f"FINAL n_solver_flights={len(solver_flights)}  repo_matrix={repo_rows}x{repo_cols}"
-            )
             if repo_rows != len(solver_flights) or any(
                 len(row) != len(solver_flights) for row in repo_matrix
             ):
@@ -772,62 +832,28 @@ def render_page() -> None:
             scheduler = NegotiationScheduler(
                 solver_flights, tails, policy, reposition_min=repo_matrix
             )
-            status, solution = scheduler.solve()
+            status, solutions = scheduler.solve(top_n=5)
         except Exception as exc:  # pragma: no cover - surfaced in UI
             st.error(f"Solver error: {exc}")
             return
 
-        st.subheader("Assigned schedule")
-        assigned_df: pd.DataFrame = solution["assigned"]
-        reposition_df: pd.DataFrame = solution.get("reposition", pd.DataFrame())
-        if assigned_df.empty:
-            st.write("— No internal assignments —")
-        else:
-            table_tab, gantt_tab = st.tabs(["Table", "Gantt"])
-            with table_tab:
-                st.dataframe(assigned_df, use_container_width=True)
-            with gantt_tab:
-                gantt_df = _build_gantt_solution(assigned_df, reposition_df)
-                if gantt_df.empty:
-                    st.info("Not enough timing data to display the Gantt view.")
-                else:
-                    draw_gantt(
-                        gantt_df,
-                        color_by="assignment_source",
-                        color_palette={
-                            "Added from unscheduled": "#d62728",
-                            "Previously scheduled": "#1f77b4",
-                            "Reposition leg": "#ffbf00",
-                        },
-                        window_start=window_start_utc,
-                    )
+        if not solutions:
+            st.warning("No feasible schedules found by the solver.")
+            return
 
-        st.subheader("Unscheduled / outsourced")
-        outsourced_df: pd.DataFrame = solution["outsourced"]
-        if outsourced_df.empty:
-            st.write("— All legs scheduled internally —")
-        else:
-            st.dataframe(outsourced_df, use_container_width=True)
+        tab_labels = []
+        for idx, solution in enumerate(solutions):
+            objective_value = solution.get("objective", math.inf)
+            if math.isfinite(objective_value):
+                label = f"Option {idx + 1} · cost {objective_value:.0f}"
+            else:
+                label = f"Option {idx + 1}"
+            tab_labels.append(label)
 
-        st.caption(f"Objective value: {solution['objective']:.0f}")
-
-        if not outsourced_df.empty:
-            st.markdown("### 🔧 Lever suggestions")
-            for _, row in outsourced_df.iterrows():
-                st.write(
-                    f"**{row['flight']} {row['origin']}→{row['dest']} (Owner {row['owner']})**"
-                )
-                options = _lever_options(policy)
-                options_df = pd.DataFrame(sorted(options, key=lambda d: d["penalty"]))
-                st.dataframe(options_df, use_container_width=True)
-
-                message = (
-                    f"Hi Owner {row['owner']},\n\n"
-                    "Could you slide departure by 30 minutes? This avoids a tail swap and keeps crew within duty limits.\n"
-                    "We can offer a small courtesy credit.\n\n"
-                    "— Dispatch\n"
-                )
-                st.code(message)
+        solution_tabs = st.tabs(tab_labels)
+        for tab, solution in zip(solution_tabs, solutions):
+            with tab:
+                _render_solution_details(solution, window_start_utc, policy)
 
 
 if __name__ == "__main__":  # pragma: no cover - Streamlit executes as a script

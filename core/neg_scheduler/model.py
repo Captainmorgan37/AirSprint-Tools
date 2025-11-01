@@ -394,26 +394,22 @@ class NegotiationScheduler:
                             o[(i, j, k)] * repo * self.policy.reposition_cost_per_min
                         )
 
-        m.Minimize(sum(objective_terms))
+        objective_expr = sum(objective_terms)
+        m.Minimize(objective_expr)
+        self.objective_expr = objective_expr
 
-    def solve(self, time_limit_s: Optional[int] = 5, workers: int = 8):
+    def _build_solution(self, solver_like) -> Dict[str, pd.DataFrame]:
         cp = self.cp_model
-        solver = cp.CpSolver()
-        if time_limit_s:
-            solver.parameters.max_time_in_seconds = time_limit_s
-        solver.parameters.num_search_workers = workers
-
-        status = solver.Solve(self.model)
         assigned_rows, outsourced_rows = [], []
         tail_sequences: Dict[str, List[Tuple[int, int]]] = {}
         for i, flight in enumerate(self.flights):
             tail_id = None
             for k, tail in enumerate(self.tails):
-                if solver.Value(self.assign[(i, k)]) == 1:
+                if solver_like.Value(self.assign[(i, k)]) == 1:
                     tail_id = tail.id
                     break
             if tail_id:
-                start_val = solver.Value(self.start[i])
+                start_val = solver_like.Value(self.start[i])
                 assigned_rows.append(
                     {
                         "flight": flight.id,
@@ -427,12 +423,12 @@ class NegotiationScheduler:
                         "start_min": start_val,
                         "end_min": start_val + flight.duration_min,
                         "duration_min": flight.duration_min,
-                        "shift_plus": solver.Value(self.shift_plus[i]),
-                        "shift_minus": solver.Value(self.shift_minus[i]),
+                        "shift_plus": solver_like.Value(self.shift_plus[i]),
+                        "shift_minus": solver_like.Value(self.shift_minus[i]),
                     }
                 )
                 tail_sequences.setdefault(tail_id, []).append((i, start_val))
-            elif solver.Value(self.outsource[i]) == 1:
+            elif solver_like.Value(self.outsource[i]) == 1:
                 outsourced_rows.append(
                     {
                         "flight": flight.id,
@@ -469,11 +465,90 @@ class NegotiationScheduler:
                         }
                     )
 
-        return status, {
+        objective_value = (
+            solver_like.ObjectiveValue()
+            if hasattr(solver_like, "ObjectiveValue")
+            else math.inf
+        )
+
+        return {
             "assigned": pd.DataFrame(assigned_rows),
             "outsourced": pd.DataFrame(outsourced_rows),
             "reposition": pd.DataFrame(reposition_rows),
-            "objective": solver.ObjectiveValue()
-            if status in (cp.OPTIMAL, cp.FEASIBLE)
-            else math.inf,
+            "objective": objective_value,
         }
+
+    def solve(
+        self,
+        time_limit_s: Optional[int] = 5,
+        workers: int = 8,
+        top_n: int = 1,
+    ):
+        cp = self.cp_model
+        top_n = max(1, int(top_n or 1))
+        solutions = []
+        status = cp.UNKNOWN
+
+        objective_floor: Optional[int] = None
+        exclusion_clauses: List[List[Tuple[str, Tuple[int, ...], int]]] = []
+
+        for attempt in range(top_n):
+            if attempt == 0:
+                working = self
+            else:
+                working = NegotiationScheduler(
+                    self.flights,
+                    self.tails,
+                    self.policy,
+                    reposition_min=self.reposition_min,
+                )
+
+            if objective_floor is not None:
+                working.model.Add(working.objective_expr >= objective_floor)
+
+            for clause in exclusion_clauses:
+                literals = []
+                for kind, key, value in clause:
+                    if kind == "assign":
+                        var = working.assign[tuple(key)]
+                    elif kind == "outsource":
+                        var = working.outsource[key[0]]
+                    else:
+                        continue
+
+                    literals.append(var.Not() if value else var)
+
+                if literals:
+                    working.model.AddBoolOr(literals)
+
+            solver = cp.CpSolver()
+            if time_limit_s:
+                solver.parameters.max_time_in_seconds = time_limit_s
+            solver.parameters.num_search_workers = workers
+
+            current_status = solver.Solve(working.model)
+            if current_status not in (cp.OPTIMAL, cp.FEASIBLE):
+                if not solutions:
+                    status = current_status
+                break
+
+            status = current_status
+            solution = working._build_solution(solver)
+            solutions.append(solution)
+
+            objective_value = solution.get("objective", math.inf)
+            if not math.isfinite(objective_value):
+                break
+
+            objective_floor = math.floor(objective_value)
+
+            clause: List[Tuple[str, Tuple[int, ...], int]] = []
+            for key, var in working.assign.items():
+                clause.append(("assign", tuple(key), int(solver.Value(var))))
+            for key, var in working.outsource.items():
+                clause.append(("outsource", (key,), int(solver.Value(var))))
+
+            if clause:
+                exclusion_clauses.append(clause)
+
+        return status, solutions

@@ -102,10 +102,12 @@ def test_turn_time_requires_positive_shift():
         turn_min=30,
     )
     scheduler = NegotiationScheduler(flights, tails, tight_policy)
-    status, solution = scheduler.solve()
+    status, solutions = scheduler.solve()
 
     cp = scheduler.cp_model
     assert status == cp.OPTIMAL
+    assert solutions
+    solution = solutions[0]
     assert solution["outsourced"].shape[0] == 1
 
     relaxed_policy = LeverPolicy(
@@ -116,9 +118,11 @@ def test_turn_time_requires_positive_shift():
         turn_min=30,
     )
     scheduler_relaxed = NegotiationScheduler(flights, tails, relaxed_policy)
-    status_relaxed, solution_relaxed = scheduler_relaxed.solve()
+    status_relaxed, solutions_relaxed = scheduler_relaxed.solve()
 
     assert status_relaxed == cp.OPTIMAL
+    assert solutions_relaxed
+    solution_relaxed = solutions_relaxed[0]
     assert solution_relaxed["outsourced"].empty
     assert solution_relaxed["assigned"].shape[0] == len(flights)
 
@@ -148,10 +152,12 @@ def test_solver_handles_long_turn_buffer_window():
 
     policy = LeverPolicy(turn_min=3 * 60)
     scheduler = NegotiationScheduler(flights, tails, policy)
-    status, solution = scheduler.solve()
+    status, solutions = scheduler.solve()
 
     cp = scheduler.cp_model
     assert status in (cp.OPTIMAL, cp.FEASIBLE)
+    assert solutions
+    solution = solutions[0]
     assert solution["assigned"].shape[0] == len(flights)
 
 
@@ -219,11 +225,13 @@ def test_reposition_time_enforced_in_schedule():
     scheduler = NegotiationScheduler(
         flights, tails, policy, reposition_min=repo_matrix
     )
-    status, solution = scheduler.solve()
+    status, solutions = scheduler.solve()
 
     cp = scheduler.cp_model
     assert status == cp.OPTIMAL
+    assert solutions
 
+    solution = solutions[0]
     assigned_df = solution["assigned"]
     assert assigned_df.shape[0] == len(flights)
 
@@ -252,10 +260,12 @@ def test_scheduler_handles_ragged_reposition_matrix():
         reposition_min=ragged_matrix,
     )
 
-    status, solution = scheduler.solve()
+    status, solutions = scheduler.solve()
 
     cp = scheduler.cp_model
     assert status in (cp.OPTIMAL, cp.FEASIBLE)
+    assert solutions
+    solution = solutions[0]
     assert solution["assigned"].shape[0] == len(flights)
 
     # Ensure the provided reposition value is preserved for the overlapping portion.
@@ -315,11 +325,13 @@ def test_unscheduled_flight_does_not_use_idle_tail():
 
     policy = LeverPolicy(turn_min=30)
     scheduler = NegotiationScheduler(flights, tails, policy)
-    status, solution = scheduler.solve()
+    status, solutions = scheduler.solve()
 
     cp = scheduler.cp_model
     assert status == cp.OPTIMAL
+    assert solutions
 
+    solution = solutions[0]
     assigned = solution["assigned"].set_index("flight")
     assert assigned.loc["F1", "tail"] == "C-GCJ1"
     assert assigned.loc["F2", "tail"] == "C-GCJ1"
@@ -346,10 +358,12 @@ def test_leg_flight_prefers_leg_tail():
 
     policy = LeverPolicy()
     scheduler = NegotiationScheduler(flights, tails, policy)
-    status, solution = scheduler.solve()
+    status, solutions = scheduler.solve()
 
     cp = scheduler.cp_model
     assert status == cp.OPTIMAL
+    assert solutions
+    solution = solutions[0]
     assert solution["assigned"].shape[0] == 1
     assert solution["assigned"].iloc[0]["tail"] == "C-GLEG1"
 
@@ -374,10 +388,12 @@ def test_cj_flight_can_use_leg_tail_with_penalty():
 
     policy = LeverPolicy()
     scheduler = NegotiationScheduler(flights, tails, policy)
-    status, solution = scheduler.solve()
+    status, solutions = scheduler.solve()
 
     cp = scheduler.cp_model
     assert status == cp.OPTIMAL
+    assert solutions
+    solution = solutions[0]
     assert solution["assigned"].shape[0] == 1
     assert solution["assigned"].iloc[0]["tail"] == "C-GLEG1"
 
@@ -394,10 +410,12 @@ def test_max_day_length_limit_outsources_when_exceeded():
     )
 
     scheduler_no_limit = NegotiationScheduler(flights, tails, no_limit_policy)
-    status_no_limit, solution_no_limit = scheduler_no_limit.solve()
+    status_no_limit, solutions_no_limit = scheduler_no_limit.solve()
 
     cp = scheduler_no_limit.cp_model
     assert status_no_limit == cp.OPTIMAL
+    assert solutions_no_limit
+    solution_no_limit = solutions_no_limit[0]
     assert solution_no_limit["assigned"].shape[0] == len(flights)
 
     limited_policy = LeverPolicy(
@@ -410,11 +428,51 @@ def test_max_day_length_limit_outsources_when_exceeded():
     )
 
     scheduler_limited = NegotiationScheduler(flights, tails, limited_policy)
-    status_limited, solution_limited = scheduler_limited.solve()
+    status_limited, solutions_limited = scheduler_limited.solve()
 
     assert status_limited == cp.OPTIMAL
+    assert solutions_limited
+    solution_limited = solutions_limited[0]
     assigned_limited = solution_limited["assigned"].shape[0]
     outsourced_limited = solution_limited["outsourced"].shape[0]
 
     assert assigned_limited + outsourced_limited == len(flights)
     assert assigned_limited < len(flights)
+
+
+def test_scheduler_returns_multiple_solutions_and_reuses_model():
+    flights = [
+        Flight(
+            id="F1",
+            origin="CYBW",
+            dest="CYVR",
+            duration_min=120,
+            earliest_etd_min=8 * 60,
+            latest_etd_min=8 * 60,
+            preferred_etd_min=8 * 60,
+            fleet_class="CJ",
+            owner_id="A",
+        )
+    ]
+    tails = [
+        Tail(id="CJ1", fleet_class="CJ", available_from_min=7 * 60, available_to_min=22 * 60),
+        Tail(id="CJ2", fleet_class="CJ", available_from_min=7 * 60, available_to_min=22 * 60),
+    ]
+
+    scheduler = NegotiationScheduler(flights, tails, LeverPolicy())
+    status, solutions = scheduler.solve(top_n=2)
+
+    cp = scheduler.cp_model
+    assert status in (cp.OPTIMAL, cp.FEASIBLE)
+    assert len(solutions) == 2
+
+    assigned_tails = {
+        tuple(solution["assigned"]["tail"].tolist())
+        for solution in solutions
+        if not solution["assigned"].empty and "tail" in solution["assigned"]
+    }
+    assert len(assigned_tails) == len(solutions)
+
+    status_again, solutions_again = scheduler.solve()
+    assert status_again in (cp.OPTIMAL, cp.FEASIBLE)
+    assert solutions_again
