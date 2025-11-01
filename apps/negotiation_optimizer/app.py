@@ -12,6 +12,7 @@ import streamlit as st
 
 from Home import configure_page, password_gate, render_sidebar
 from core.neg_scheduler import LeverPolicy, NegotiationScheduler
+from core.neg_scheduler.model import _class_compatible
 from flight_leg_utils import FlightDataError
 from integrations.fl3xx_adapter import NegotiationData, fetch_negotiation_data, get_demo_data
 
@@ -430,12 +431,14 @@ def render_page() -> None:
 
     # 4) For first few add-line legs, list compatible tails
     adds = [f for f in flights if not f.current_tail_id]
-    tail_by_class: dict[str, list[str]] = {}
-    for t in tails:
-        tail_by_class.setdefault(t.fleet_class, []).append(t.id)
     for f in adds[:5]:
+        compatible = [
+            t.id for t in tails if _class_compatible(f.fleet_class, t.fleet_class)
+        ]
+        tail_list = compatible[:10]
+        suffix = "..." if len(compatible) > 10 else ""
         st.write(
-            f"ADD {f.id}: class={f.fleet_class} → compatible tails: {tail_by_class.get(f.fleet_class, [])}"
+            f"ADD {f.id}: class={f.fleet_class} → compatible tails: {tail_list}{suffix}"
         )
 
     # 5) Check per-flight caps (are scheduled legs allowed tiny moves?)
@@ -458,6 +461,40 @@ def render_page() -> None:
                     and flight.id not in selected_unscheduled_ids
                 )
             ]
+
+        tail_ids = {tail.id for tail in tails}
+        missing_refs = [
+            (flight.id, flight.current_tail_id)
+            for flight in solver_flights
+            if flight.current_tail_id and flight.current_tail_id not in tail_ids
+        ]
+        if missing_refs:
+            st.error(
+                "Flights reference unknown tails: "
+                + str(missing_refs[:6])
+                + ("…" if len(missing_refs) > 6 else "")
+            )
+
+        tails_by_id = {tail.id: tail for tail in tails}
+        incompatible_refs = [
+            (
+                flight.id,
+                flight.current_tail_id,
+                flight.fleet_class,
+                tails_by_id[flight.current_tail_id].fleet_class,
+            )
+            for flight in solver_flights
+            if flight.current_tail_id in tails_by_id
+            and not _class_compatible(
+                flight.fleet_class, tails_by_id[flight.current_tail_id].fleet_class
+            )
+        ]
+        if incompatible_refs:
+            st.warning(
+                "Scheduled flights have incompatible current tails: "
+                + str(incompatible_refs[:6])
+                + ("…" if len(incompatible_refs) > 6 else "")
+            )
         try:
             scheduler = NegotiationScheduler(solver_flights, tails, policy)
             status, solution = scheduler.solve()
