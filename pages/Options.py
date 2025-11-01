@@ -1,6 +1,3 @@
-from core.neg_scheduler.contracts import Flight, Tail
-from core.neg_scheduler.model import NegotiationScheduler, LeverPolicy
-
 
 """
 Negotiation-Aware Scheduler — Minimal Prototype
