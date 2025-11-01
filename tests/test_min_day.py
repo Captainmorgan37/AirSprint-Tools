@@ -55,6 +55,42 @@ def _three_leg_single_tail_scenario():
     return flights, tails
 
 
+def _long_gap_two_leg_scenario():
+    flights = [
+        Flight(
+            id="EARLY",
+            origin="CYBW",
+            dest="CYVR",
+            duration_min=120,
+            earliest_etd_min=8 * 60,
+            latest_etd_min=8 * 60,
+            preferred_etd_min=8 * 60,
+            fleet_class="CJ",
+            owner_id="A",
+        ),
+        Flight(
+            id="LATE",
+            origin="CYVR",
+            dest="CYBW",
+            duration_min=90,
+            earliest_etd_min=22 * 60,
+            latest_etd_min=22 * 60,
+            preferred_etd_min=22 * 60,
+            fleet_class="CJ",
+            owner_id="B",
+        ),
+    ]
+    tails = [
+        Tail(
+            id="C-GCJ1",
+            fleet_class="CJ",
+            available_from_min=7 * 60,
+            available_to_min=24 * 60,
+        )
+    ]
+    return flights, tails
+
+
 def test_turn_time_requires_positive_shift():
     flights, tails = _three_leg_single_tail_scenario()
 
@@ -263,3 +299,41 @@ def test_unscheduled_flight_does_not_use_idle_tail():
     assigned = solution["assigned"].set_index("flight")
     assert assigned.loc["F1", "tail"] == "C-GCJ1"
     assert assigned.loc["F2", "tail"] == "C-GCJ1"
+
+
+def test_max_day_length_limit_outsources_when_exceeded():
+    flights, tails = _long_gap_two_leg_scenario()
+
+    no_limit_policy = LeverPolicy(
+        turn_min=30,
+        outsource_cost=5_000,
+        unassigned_penalty=5_000,
+        tail_swap_cost=0,
+        reposition_cost_per_min=0,
+    )
+
+    scheduler_no_limit = NegotiationScheduler(flights, tails, no_limit_policy)
+    status_no_limit, solution_no_limit = scheduler_no_limit.solve()
+
+    cp = scheduler_no_limit.cp_model
+    assert status_no_limit == cp.OPTIMAL
+    assert solution_no_limit["assigned"].shape[0] == len(flights)
+
+    limited_policy = LeverPolicy(
+        turn_min=30,
+        outsource_cost=5_000,
+        unassigned_penalty=5_000,
+        tail_swap_cost=0,
+        reposition_cost_per_min=0,
+        max_day_length_min=765,
+    )
+
+    scheduler_limited = NegotiationScheduler(flights, tails, limited_policy)
+    status_limited, solution_limited = scheduler_limited.solve()
+
+    assert status_limited == cp.OPTIMAL
+    assigned_limited = solution_limited["assigned"].shape[0]
+    outsourced_limited = solution_limited["outsourced"].shape[0]
+
+    assert assigned_limited + outsourced_limited == len(flights)
+    assert assigned_limited < len(flights)
