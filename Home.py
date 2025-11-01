@@ -143,6 +143,7 @@ def _sidebar_links() -> list[dict[str, Any]]:
             "label": "In Progress",
             "expanded": False,
             "links": [
+                {"path": "pages/Schedule App.py", "label": "Schedule Snapshot"},
             ],
         },
     ]
