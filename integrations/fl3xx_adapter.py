@@ -372,6 +372,14 @@ def _build_flight(
         shift_plus_cap = max(90, shift_plus_cap or 0)
         shift_minus_cap = max(30, shift_minus_cap or 0)
 
+    raw_intent = str(
+        row.get("flightType")
+        or row.get("flight_type")
+        or row.get("type")
+        or ""
+    ).strip().upper()
+    intent = "PAX" if raw_intent in ("", "PAX") else "POS"
+
     return Flight(
         id=_flight_identifier(row),
         origin=str(row.get("departure_airport") or row.get("dep_airport") or "UNK"),
@@ -389,6 +397,8 @@ def _build_flight(
         shift_plus_cap=shift_plus_cap,
         shift_minus_cap=shift_minus_cap,
         shift_cost_per_min=shift_cost,
+        intent=intent,
+        must_cover=(intent == "PAX"),
     )
 
 

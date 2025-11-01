@@ -27,6 +27,8 @@ class Flight:
     shift_plus_cap: int = 90
     shift_minus_cap: int = 30
     shift_cost_per_min: int = 2
+    intent: str = "PAX"
+    must_cover: bool | None = None
 
     def __post_init__(self) -> None:
         if self.duration_min < 0:
@@ -45,6 +47,14 @@ class Flight:
             raise ValueError("shift_minus_cap must be non-negative")
         if self.shift_cost_per_min < 0:
             raise ValueError("shift_cost_per_min must be non-negative")
+
+        intent = (self.intent or "PAX").upper()
+        if intent not in {"PAX", "POS"}:
+            intent = "POS"
+        object.__setattr__(self, "intent", intent)
+
+        if self.must_cover is None:
+            object.__setattr__(self, "must_cover", intent == "PAX")
 
 
 @dataclass(frozen=True, slots=True)

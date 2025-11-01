@@ -161,6 +161,52 @@ def test_solver_handles_long_turn_buffer_window():
     assert solution["assigned"].shape[0] == len(flights)
 
 
+def test_positioning_leg_can_be_skipped_before_outsource():
+    flights = [
+        Flight(
+            id="PAX1",
+            origin="CYBW",
+            dest="CYVR",
+            duration_min=120,
+            earliest_etd_min=8 * 60,
+            latest_etd_min=8 * 60,
+            preferred_etd_min=8 * 60,
+            fleet_class="CJ",
+            owner_id="OWN1",
+            allow_outsource=False,
+        ),
+        Flight(
+            id="POS1",
+            origin="CYVR",
+            dest="CYBW",
+            duration_min=60,
+            earliest_etd_min=8 * 60,
+            latest_etd_min=8 * 60,
+            preferred_etd_min=8 * 60,
+            fleet_class="CJ",
+            owner_id="OWN2",
+            allow_outsource=False,
+            intent="POS",
+            must_cover=False,
+        ),
+    ]
+    tails = [Tail(id="C-GCJ1", fleet_class="CJ", available_from_min=8 * 60, available_to_min=12 * 60)]
+
+    policy = LeverPolicy(max_shift_plus_min=0, max_shift_minus_min=0)
+    scheduler = NegotiationScheduler(flights, tails, policy)
+    status, solutions = scheduler.solve()
+
+    cp = scheduler.cp_model
+    assert status == cp.OPTIMAL
+    assert solutions
+    solution = solutions[0]
+
+    assert solution["outsourced"].empty
+    assert solution["skipped"].shape[0] == 1
+    assert set(solution["assigned"]["flight"]) == {"PAX1"}
+    assert set(solution["skipped"]["flight"]) == {"POS1"}
+
+
 def test_reposition_time_enforced_in_schedule():
     flights = [
         Flight(
