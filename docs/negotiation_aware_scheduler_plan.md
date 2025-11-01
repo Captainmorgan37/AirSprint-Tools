@@ -36,21 +36,35 @@ Develop a solver add-on that augments the existing schedule optimizer so it can 
 - Store lever definitions, cost curves, and historical negotiation outcomes.
 - Integrate with communications channels (email/SMS) to automate proposal drafts.
 
+## Current Prototype Status
+
+- **Solver kernel in place.** A minimal CP-SAT model (`core.neg_scheduler.model.NegotiationScheduler`) now supports
+  fleet-compatible tail assignment, ± time shifts, and outsourcing penalties governed by a `LeverPolicy` dataclass.
+- **Contracts formalized.** All solver inputs flow through Pydantic `Leg` and `Tail` contracts so the optimization core has
+  consistent typing and validation hooks.
+- **Streamlit pilot UI.** The `apps/negotiation_optimizer` page lets the team run the solver on demo data, adjust lever bounds
+  interactively, review assignments/outsourcing, and inspect suggested negotiation levers with pre-drafted messaging blocks.
+- **Data adapters stubbed.** `integrations.fl3xx_adapter` exposes deterministic demo data today and provides a shim for wiring
+  real FL3XX pulls without breaking the UI contract.
+
 ## Deliverables by Sprint
 
-### Sprint 1 – Prototype Diagnostics
-- Export next-day schedule data and perform baseline hard solve.
-- Highlight unassigned legs and their blocking constraints inside the Streamlit solver dev app.
+### Sprint 1 – Prototype Diagnostics *(✅ complete)*
+- Export next-day schedule data and perform baseline hard solve. *(Demo dataset driving CP-SAT solver suffices for feasibility.)*
+- Highlight unassigned legs and their blocking constraints inside the Streamlit solver dev app. *(Outsourced table with lever
+  suggestions surfaces unresolved demand.)*
 
-### Sprint 2 – Leverized Re-Solver
-- Implement a minimal lever catalog (owner ±30/60/90, tail swap, outsource).
-- Add penalty-aware re-optimization and display ranked resolution options per conflict.
+### Sprint 2 – Leverized Re-Solver *(🚧 in progress)*
+- Implement a minimal lever catalog (owner ±30/60/90, tail swap, outsource). *(Costed shifts and placeholder swap penalty
+  available in UI; tail swap mechanics still implicit via solver assignments.)*
+- Add penalty-aware re-optimization and display ranked resolution options per conflict. *(Objective includes shift/outsourcing
+  costs; UI ranks lever suggestions for unscheduled legs.)*
 
-### Sprint 3 – Operator Workflow
+### Sprint 3 – Operator Workflow *(🔜 upcoming)*
 - Extend UI to let ops select an option, auto-draft negotiation messages, and re-solve based on responses.
 - Track accepted/declined levers.
 
-### Sprint 4 – Learning & Expansion
+### Sprint 4 – Learning & Expansion *(🔜 upcoming)*
 - Capture negotiation outcomes to adjust lever costs and owner flexibility heuristics.
 - Introduce additional levers (crew tweaks, ground transfers, tech stops) and richer analytics.
 
@@ -66,6 +80,13 @@ Develop a solver add-on that augments the existing schedule optimizer so it can 
 - Required audit trail for compliance when altering planned duties or owner windows.
 
 ## Next Steps
-- Validate lever eligibility rules with ops stakeholders.
-- Instrument existing solver outputs to provide detailed blocking constraint metadata.
-- Prioritize communication channel integrations needed for automated “ask” drafts.
+- **Wire real data.** Replace the FL3XX adapter stub with authenticated pulls (legs, tails, owner preferences) and confirm it
+  hydrates the `Leg`/`Tail` contracts without manual cleanup.
+- **Expose conflict diagnostics.** Enrich solver outputs with blocking explanations (e.g., specific tail overlap, duty window
+  breaches) so negotiators understand *why* a lever is recommended.
+- **Interactive lever application.** Allow the Streamlit UI to accept/lock proposed shifts or tail swaps, trigger a re-solve,
+  and log accepted versus rejected asks for future tuning.
+- **Expand lever catalog.** Model crew augmentation, tech stop insertion, and limited-duty splits with appropriate penalty
+  scaffolding.
+- **Close the messaging loop.** Integrate with the existing comms tooling (email/SMS templates) to auto-fill and send
+  negotiation requests while capturing outcomes for the learning layer.
