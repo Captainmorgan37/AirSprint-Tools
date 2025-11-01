@@ -165,25 +165,42 @@ def _build_gantt_schedule(rows: list[dict[str, object]], window_start: object | 
     return pd.DataFrame(gantt_rows)
 
 
-def _build_gantt_solution(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty:
-        return df
+def _build_gantt_solution(
+    df: pd.DataFrame, reposition_df: pd.DataFrame | None = None
+) -> pd.DataFrame:
+    if df.empty and (reposition_df is None or reposition_df.empty):
+        return pd.DataFrame()
 
-    gantt_df = df.copy()
-    if "end_min" not in gantt_df.columns and "duration_min" in gantt_df.columns:
-        gantt_df["end_min"] = gantt_df["start_min"] + gantt_df["duration_min"]
-    gantt_df["tail"] = gantt_df["tail"].astype(str)
-    if "original_tail" in gantt_df.columns:
-        gantt_df["was_unscheduled"] = gantt_df["original_tail"].isna() | (
-            gantt_df["original_tail"].astype(str).str.len() == 0
-        )
-        gantt_df["assignment_source"] = gantt_df["was_unscheduled"].map(
-            {
-                True: "Added from unscheduled",
-                False: "Previously scheduled",
-            }
-        )
-    return gantt_df
+    frames: list[pd.DataFrame] = []
+    if not df.empty:
+        gantt_df = df.copy()
+        if "end_min" not in gantt_df.columns and "duration_min" in gantt_df.columns:
+            gantt_df["end_min"] = gantt_df["start_min"] + gantt_df["duration_min"]
+        gantt_df["tail"] = gantt_df["tail"].astype(str)
+        if "original_tail" in gantt_df.columns:
+            gantt_df["was_unscheduled"] = gantt_df["original_tail"].isna() | (
+                gantt_df["original_tail"].astype(str).str.len() == 0
+            )
+            gantt_df["assignment_source"] = gantt_df["was_unscheduled"].map(
+                {
+                    True: "Added from unscheduled",
+                    False: "Previously scheduled",
+                }
+            )
+        frames.append(gantt_df)
+
+    if reposition_df is not None and not reposition_df.empty:
+        reposition_gantt = reposition_df.copy()
+        if "end_min" not in reposition_gantt.columns and "duration_min" in reposition_gantt.columns:
+            reposition_gantt["end_min"] = (
+                reposition_gantt["start_min"] + reposition_gantt["duration_min"]
+            )
+        reposition_gantt["tail"] = reposition_gantt["tail"].astype(str)
+        reposition_gantt["assignment_source"] = "Reposition leg"
+        reposition_gantt["was_unscheduled"] = False
+        frames.append(reposition_gantt)
+
+    return pd.concat(frames, ignore_index=True)
 
 
 def draw_gantt(
@@ -581,6 +598,7 @@ def render_page() -> None:
 
         st.subheader("Assigned schedule")
         assigned_df: pd.DataFrame = solution["assigned"]
+        reposition_df: pd.DataFrame = solution.get("reposition", pd.DataFrame())
         if assigned_df.empty:
             st.write("— No internal assignments —")
         else:
@@ -588,7 +606,7 @@ def render_page() -> None:
             with table_tab:
                 st.dataframe(assigned_df, use_container_width=True)
             with gantt_tab:
-                gantt_df = _build_gantt_solution(assigned_df)
+                gantt_df = _build_gantt_solution(assigned_df, reposition_df)
                 if gantt_df.empty:
                     st.info("Not enough timing data to display the Gantt view.")
                 else:
@@ -598,6 +616,7 @@ def render_page() -> None:
                         color_palette={
                             "Added from unscheduled": "#d62728",
                             "Previously scheduled": "#1f77b4",
+                            "Reposition leg": "#ffbf00",
                         },
                     )
 
