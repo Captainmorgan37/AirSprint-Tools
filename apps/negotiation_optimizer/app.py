@@ -428,6 +428,10 @@ def render_page() -> None:
         cost_per_min = st.slider("Cost per shifted minute", 0, 10, 5)
         reposition_cost = st.slider("Reposition cost / min", 0, 10, 2, 1)
         outsource_cost = st.number_input("Outsource cost proxy", 0, 10000, 1800, 50)
+        enforce_max_day = st.checkbox(
+            "Enforce max duty day length", value=False, help="Caps usable duty span to 765 minutes."
+        )
+        max_day_length_min = 765 if enforce_max_day else None
 
         if dataset == "FL3XX":
             fetch_requested = st.button("Fetch FL3XX data", use_container_width=True)
@@ -479,6 +483,7 @@ def render_page() -> None:
         outsource_cost=outsource_cost,
         turn_min=turn_min,
         reposition_cost_per_min=reposition_cost,
+        max_day_length_min=max_day_length_min,
     )
 
     legs: list = []
