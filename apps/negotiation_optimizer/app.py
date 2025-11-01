@@ -12,6 +12,7 @@ import streamlit as st
 
 from Home import configure_page, password_gate, render_sidebar
 from core.neg_scheduler import LeverPolicy, NegotiationScheduler
+from core.neg_scheduler.model import _class_compatible
 from flight_leg_utils import FlightDataError
 from integrations.fl3xx_adapter import NegotiationData, fetch_negotiation_data, get_demo_data
 
@@ -430,12 +431,14 @@ def render_page() -> None:
 
     # 4) For first few add-line legs, list compatible tails
     adds = [f for f in flights if not f.current_tail_id]
-    tail_by_class: dict[str, list[str]] = {}
-    for t in tails:
-        tail_by_class.setdefault(t.fleet_class, []).append(t.id)
     for f in adds[:5]:
+        compatible = [
+            t.id for t in tails if _class_compatible(f.fleet_class, t.fleet_class)
+        ]
+        tail_list = compatible[:10]
+        suffix = "..." if len(compatible) > 10 else ""
         st.write(
-            f"ADD {f.id}: class={f.fleet_class} → compatible tails: {tail_by_class.get(f.fleet_class, [])}"
+            f"ADD {f.id}: class={f.fleet_class} → compatible tails: {tail_list}{suffix}"
         )
 
     # 5) Check per-flight caps (are scheduled legs allowed tiny moves?)

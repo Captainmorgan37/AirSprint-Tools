@@ -135,24 +135,29 @@ class NegotiationScheduler:
             if not flight.allow_outsource:
                 m.Add(self.outsource[i] == 0)
 
-            if flight.current_tail_id and flight.current_tail_id in tail_index:
-                current_idx = tail_index[flight.current_tail_id]
+            if flight.current_tail_id:
+                current_idx = tail_index.get(flight.current_tail_id)
+                if current_idx is None:
+                    # The provided tail id is no longer in the active list; treat as free.
+                    continue
+
                 current_tail = self.tails[current_idx]
-                if _class_compatible(flight.fleet_class, current_tail.fleet_class):
-                    if not flight.allow_tail_swap:
-                        m.Add(self.assign[(i, current_idx)] == 1)
-                        for k in T:
-                            if k != current_idx:
-                                m.Add(self.assign[(i, k)] == 0)
-                    else:
-                        swap = m.NewBoolVar(f"swap[{i}]")
-                        self.swap[i] = swap
-                        m.Add(self.assign[(i, current_idx)] == 0).OnlyEnforceIf(swap)
-                        m.Add(self.assign[(i, current_idx)] == 1).OnlyEnforceIf(swap.Not())
-                        for k in T:
-                            if k == current_idx:
-                                continue
-                            m.Add(self.assign[(i, k)] == 0).OnlyEnforceIf(swap.Not())
+                if not _class_compatible(flight.fleet_class, current_tail.fleet_class):
+                    # Current assignment is incompatible; allow reassignment.
+                    continue
+
+                if not flight.allow_tail_swap:
+                    for k in T:
+                        m.Add(self.assign[(i, k)] == (1 if k == current_idx else 0))
+                else:
+                    swap = m.NewBoolVar(f"swap[{i}]")
+                    self.swap[i] = swap
+                    m.Add(self.assign[(i, current_idx)] == 0).OnlyEnforceIf(swap)
+                    m.Add(self.assign[(i, current_idx)] == 1).OnlyEnforceIf(swap.Not())
+                    for k in T:
+                        if k == current_idx:
+                            continue
+                        m.Add(self.assign[(i, k)] == 0).OnlyEnforceIf(swap.Not())
 
         for k in T:
             tail = self.tails[k]
