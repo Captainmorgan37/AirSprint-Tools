@@ -629,14 +629,12 @@ if st.button("Run Solver", type="primary"):
             df = pd.DataFrame(sorted(opts, key=lambda d: d["penalty"]))
             st.dataframe(df, use_container_width=True)
             st.code(
-                f"Hi Owner {r['owner']},
-
-"
-                f"Could you slide departure by 30 minutes? This avoids a tail swap and keeps crew within duty limits. "
-                f"We can offer a small courtesy credit.
-
-— Dispatch"
+                f"Hi Owner {r['owner']},\n\n"
+                "Could you slide departure by 30 minutes? This avoids a tail swap and keeps crew within duty limits.\n"
+                "We can offer a small courtesy credit.\n\n"
+                "— Dispatch\n"
             )
+
 
 
 # 6) Optional: Makefile (handy shortcuts)
