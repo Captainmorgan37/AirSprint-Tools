@@ -187,6 +187,13 @@ def _render_solution_details(
     else:
         st.dataframe(outsourced_df, use_container_width=True)
 
+    st.subheader("Dropped positioning legs")
+    skipped_df: pd.DataFrame = solution.get("skipped", pd.DataFrame())
+    if skipped_df.empty:
+        st.write("— No positioning legs dropped —")
+    else:
+        st.dataframe(skipped_df, use_container_width=True)
+
     objective_value = solution.get("objective", math.inf)
     if math.isfinite(objective_value):
         st.caption(f"Objective value: {objective_value:.0f}")
@@ -511,7 +518,20 @@ def render_page() -> None:
         max_minus = st.slider("Max shift - (min)", 0, 180, 30, 5)
         cost_per_min = st.slider("Cost per shifted minute", 0, 10, 5)
         reposition_cost = st.slider("Reposition cost / min", 0, 10, 2, 1)
-        outsource_cost = st.number_input("Outsource cost proxy", 0, 10000, 1800, 50)
+        outsource_cost = st.number_input(
+            "Outsource cost proxy", 0, 200_000, 50_000, 500
+        )
+        allow_pos_skips = st.checkbox(
+            "Allow dropping POS legs",
+            value=True,
+            help="If unchecked, positioning legs must be scheduled or outsourced like PAX legs.",
+        )
+        pos_skip_cost = st.number_input(
+            "Penalty for dropping POS leg", 0, 200_000, 5_000, 250
+        )
+        pax_skip_cost = st.number_input(
+            "Penalty for unscheduled PAX leg", 0, 2_000_000, 1_000_000, 5_000
+        )
         enforce_max_day = st.checkbox(
             "Enforce max duty day length", value=False, help="Caps usable duty span to 765 minutes."
         )
@@ -568,6 +588,9 @@ def render_page() -> None:
         turn_min=turn_min,
         reposition_cost_per_min=reposition_cost,
         max_day_length_min=max_day_length_min,
+        pos_skip_cost=pos_skip_cost,
+        pax_skip_cost=pax_skip_cost,
+        allow_pos_skips=allow_pos_skips,
     )
 
     legs: list = []

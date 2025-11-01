@@ -96,7 +96,7 @@ class LeverPolicy:
     max_shift_plus_min: int = 90
     max_shift_minus_min: int = 30
     cost_per_min_shift: int = 2
-    outsource_cost: int = 1800
+    outsource_cost: int = 50_000
     unassigned_penalty: int = 5_000
     turn_min: int = 30
     tail_swap_cost: int = 1_200
@@ -104,6 +104,9 @@ class LeverPolicy:
     max_day_length_min: Optional[int] = None
     leg_to_cj_penalty: int = 6_000
     cj_to_leg_penalty: int = 500
+    pos_skip_cost: int = 5_000
+    pax_skip_cost: int = 1_000_000
+    allow_pos_skips: bool = True
 
 
 class NegotiationScheduler:
@@ -193,6 +196,7 @@ class NegotiationScheduler:
 
         self.assign: Dict[Tuple[int, int], object] = {}
         self.outsource: Dict[int, object] = {}
+        self.skip: Dict[int, object] = {}
         self.shift_plus: Dict[int, object] = {}
         self.shift_minus: Dict[int, object] = {}
         self.start: Dict[int, object] = {}
@@ -208,6 +212,7 @@ class NegotiationScheduler:
         for i in F:
             flight = self.flights[i]
             self.outsource[i] = m.NewBoolVar(f"outsource[{i}]")
+            self.skip[i] = m.NewBoolVar(f"skip[{i}]")
             shift_plus_cap = min(self.policy.max_shift_plus_min, flight.shift_plus_cap)
             shift_minus_cap = min(self.policy.max_shift_minus_min, flight.shift_minus_cap)
             self.shift_plus[i] = m.NewIntVar(0, shift_plus_cap, f"shift_plus[{i}]")
@@ -240,7 +245,8 @@ class NegotiationScheduler:
                 self.intervals_per_tail[k].append(interval)
 
         for i in F:
-            m.Add(sum(self.assign[(i, k)] for k in T) + self.outsource[i] == 1)
+            assigned_any = sum(self.assign[(i, k)] for k in T)
+            m.Add(assigned_any + self.outsource[i] + self.skip[i] == 1)
             flight = self.flights[i]
             m.Add(self.start[i] >= flight.earliest_etd_min - self.shift_minus[i])
             m.Add(self.start[i] <= flight.latest_etd_min + self.shift_plus[i])
@@ -249,6 +255,12 @@ class NegotiationScheduler:
 
             if not flight.allow_outsource:
                 m.Add(self.outsource[i] == 0)
+
+            if flight.must_cover or not self.policy.allow_pos_skips:
+                m.Add(self.skip[i] == 0)
+
+            m.Add(self.shift_plus[i] == 0).OnlyEnforceIf(self.skip[i])
+            m.Add(self.shift_minus[i] == 0).OnlyEnforceIf(self.skip[i])
 
             if flight.current_tail_id:
                 k_cur = tail_index.get(flight.current_tail_id)
@@ -366,6 +378,11 @@ class NegotiationScheduler:
         objective_terms = []
         for i in F:
             flight = self.flights[i]
+            skip_cost = (
+                self.policy.pax_skip_cost if flight.must_cover else self.policy.pos_skip_cost
+            )
+            if skip_cost:
+                objective_terms.append(self.skip[i] * skip_cost)
             objective_terms.append(self.outsource[i] * self.policy.outsource_cost)
             objective_terms.append(self.shift_plus[i] * flight.shift_cost_per_min)
             objective_terms.append(self.shift_minus[i] * flight.shift_cost_per_min)
@@ -400,7 +417,7 @@ class NegotiationScheduler:
 
     def _build_solution(self, solver_like) -> Dict[str, pd.DataFrame]:
         cp = self.cp_model
-        assigned_rows, outsourced_rows = [], []
+        assigned_rows, outsourced_rows, skipped_rows = [], [], []
         tail_sequences: Dict[str, List[Tuple[int, int]]] = {}
         for i, flight in enumerate(self.flights):
             tail_id = None
@@ -436,6 +453,16 @@ class NegotiationScheduler:
                         "origin": flight.origin,
                         "dest": flight.dest,
                         "preferred_etd_min": flight.preferred_etd_min,
+                    }
+                )
+            elif solver_like.Value(self.skip[i]) == 1:
+                skipped_rows.append(
+                    {
+                        "flight": flight.id,
+                        "owner": flight.owner_id,
+                        "origin": flight.origin,
+                        "dest": flight.dest,
+                        "intent": flight.intent,
                     }
                 )
 
@@ -474,6 +501,7 @@ class NegotiationScheduler:
         return {
             "assigned": pd.DataFrame(assigned_rows),
             "outsourced": pd.DataFrame(outsourced_rows),
+            "skipped": pd.DataFrame(skipped_rows),
             "reposition": pd.DataFrame(reposition_rows),
             "objective": objective_value,
         }
@@ -513,6 +541,8 @@ class NegotiationScheduler:
                         var = working.assign[tuple(key)]
                     elif kind == "outsource":
                         var = working.outsource[key[0]]
+                    elif kind == "skip":
+                        var = working.skip[key[0]]
                     else:
                         continue
 
@@ -547,6 +577,8 @@ class NegotiationScheduler:
                 clause.append(("assign", tuple(key), int(solver.Value(var))))
             for key, var in working.outsource.items():
                 clause.append(("outsource", (key,), int(solver.Value(var))))
+            for key, var in working.skip.items():
+                clause.append(("skip", (key,), int(solver.Value(var))))
 
             if clause:
                 exclusion_clauses.append(clause)
