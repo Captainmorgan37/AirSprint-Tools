@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 import pandas as pd
 import streamlit as st
 
 from core.neg_scheduler import LeverPolicy, NegotiationScheduler
-from integrations.fl3xx_adapter import fetch_from_fl3xx, get_demo_data
+from integrations.fl3xx_adapter import fetch_demo_from_fl3xx, get_demo_data
 
 
 def _lever_options(policy: LeverPolicy) -> list[dict[str, object]]:
@@ -41,7 +43,8 @@ def render_page() -> None:
     with st.sidebar:
         st.header("Inputs")
         dataset = st.selectbox("Data source", ("Demo", "FL3XX"), index=0)
-        max_plus = st.slider("Max shift + (min)", 0, 240, 90, 5)
+        turn_min = st.slider("Turn buffer (min)", 0, 120, 30, 5)
+        max_plus = st.slider("Max shift + (min)", 0, 240, 30, 5)
         max_minus = st.slider("Max shift - (min)", 0, 180, 30, 5)
         cost_per_min = st.slider("Cost per shifted minute", 0, 10, 2)
         outsource_cost = st.number_input("Outsource cost proxy", 0, 10000, 1800, 50)
@@ -51,13 +54,14 @@ def render_page() -> None:
         max_shift_minus_min=max_minus,
         cost_per_min_shift=cost_per_min,
         outsource_cost=outsource_cost,
+        turn_min=turn_min,
     )
 
     if dataset == "Demo":
         legs, tails = get_demo_data()
     else:
         st.info("FL3XX integration pending – falling back to demo dataset.")
-        legs, tails = fetch_from_fl3xx()
+        legs, tails = fetch_demo_from_fl3xx(date.today())
 
     if st.button("Run Solver", type="primary"):
         try:
@@ -86,7 +90,9 @@ def render_page() -> None:
         if not outsourced_df.empty:
             st.markdown("### 🔧 Lever suggestions")
             for _, row in outsourced_df.iterrows():
-                st.write(f"**{row['leg']} {row['dep']}→{row['arr']} (Owner {row['owner']})**")
+                st.write(
+                    f"**{row['flight']} {row['origin']}→{row['dest']} (Owner {row['owner']})**"
+                )
                 options = _lever_options(policy)
                 options_df = pd.DataFrame(sorted(options, key=lambda d: d["penalty"]))
                 st.dataframe(options_df, use_container_width=True)
