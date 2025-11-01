@@ -81,6 +81,25 @@ def render_page() -> None:
         cost_per_min = st.slider("Cost per shifted minute", 0, 10, 2)
         outsource_cost = st.number_input("Outsource cost proxy", 0, 10000, 1800, 50)
 
+    fl3xx_settings: dict[str, object] | None = None
+    if dataset == "FL3XX":
+        try:
+            secrets_section = st.secrets.get("fl3xx_api")  # type: ignore[attr-defined]
+        except Exception:
+            secrets_section = None
+
+        if not secrets_section:
+            st.error(
+                "Add FL3XX credentials to `.streamlit/secrets.toml` under `[fl3xx_api]` to fetch flights."
+            )
+            return
+
+        try:
+            fl3xx_settings = dict(secrets_section)
+        except (TypeError, ValueError):
+            st.error("FL3XX API secrets must be provided as key/value pairs.")
+            return
+
     policy = LeverPolicy(
         max_shift_plus_min=max_plus,
         max_shift_minus_min=max_minus,
@@ -100,7 +119,9 @@ def render_page() -> None:
     else:
         with st.spinner("Fetching FL3XX flights…"):
             try:
-                data: NegotiationData = fetch_negotiation_data(schedule_day)
+                data: NegotiationData = fetch_negotiation_data(
+                    schedule_day, settings=fl3xx_settings
+                )
             except FlightDataError as exc:
                 st.error(f"Unable to load FL3XX flights: {exc}")
                 return
