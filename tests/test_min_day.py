@@ -325,6 +325,63 @@ def test_unscheduled_flight_does_not_use_idle_tail():
     assert assigned.loc["F2", "tail"] == "C-GCJ1"
 
 
+def test_leg_flight_prefers_leg_tail():
+    flights = [
+        Flight(
+            id="LEG-FLT",
+            origin="CYBW",
+            dest="CYVR",
+            duration_min=90,
+            earliest_etd_min=8 * 60,
+            latest_etd_min=8 * 60,
+            preferred_etd_min=8 * 60,
+            fleet_class="LEG",
+            owner_id="O-LEG",
+        )
+    ]
+    tails = [
+        Tail(id="C-GLEG1", fleet_class="LEG", available_from_min=7 * 60, available_to_min=20 * 60),
+        Tail(id="C-GCJ1", fleet_class="CJ", available_from_min=7 * 60, available_to_min=20 * 60),
+    ]
+
+    policy = LeverPolicy()
+    scheduler = NegotiationScheduler(flights, tails, policy)
+    status, solution = scheduler.solve()
+
+    cp = scheduler.cp_model
+    assert status == cp.OPTIMAL
+    assert solution["assigned"].shape[0] == 1
+    assert solution["assigned"].iloc[0]["tail"] == "C-GLEG1"
+
+
+def test_cj_flight_can_use_leg_tail_with_penalty():
+    flights = [
+        Flight(
+            id="CJ-FLT",
+            origin="CYBW",
+            dest="CYVR",
+            duration_min=60,
+            earliest_etd_min=9 * 60,
+            latest_etd_min=9 * 60,
+            preferred_etd_min=9 * 60,
+            fleet_class="CJ",
+            owner_id="O-CJ",
+        )
+    ]
+    tails = [
+        Tail(id="C-GLEG1", fleet_class="LEG", available_from_min=8 * 60, available_to_min=18 * 60)
+    ]
+
+    policy = LeverPolicy()
+    scheduler = NegotiationScheduler(flights, tails, policy)
+    status, solution = scheduler.solve()
+
+    cp = scheduler.cp_model
+    assert status == cp.OPTIMAL
+    assert solution["assigned"].shape[0] == 1
+    assert solution["assigned"].iloc[0]["tail"] == "C-GLEG1"
+
+
 def test_max_day_length_limit_outsources_when_exceeded():
     flights, tails = _long_gap_two_leg_scenario()
 

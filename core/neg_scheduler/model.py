@@ -31,7 +31,30 @@ def _class_compatible(fclass: str, tclass: str) -> bool:
     tail_class = _norm_class(tclass)
     if tail_class == "GEN":
         return True
-    return flight_class == tail_class
+    if flight_class == tail_class:
+        return True
+    if flight_class == "LEG" and tail_class == "CJ":
+        return True
+    if flight_class == "CJ" and tail_class == "LEG":
+        return True
+    return False
+
+
+def _class_assignment_penalty(
+    fclass: str, tclass: str, policy: "LeverPolicy"
+) -> int:
+    """Return the soft penalty for assigning a flight to a tail class."""
+
+    flight_class = _norm_class(fclass)
+    tail_class = _norm_class(tclass)
+
+    if tail_class == "GEN" or flight_class == tail_class:
+        return 0
+    if flight_class == "LEG" and tail_class == "CJ":
+        return policy.leg_to_cj_penalty
+    if flight_class == "CJ" and tail_class == "LEG":
+        return policy.cj_to_leg_penalty
+    return 0
 
 
 def _cp_model():
@@ -55,6 +78,8 @@ class LeverPolicy:
     tail_swap_cost: int = 1_200
     reposition_cost_per_min: int = 1
     max_day_length_min: Optional[int] = None
+    leg_to_cj_penalty: int = 6_000
+    cj_to_leg_penalty: int = 500
 
 
 class NegotiationScheduler:
@@ -322,6 +347,13 @@ class NegotiationScheduler:
             objective_terms.append(self.shift_minus[i] * flight.shift_cost_per_min)
             if i in self.swap:
                 objective_terms.append(self.swap[i] * self.policy.tail_swap_cost)
+            for k in T:
+                tail = self.tails[k]
+                penalty = _class_assignment_penalty(
+                    flight.fleet_class, tail.fleet_class, self.policy
+                )
+                if penalty:
+                    objective_terms.append(self.assign[(i, k)] * penalty)
 
         if not self.tails:
             for i in F:
