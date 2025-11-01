@@ -54,6 +54,7 @@ class LeverPolicy:
     turn_min: int = 30
     tail_swap_cost: int = 1_200
     reposition_cost_per_min: int = 1
+    max_day_length_min: Optional[int] = None
 
 
 class NegotiationScheduler:
@@ -75,6 +76,11 @@ class NegotiationScheduler:
         ]
         self.horizon = self._compute_horizon()
         self.model = self.cp_model.CpModel()
+        self.day_active: Dict[int, object] = {}
+        self.day_start: Dict[int, object] = {}
+        self.day_end: Dict[int, object] = {}
+        self.first: Dict[Tuple[int, int], object] = {}
+        self.last: Dict[Tuple[int, int], object] = {}
         self._build()
 
     def _compute_horizon(self) -> int:
@@ -115,6 +121,11 @@ class NegotiationScheduler:
         self.intervals_per_tail: Dict[int, List[object]] = {k: [] for k in T}
         self.order: Dict[Tuple[int, int, int], object] = {}
 
+        enforce_day_length = (
+            self.policy.max_day_length_min is not None
+            and self.policy.max_day_length_min > 0
+        )
+
         for i in F:
             flight = self.flights[i]
             self.outsource[i] = m.NewBoolVar(f"outsource[{i}]")
@@ -127,6 +138,9 @@ class NegotiationScheduler:
             for k in T:
                 tail = self.tails[k]
                 self.assign[(i, k)] = m.NewBoolVar(f"assign[{i},{k}]")
+                if enforce_day_length:
+                    self.first[(i, k)] = m.NewBoolVar(f"first[{i},{k}]")
+                    self.last[(i, k)] = m.NewBoolVar(f"last[{i},{k}]")
                 if active_tail_ids and tail.id not in active_tail_ids and (
                     flight.current_tail_id != tail.id
                 ):
@@ -189,6 +203,10 @@ class NegotiationScheduler:
 
         for k in T:
             tail = self.tails[k]
+            if enforce_day_length:
+                self.day_active[k] = m.NewBoolVar(f"day_active[{k}]")
+                self.day_start[k] = m.NewIntVar(0, self.horizon, f"day_start[{k}]")
+                self.day_end[k] = m.NewIntVar(0, self.horizon, f"day_end[{k}]")
             intervals = self.intervals_per_tail[k]
             if intervals:
                 m.AddNoOverlap(intervals)
@@ -209,6 +227,44 @@ class NegotiationScheduler:
                     if i == j:
                         continue
                     o[(i, j, k)] = m.NewBoolVar(f"ord[{i},{j},{k}]")
+
+        if enforce_day_length:
+            limit = int(self.policy.max_day_length_min)
+            for k in T:
+                active = self.day_active[k]
+                assigned_vars = [self.assign[(i, k)] for i in F]
+                first_vars = [self.first[(i, k)] for i in F]
+                last_vars = [self.last[(i, k)] for i in F]
+
+                m.Add(sum(assigned_vars) >= active)
+                for assign_var in assigned_vars:
+                    m.Add(assign_var <= active)
+
+                m.Add(sum(first_vars) == active)
+                m.Add(sum(last_vars) == active)
+
+                for i in F:
+                    first = self.first[(i, k)]
+                    last = self.last[(i, k)]
+                    assign_var = self.assign[(i, k)]
+                    m.Add(first <= assign_var)
+                    m.Add(last <= assign_var)
+
+                    m.Add(self.day_start[k] == self.start[i]).OnlyEnforceIf(first)
+                    m.Add(
+                        self.day_end[k]
+                        == self.start[i] + self.flights[i].duration_min
+                    ).OnlyEnforceIf(last)
+
+                    for j in F:
+                        if i == j:
+                            continue
+                        m.Add(self.order[(j, i, k)] <= 1 - first)
+                        m.Add(self.order[(i, j, k)] <= 1 - last)
+
+                m.Add(self.day_start[k] == 0).OnlyEnforceIf(active.Not())
+                m.Add(self.day_end[k] == 0).OnlyEnforceIf(active.Not())
+                m.Add(self.day_end[k] - self.day_start[k] <= limit).OnlyEnforceIf(active)
 
         for k in T:
             for i in F:
