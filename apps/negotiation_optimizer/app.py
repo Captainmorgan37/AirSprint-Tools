@@ -381,6 +381,7 @@ def draw_gantt(
             )
 
     ax.set_yticks(range(len(tails_sorted)), tails_sorted)
+    ax.invert_yaxis()
     ax.set_xlim(lo, hi)
     ax.set_xlabel("Minutes from window start")
     ax.set_title("Per-tail Gantt (single day)")
