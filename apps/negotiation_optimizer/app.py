@@ -756,6 +756,19 @@ def render_page() -> None:
             repo_matrix = build_reposition_matrix(
                 solver_flights, relevant_airports or airport_catalog
             )
+            repo_rows = len(repo_matrix)
+            repo_cols = len(repo_matrix[0]) if repo_matrix else 0
+            st.write(
+                f"FINAL n_solver_flights={len(solver_flights)}  repo_matrix={repo_rows}x{repo_cols}"
+            )
+            if repo_rows != len(solver_flights) or any(
+                len(row) != len(solver_flights) for row in repo_matrix
+            ):
+                st.error(
+                    "Reposition matrix dimensions do not match the flights being solved."
+                )
+                return
+
             scheduler = NegotiationScheduler(
                 solver_flights, tails, policy, reposition_min=repo_matrix
             )
