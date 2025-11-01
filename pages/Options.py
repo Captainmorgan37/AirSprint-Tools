@@ -435,7 +435,7 @@ from typing import Dict, List, Tuple, Optional
 import math
 import pandas as pd
 from ortools.sat.python import cp_model
-from .contracts import Leg, Tail
+from core.neg_scheduler.contracts import Flight, Tail
 
 @dataclass
 class LeverPolicy:
