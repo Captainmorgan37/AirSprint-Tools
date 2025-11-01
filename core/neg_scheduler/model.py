@@ -489,29 +489,66 @@ class NegotiationScheduler:
         solutions = []
         status = cp.UNKNOWN
 
+        objective_floor: Optional[int] = None
+        exclusion_clauses: List[List[Tuple[str, Tuple[int, ...], int]]] = []
+
         for attempt in range(top_n):
+            if attempt == 0:
+                working = self
+            else:
+                working = NegotiationScheduler(
+                    self.flights,
+                    self.tails,
+                    self.policy,
+                    reposition_min=self.reposition_min,
+                )
+
+            if objective_floor is not None:
+                working.model.Add(working.objective_expr >= objective_floor)
+
+            for clause in exclusion_clauses:
+                literals = []
+                for kind, key, value in clause:
+                    if kind == "assign":
+                        var = working.assign[tuple(key)]
+                    elif kind == "outsource":
+                        var = working.outsource[key[0]]
+                    else:
+                        continue
+
+                    literals.append(var.Not() if value else var)
+
+                if literals:
+                    working.model.AddBoolOr(literals)
+
             solver = cp.CpSolver()
             if time_limit_s:
                 solver.parameters.max_time_in_seconds = time_limit_s
             solver.parameters.num_search_workers = workers
 
-            current_status = solver.Solve(self.model)
+            current_status = solver.Solve(working.model)
             if current_status not in (cp.OPTIMAL, cp.FEASIBLE):
                 if not solutions:
                     status = current_status
                 break
 
             status = current_status
-            solution = self._build_solution(solver)
+            solution = working._build_solution(solver)
             solutions.append(solution)
 
-            if attempt == top_n - 1:
+            objective_value = solution.get("objective", math.inf)
+            if not math.isfinite(objective_value):
                 break
 
-            objective_value = solution["objective"]
-            if math.isinf(objective_value):
-                break
+            objective_floor = math.floor(objective_value)
 
-            self.model.Add(self.objective_expr >= math.floor(objective_value) + 1)
+            clause: List[Tuple[str, Tuple[int, ...], int]] = []
+            for key, var in working.assign.items():
+                clause.append(("assign", tuple(key), int(solver.Value(var))))
+            for key, var in working.outsource.items():
+                clause.append(("outsource", (key,), int(solver.Value(var))))
+
+            if clause:
+                exclusion_clauses.append(clause)
 
         return status, solutions

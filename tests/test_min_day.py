@@ -438,3 +438,41 @@ def test_max_day_length_limit_outsources_when_exceeded():
 
     assert assigned_limited + outsourced_limited == len(flights)
     assert assigned_limited < len(flights)
+
+
+def test_scheduler_returns_multiple_solutions_and_reuses_model():
+    flights = [
+        Flight(
+            id="F1",
+            origin="CYBW",
+            dest="CYVR",
+            duration_min=120,
+            earliest_etd_min=8 * 60,
+            latest_etd_min=8 * 60,
+            preferred_etd_min=8 * 60,
+            fleet_class="CJ",
+            owner_id="A",
+        )
+    ]
+    tails = [
+        Tail(id="CJ1", fleet_class="CJ", available_from_min=7 * 60, available_to_min=22 * 60),
+        Tail(id="CJ2", fleet_class="CJ", available_from_min=7 * 60, available_to_min=22 * 60),
+    ]
+
+    scheduler = NegotiationScheduler(flights, tails, LeverPolicy())
+    status, solutions = scheduler.solve(top_n=2)
+
+    cp = scheduler.cp_model
+    assert status in (cp.OPTIMAL, cp.FEASIBLE)
+    assert len(solutions) == 2
+
+    assigned_tails = {
+        tuple(solution["assigned"]["tail"].tolist())
+        for solution in solutions
+        if not solution["assigned"].empty and "tail" in solution["assigned"]
+    }
+    assert len(assigned_tails) == len(solutions)
+
+    status_again, solutions_again = scheduler.solve()
+    assert status_again in (cp.OPTIMAL, cp.FEASIBLE)
+    assert solutions_again
