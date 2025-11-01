@@ -263,6 +263,7 @@ class NegotiationScheduler:
 
         status = solver.Solve(self.model)
         assigned_rows, outsourced_rows = [], []
+        tail_sequences: Dict[str, List[Tuple[int, int]]] = {}
         for i, flight in enumerate(self.flights):
             tail_id = None
             for k, tail in enumerate(self.tails):
@@ -288,6 +289,7 @@ class NegotiationScheduler:
                         "shift_minus": solver.Value(self.shift_minus[i]),
                     }
                 )
+                tail_sequences.setdefault(tail_id, []).append((i, start_val))
             elif solver.Value(self.outsource[i]) == 1:
                 outsourced_rows.append(
                     {
@@ -299,9 +301,36 @@ class NegotiationScheduler:
                     }
                 )
 
+        reposition_rows = []
+        for tail_id, sequence in tail_sequences.items():
+            ordered = sorted(sequence, key=lambda item: item[1])
+            for (prev_idx, prev_start), (next_idx, next_start) in zip(ordered, ordered[1:]):
+                repo = self.reposition_min[prev_idx][next_idx]
+                if repo and repo > 0:
+                    prev_flight = self.flights[prev_idx]
+                    next_flight = self.flights[next_idx]
+                    repo_start = (
+                        prev_start
+                        + prev_flight.duration_min
+                        + self.policy.turn_min
+                    )
+                    reposition_rows.append(
+                        {
+                            "tail": tail_id,
+                            "start_min": repo_start,
+                            "duration_min": repo,
+                            "end_min": repo_start + repo,
+                            "origin": prev_flight.dest,
+                            "dest": next_flight.origin,
+                            "source_flight": prev_flight.id,
+                            "target_flight": next_flight.id,
+                        }
+                    )
+
         return status, {
             "assigned": pd.DataFrame(assigned_rows),
             "outsourced": pd.DataFrame(outsourced_rows),
+            "reposition": pd.DataFrame(reposition_rows),
             "objective": solver.ObjectiveValue()
             if status in (cp.OPTIMAL, cp.FEASIBLE)
             else math.inf,
