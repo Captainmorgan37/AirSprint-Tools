@@ -21,6 +21,12 @@ class Flight:
     fleet_class: str
     owner_id: str
     requested_start_utc: Optional[datetime] = None
+    current_tail_id: Optional[str] = None
+    allow_tail_swap: bool = False
+    allow_outsource: bool = True
+    shift_plus_cap: int = 90
+    shift_minus_cap: int = 30
+    shift_cost_per_min: int = 2
 
     def __post_init__(self) -> None:
         if self.duration_min < 0:
@@ -33,6 +39,12 @@ class Flight:
             raise ValueError("preferred_etd_min must be within a day")
         if self.latest_etd_min < self.earliest_etd_min:
             raise ValueError("latest_etd_min must be greater than or equal to earliest_etd_min")
+        if self.shift_plus_cap < 0:
+            raise ValueError("shift_plus_cap must be non-negative")
+        if self.shift_minus_cap < 0:
+            raise ValueError("shift_minus_cap must be non-negative")
+        if self.shift_cost_per_min < 0:
+            raise ValueError("shift_cost_per_min must be non-negative")
 
 
 @dataclass(frozen=True, slots=True)
