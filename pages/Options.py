@@ -1,9 +1,5 @@
-import sys, traceback, ast, pathlib
-try:
-    ast.parse(pathlib.Path(__file__).read_text(encoding="utf-8"))
-except Exception:
-    traceback.print_exc(); sys.exit(1)
-
+from core.neg_scheduler.contracts import Flight, Tail
+from core.neg_scheduler.model import NegotiationScheduler, LeverPolicy
 
 
 """
