@@ -9,6 +9,7 @@ from typing import Iterable, Mapping, MutableMapping, Sequence, Tuple
 
 import pandas as pd
 
+from core.neg_scheduler import LeverPolicy
 from core.neg_scheduler.contracts import Flight, Tail
 from flight_leg_utils import (
     FlightDataError,
@@ -147,6 +148,14 @@ def _coerce_minutes(value: object) -> int | None:
     return None
 
 
+def _extract_shift_cap(row: Mapping[str, object], keys: Sequence[str]) -> int:
+    for key in keys:
+        minutes = _coerce_minutes(row.get(key))
+        if minutes is not None:
+            return minutes
+    return 0
+
+
 FLEET_PATTERN_MAP: list[tuple[str, tuple[str, ...]]] = [
     ("LEG", ("LEGACY", "PRAETOR", "EMB", "EMBRAER")),
     ("CJ2", ("CJ2", "CJ-2", "CJII", "CJ 2", "525A")),
@@ -276,6 +285,7 @@ def _build_flight(
     *,
     window_start: datetime,
     fixed_tail: bool,
+    policy: LeverPolicy,
 ) -> Flight:
     dep_raw = row.get("dep_time")
     if dep_raw in (None, ""):
@@ -296,19 +306,51 @@ def _build_flight(
     if fixed_tail and not tail_normalised:
         raise FlightDataError("Scheduled leg missing a recognized tail assignment.")
 
+    base_shift_plus = _extract_shift_cap(
+        row,
+        (
+            "shift_plus_cap",
+            "shiftPlusCap",
+            "shiftPlusMinutes",
+            "shiftPlus",
+            "shift_plus",
+        ),
+    )
+    base_shift_minus = _extract_shift_cap(
+        row,
+        (
+            "shift_minus_cap",
+            "shiftMinusCap",
+            "shiftMinusMinutes",
+            "shiftMinus",
+            "shift_minus",
+        ),
+    )
+
     earliest = latest = preferred = start_min
-    shift_plus = shift_minus = 0
+    shift_plus_cap = base_shift_plus or 0
+    shift_minus_cap = base_shift_minus or 0
+    shift_cost = policy.cost_per_min_shift + 1
     allow_swap = allow_outsource = False
 
     if not fixed_tail:
         earliest = 0
         latest = 24 * 60
         preferred = start_min
-        full_day = 24 * 60
-        shift_plus = full_day
-        shift_minus = full_day
+        if shift_plus_cap <= 0:
+            shift_plus_cap = 24 * 60
+        if shift_minus_cap <= 0:
+            shift_minus_cap = 24 * 60
+        shift_cost = policy.cost_per_min_shift
         allow_swap = True
         allow_outsource = True
+
+    if fixed_tail:
+        shift_plus_cap = max(15, shift_plus_cap or 0)
+        shift_minus_cap = max(10, shift_minus_cap or 0)
+    else:
+        shift_plus_cap = max(90, shift_plus_cap or 0)
+        shift_minus_cap = max(30, shift_minus_cap or 0)
 
     return Flight(
         id=_flight_identifier(row),
@@ -324,8 +366,9 @@ def _build_flight(
         current_tail_id=tail_normalised if fixed_tail else None,
         allow_tail_swap=allow_swap,
         allow_outsource=allow_outsource,
-        shift_plus_cap=shift_plus,
-        shift_minus_cap=shift_minus,
+        shift_plus_cap=shift_plus_cap,
+        shift_minus_cap=shift_minus_cap,
+        shift_cost_per_min=shift_cost,
     )
 
 
@@ -333,6 +376,7 @@ def fetch_negotiation_data(
     target_date: date,
     *,
     settings: Mapping[str, object] | None = None,
+    policy: LeverPolicy | None = None,
 ) -> NegotiationData:
     """Pull FL3XX flights for the negotiation solver window."""
 
@@ -362,10 +406,17 @@ def fetch_negotiation_data(
     skipped_scheduled: list[str] = []
     skipped_unscheduled: list[str] = []
 
+    policy_obj = policy or LeverPolicy()
+
     for row in scheduled_rows:
         try:
             flights.append(
-                _build_flight(row, window_start=window_start, fixed_tail=True)
+                _build_flight(
+                    row,
+                    window_start=window_start,
+                    fixed_tail=True,
+                    policy=policy_obj,
+                )
             )
         except FlightDataError as exc:
             identifier = _flight_identifier(row)
@@ -374,7 +425,12 @@ def fetch_negotiation_data(
     for row in unscheduled_rows:
         try:
             flights.append(
-                _build_flight(row, window_start=window_start, fixed_tail=False)
+                _build_flight(
+                    row,
+                    window_start=window_start,
+                    fixed_tail=False,
+                    policy=policy_obj,
+                )
             )
         except FlightDataError as exc:
             identifier = _flight_identifier(row)
@@ -516,9 +572,10 @@ def fetch_from_fl3xx(
     *,
     settings: Mapping[str, object] | None = None,
     include_owners: Sequence[str] | None = None,
+    policy: LeverPolicy | None = None,
 ) -> Tuple[list[Flight], list[Tail]]:
     """Compatibility helper returning only the flight/tail lists."""
 
     _ = include_owners
-    data = fetch_negotiation_data(day, settings=settings)
+    data = fetch_negotiation_data(day, settings=settings, policy=policy)
     return data.flights, data.tails

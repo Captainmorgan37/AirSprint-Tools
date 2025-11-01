@@ -306,7 +306,7 @@ def render_page() -> None:
         with st.spinner("Fetching FL3XX flights…"):
             try:
                 data: NegotiationData = fetch_negotiation_data(
-                    schedule_day, settings=fl3xx_settings
+                    schedule_day, settings=fl3xx_settings, policy=policy
                 )
             except FlightDataError as exc:
                 st.error(f"Unable to load FL3XX flights: {exc}")

@@ -11,6 +11,29 @@ import pandas as pd
 from .contracts import Flight, Tail
 
 
+def _norm_class(s: str) -> str:
+    """Normalize fleet classes so variants share compatibility buckets."""
+
+    s = (s or "").upper()
+    if s.startswith("CJ"):
+        return "CJ"
+    if s.startswith("LEG") or s.startswith("E"):
+        return "LEG"
+    if s == "GEN":
+        return "GEN"
+    return s
+
+
+def _class_compatible(fclass: str, tclass: str) -> bool:
+    """Return True when a tail can operate a flight based on fleet class."""
+
+    flight_class = _norm_class(fclass)
+    tail_class = _norm_class(tclass)
+    if tail_class == "GEN":
+        return True
+    return flight_class == tail_class
+
+
 def _cp_model():
     """Lazy import OR-Tools so environments without it can still load modules."""
 
@@ -87,7 +110,7 @@ class NegotiationScheduler:
             for k in T:
                 tail = self.tails[k]
                 self.assign[(i, k)] = m.NewBoolVar(f"assign[{i},{k}]")
-                if flight.fleet_class != tail.fleet_class:
+                if not _class_compatible(flight.fleet_class, tail.fleet_class):
                     m.Add(self.assign[(i, k)] == 0)
                     continue
 
@@ -115,7 +138,7 @@ class NegotiationScheduler:
             if flight.current_tail_id and flight.current_tail_id in tail_index:
                 current_idx = tail_index[flight.current_tail_id]
                 current_tail = self.tails[current_idx]
-                if current_tail.fleet_class == flight.fleet_class:
+                if _class_compatible(flight.fleet_class, current_tail.fleet_class):
                     if not flight.allow_tail_swap:
                         m.Add(self.assign[(i, current_idx)] == 1)
                         for k in T:
@@ -138,7 +161,7 @@ class NegotiationScheduler:
                 m.AddNoOverlap(intervals)
             for i in F:
                 flight = self.flights[i]
-                if flight.fleet_class != tail.fleet_class:
+                if not _class_compatible(flight.fleet_class, tail.fleet_class):
                     continue
                 m.Add(self.start[i] >= tail.available_from_min).OnlyEnforceIf(self.assign[(i, k)])
                 m.Add(
