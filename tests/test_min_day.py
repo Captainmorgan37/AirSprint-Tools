@@ -1,0 +1,86 @@
+"""Regression coverage for minimal duty-day feasibility scenarios."""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+pytest.importorskip("ortools.sat.python.cp_model")
+
+from core.neg_scheduler import Flight, LeverPolicy, NegotiationScheduler, Tail
+
+
+def _three_leg_single_tail_scenario():
+    flights = [
+        Flight(
+            id="L1",
+            origin="CYBW",
+            dest="CYVR",
+            duration_min=120,
+            earliest_etd_min=8 * 60,
+            latest_etd_min=8 * 60,
+            preferred_etd_min=8 * 60,
+            fleet_class="CJ",
+            owner_id="A",
+        ),
+        Flight(
+            id="L2",
+            origin="CYVR",
+            dest="CYBW",
+            duration_min=60,
+            earliest_etd_min=10 * 60,
+            latest_etd_min=10 * 60,
+            preferred_etd_min=10 * 60,
+            fleet_class="CJ",
+            owner_id="B",
+        ),
+        Flight(
+            id="L3",
+            origin="CYBW",
+            dest="CYVR",
+            duration_min=60,
+            earliest_etd_min=12 * 60,
+            latest_etd_min=12 * 60,
+            preferred_etd_min=12 * 60,
+            fleet_class="CJ",
+            owner_id="C",
+        ),
+    ]
+    tails = [Tail(id="C-GCJ1", fleet_class="CJ", available_from_min=8 * 60, available_to_min=14 * 60)]
+    return flights, tails
+
+
+def test_turn_time_requires_positive_shift():
+    flights, tails = _three_leg_single_tail_scenario()
+
+    tight_policy = LeverPolicy(
+        max_shift_plus_min=0,
+        max_shift_minus_min=0,
+        cost_per_min_shift=10,
+        outsource_cost=1_000,
+        turn_min=30,
+    )
+    scheduler = NegotiationScheduler(flights, tails, tight_policy)
+    status, solution = scheduler.solve()
+
+    cp = scheduler.cp_model
+    assert status == cp.OPTIMAL
+    assert solution["outsourced"].shape[0] == 1
+
+    relaxed_policy = LeverPolicy(
+        max_shift_plus_min=30,
+        max_shift_minus_min=0,
+        cost_per_min_shift=10,
+        outsource_cost=1_000,
+        turn_min=30,
+    )
+    scheduler_relaxed = NegotiationScheduler(flights, tails, relaxed_policy)
+    status_relaxed, solution_relaxed = scheduler_relaxed.solve()
+
+    assert status_relaxed == cp.OPTIMAL
+    assert solution_relaxed["outsourced"].empty
+    assert solution_relaxed["assigned"].shape[0] == len(flights)

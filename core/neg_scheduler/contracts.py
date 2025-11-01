@@ -1,65 +1,62 @@
-"""Pydantic contracts for the negotiation-aware scheduler domain."""
+"""Domain contracts for the negotiation-aware solver."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, time
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
-
-class Leg(BaseModel):
+@dataclass(frozen=True, slots=True)
+class Flight:
     """Representation of a flight leg to be scheduled."""
 
-    model_config = ConfigDict(frozen=True)
+    id: str
+    origin: str
+    dest: str
+    duration_min: int
+    earliest_etd_min: int
+    latest_etd_min: int
+    preferred_etd_min: int
+    fleet_class: str
+    owner_id: str
+    requested_start_utc: Optional[datetime] = None
 
-    id: str = Field(..., description="Identifier coming from FL3XX")
-    owner_id: str = Field(..., description="Owner account reference")
-    dep: str = Field(..., description="Departure aerodrome")
-    arr: str = Field(..., description="Arrival aerodrome")
-    block_min: int = Field(..., ge=0, description="Block time in minutes")
-    fleet_class: str = Field(..., description="Compatible fleet grouping (e.g. CJ, LEG)")
-    etd_lo: int = Field(..., ge=0, le=24 * 60, description="Earliest allowed ETD (minutes from midnight)")
-    etd_hi: int = Field(..., ge=0, le=24 * 60, description="Latest allowed ETD (minutes from midnight)")
-    preferred_etd: int = Field(..., ge=0, le=24 * 60, description="Preferred ETD (minutes from midnight)")
-    requested_start_utc: Optional[datetime] = Field(
-        None,
-        description="Optional UTC timestamp for reference when displaying asks.",
-    )
-
-    @field_validator("etd_hi")
-    @classmethod
-    def validate_window(cls, hi: int, info: ValidationInfo):  # type: ignore[override]
-        lo = info.data.get("etd_lo")
-        if lo is not None and hi < lo:
-            raise ValueError("etd_hi must be greater than or equal to etd_lo")
-        return hi
+    def __post_init__(self) -> None:
+        if self.duration_min < 0:
+            raise ValueError("duration_min must be non-negative")
+        if self.earliest_etd_min < 0 or self.earliest_etd_min > 24 * 60:
+            raise ValueError("earliest_etd_min must be within a day")
+        if self.latest_etd_min < 0 or self.latest_etd_min > 24 * 60:
+            raise ValueError("latest_etd_min must be within a day")
+        if self.preferred_etd_min < 0 or self.preferred_etd_min > 24 * 60:
+            raise ValueError("preferred_etd_min must be within a day")
+        if self.latest_etd_min < self.earliest_etd_min:
+            raise ValueError("latest_etd_min must be greater than or equal to earliest_etd_min")
 
 
-class Tail(BaseModel):
-    """Representation of a tail with its availability window."""
-
-    model_config = ConfigDict(frozen=True)
+@dataclass(frozen=True, slots=True)
+class Tail:
+    """Representation of a tail, including availability bounds."""
 
     id: str
     fleet_class: str
-    available_lo: int = Field(0, ge=0, le=24 * 60)
-    available_hi: int = Field(24 * 60, ge=0, le=24 * 60)
+    available_from_min: int = 0
+    available_to_min: int = 24 * 60
     maintenance_due: Optional[datetime] = None
 
-    @field_validator("available_hi")
-    @classmethod
-    def validate_availability(cls, hi: int, info: ValidationInfo):  # type: ignore[override]
-        lo = info.data.get("available_lo")
-        if lo is not None and hi < lo:
-            raise ValueError("available_hi must be greater than or equal to available_lo")
-        return hi
+    def __post_init__(self) -> None:
+        if self.available_from_min < 0 or self.available_from_min > 24 * 60:
+            raise ValueError("available_from_min must be within a day")
+        if self.available_to_min < 0 or self.available_to_min > 24 * 60:
+            raise ValueError("available_to_min must be within a day")
+        if self.available_to_min < self.available_from_min:
+            raise ValueError("available_to_min must be greater than or equal to available_from_min")
 
 
 def minutes_since_midnight(value: time | datetime) -> int:
-    """Utility helper shared by adapters for converting time to minutes."""
+    """Helper used by adapters to convert timestamps to minutes from midnight."""
 
     if isinstance(value, datetime):
         value = value.time()
     return value.hour * 60 + value.minute
-

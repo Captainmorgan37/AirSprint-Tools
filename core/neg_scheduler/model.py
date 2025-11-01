@@ -8,7 +8,7 @@ from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 
-from .contracts import Leg, Tail
+from .contracts import Flight, Tail
 
 
 def _cp_model():
@@ -19,7 +19,7 @@ def _cp_model():
     return cp_model
 
 
-@dataclass
+@dataclass(slots=True)
 class LeverPolicy:
     """Adjustable costs and bounds for negotiation levers."""
 
@@ -28,14 +28,15 @@ class LeverPolicy:
     cost_per_min_shift: int = 2
     outsource_cost: int = 1800
     unassigned_penalty: int = 5_000
+    turn_min: int = 30
 
 
 class NegotiationScheduler:
     """Minimal CP-SAT assignment model with soft negotiation levers."""
 
-    def __init__(self, legs: List[Leg], tails: List[Tail], policy: LeverPolicy):
+    def __init__(self, flights: List[Flight], tails: List[Tail], policy: LeverPolicy):
         self.cp_model = _cp_model()
-        self.legs = legs
+        self.flights = flights
         self.tails = tails
         self.policy = policy
         self.horizon = 24 * 60
@@ -43,9 +44,8 @@ class NegotiationScheduler:
         self._build()
 
     def _build(self) -> None:
-        cp = self.cp_model
         m = self.model
-        F = range(len(self.legs))
+        F = range(len(self.flights))
         T = range(len(self.tails))
 
         self.assign: Dict[Tuple[int, int], object] = {}
@@ -56,7 +56,7 @@ class NegotiationScheduler:
         self.intervals_per_tail: Dict[int, List[object]] = {k: [] for k in T}
 
         for i in F:
-            leg = self.legs[i]
+            flight = self.flights[i]
             self.outsource[i] = m.NewBoolVar(f"outsource[{i}]")
             self.shift_plus[i] = m.NewIntVar(0, self.policy.max_shift_plus_min, f"shift_plus[{i}]")
             self.shift_minus[i] = m.NewIntVar(0, self.policy.max_shift_minus_min, f"shift_minus[{i}]")
@@ -65,22 +65,25 @@ class NegotiationScheduler:
             for k in T:
                 tail = self.tails[k]
                 self.assign[(i, k)] = m.NewBoolVar(f"assign[{i},{k}]")
-                if leg.fleet_class == tail.fleet_class:
-                    duration = leg.block_min
-                    interval = m.NewOptionalIntervalVar(
-                        self.start[i], duration, self.start[i] + duration, self.assign[(i, k)], f"leg[{i},{k}]"
-                    )
-                    self.intervals_per_tail[k].append(interval)
-                else:
+                if flight.fleet_class != tail.fleet_class:
                     m.Add(self.assign[(i, k)] == 0)
+                    continue
+
+                duration_with_turn = flight.duration_min + self.policy.turn_min
+                interval = m.NewOptionalIntervalVar(
+                    self.start[i],
+                    duration_with_turn,
+                    self.start[i] + duration_with_turn,
+                    self.assign[(i, k)],
+                    f"flight[{i},{k}]",
+                )
+                self.intervals_per_tail[k].append(interval)
 
         for i in F:
             m.Add(sum(self.assign[(i, k)] for k in T) + self.outsource[i] == 1)
-            leg = self.legs[i]
-            lo = leg.etd_lo - self.shift_minus[i]
-            hi = leg.etd_hi + self.shift_plus[i]
-            m.Add(self.start[i] >= lo)
-            m.Add(self.start[i] <= hi)
+            flight = self.flights[i]
+            m.Add(self.start[i] >= flight.earliest_etd_min - self.shift_minus[i])
+            m.Add(self.start[i] <= flight.latest_etd_min + self.shift_plus[i])
 
         for k in T:
             tail = self.tails[k]
@@ -88,11 +91,13 @@ class NegotiationScheduler:
             if intervals:
                 m.AddNoOverlap(intervals)
             for i in F:
-                leg = self.legs[i]
-                if leg.fleet_class != tail.fleet_class:
+                flight = self.flights[i]
+                if flight.fleet_class != tail.fleet_class:
                     continue
-                m.Add(self.start[i] >= tail.available_lo).OnlyEnforceIf(self.assign[(i, k)])
-                m.Add(self.start[i] + leg.block_min <= tail.available_hi).OnlyEnforceIf(self.assign[(i, k)])
+                m.Add(self.start[i] >= tail.available_from_min).OnlyEnforceIf(self.assign[(i, k)])
+                m.Add(self.start[i] + flight.duration_min <= tail.available_to_min).OnlyEnforceIf(
+                    self.assign[(i, k)]
+                )
 
         objective_terms = []
         for i in F:
@@ -101,7 +106,6 @@ class NegotiationScheduler:
             objective_terms.append(self.shift_minus[i] * self.policy.cost_per_min_shift)
 
         if not self.tails:
-            # No tails means everything must be outsourced; penalise via unassigned penalty
             for i in F:
                 objective_terms.append(self.outsource[i] * self.policy.unassigned_penalty)
 
@@ -116,21 +120,23 @@ class NegotiationScheduler:
 
         status = solver.Solve(self.model)
         assigned_rows, outsourced_rows = [], []
-        for i, leg in enumerate(self.legs):
+        for i, flight in enumerate(self.flights):
             tail_id = None
             for k, tail in enumerate(self.tails):
                 if solver.Value(self.assign[(i, k)]) == 1:
                     tail_id = tail.id
                     break
             if tail_id:
+                start_val = solver.Value(self.start[i])
                 assigned_rows.append(
                     {
-                        "leg": leg.id,
+                        "flight": flight.id,
                         "tail": tail_id,
-                        "dep": leg.dep,
-                        "arr": leg.arr,
-                        "start_min": solver.Value(self.start[i]),
-                        "duration_min": leg.block_min,
+                        "origin": flight.origin,
+                        "dest": flight.dest,
+                        "start_min": start_val,
+                        "end_min": start_val + flight.duration_min,
+                        "duration_min": flight.duration_min,
                         "shift_plus": solver.Value(self.shift_plus[i]),
                         "shift_minus": solver.Value(self.shift_minus[i]),
                     }
@@ -138,11 +144,11 @@ class NegotiationScheduler:
             elif solver.Value(self.outsource[i]) == 1:
                 outsourced_rows.append(
                     {
-                        "leg": leg.id,
-                        "owner": leg.owner_id,
-                        "dep": leg.dep,
-                        "arr": leg.arr,
-                        "preferred_etd": leg.preferred_etd,
+                        "flight": flight.id,
+                        "owner": flight.owner_id,
+                        "origin": flight.origin,
+                        "dest": flight.dest,
+                        "preferred_etd_min": flight.preferred_etd_min,
                     }
                 )
 
@@ -153,4 +159,3 @@ class NegotiationScheduler:
             if status in (cp.OPTIMAL, cp.FEASIBLE)
             else math.inf,
         }
-
