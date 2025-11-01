@@ -37,10 +37,22 @@ def load_airports(path: str | Path) -> Dict[str, Dict[str, object]]:
 
     airports: Dict[str, Dict[str, object]] = {}
     for _, row in df.iterrows():
-        airports[row["icao"]] = {
+        icao = row["icao"].strip().upper()
+        if not icao:
+            continue
+
+        metadata = {
             "lat": float(row["lat"]),
             "lon": float(row["lon"]),
             "tz": (row.get("tz") or "") if isinstance(row.get("tz"), str) else "",
         }
+
+        airports[icao] = metadata
+
+        iata_raw = row.get("iata")
+        if isinstance(iata_raw, str):
+            iata = iata_raw.strip().upper()
+            if iata and iata not in airports:
+                airports[iata] = metadata
 
     return airports
