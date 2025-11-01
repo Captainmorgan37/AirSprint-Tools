@@ -14,14 +14,30 @@ from .contracts import Flight, Tail
 def _norm_class(s: str) -> str:
     """Normalize fleet classes so variants share compatibility buckets."""
 
-    s = (s or "").upper()
-    if s.startswith("CJ"):
+    text = (s or "").upper()
+    compact = text.replace(" ", "").replace("-", "").replace("/", "").replace("+", "")
+
+    # Handle common Citation variants (e.g., "CJ3+", "CJ2/CJ3", "CJ2+").
+    if "CJ3" in compact:
+        return "CJ3"
+    if "CJ2" in compact:
+        return "CJ2"
+    if text.startswith("CJ") or compact.startswith("CJ"):
         return "CJ"
-    if s.startswith("LEG") or s.startswith("E"):
+
+    # Embraer/Praetor family share the same operating characteristics for scheduling.
+    if (
+        text.startswith("LEG")
+        or text.startswith("E")
+        or "PRAETOR" in text
+        or compact.startswith("LEG")
+    ):
         return "LEG"
-    if s == "GEN":
+
+    if text == "GEN":
         return "GEN"
-    return s
+
+    return text
 
 
 def _class_compatible(fclass: str, tclass: str) -> bool:
@@ -29,13 +45,12 @@ def _class_compatible(fclass: str, tclass: str) -> bool:
 
     flight_class = _norm_class(fclass)
     tail_class = _norm_class(tclass)
+
     if tail_class == "GEN":
         return True
     if flight_class == tail_class:
         return True
-    if flight_class == "LEG" and tail_class == "CJ":
-        return True
-    if flight_class == "CJ" and tail_class == "LEG":
+    if flight_class in {"CJ", "CJ2", "CJ3"} and tail_class in {"CJ", "CJ2", "CJ3"}:
         return True
     return False
 
@@ -48,11 +63,20 @@ def _class_assignment_penalty(
     flight_class = _norm_class(fclass)
     tail_class = _norm_class(tclass)
 
-    if tail_class == "GEN" or flight_class == tail_class:
+    # Treat all CJ variants as a shared compatibility bucket for penalty purposes.
+    def _bucket(value: str) -> str:
+        if value in {"CJ", "CJ2", "CJ3"}:
+            return "CJ"
+        return value
+
+    flight_bucket = _bucket(flight_class)
+    tail_bucket = _bucket(tail_class)
+
+    if tail_bucket == "GEN" or flight_bucket == tail_bucket:
         return 0
-    if flight_class == "LEG" and tail_class == "CJ":
+    if flight_bucket == "LEG" and tail_bucket == "CJ":
         return policy.leg_to_cj_penalty
-    if flight_class == "CJ" and tail_class == "LEG":
+    if flight_bucket == "CJ" and tail_bucket == "LEG":
         return policy.cj_to_leg_penalty
     return 0
 
