@@ -55,26 +55,41 @@ def _is_add_line(tail_text: str | None) -> bool:
     return first_token in ADD_LINE_PREFIXES
 
 
-def _load_tail_registry() -> set[str]:
+def _load_tail_registry() -> dict[str, str | None]:
     if not TAILS_PATH.exists():
-        return set()
+        return {}
     try:
         df = pd.read_csv(TAILS_PATH)
     except Exception:
-        return set()
+        return {}
     if "Tail" not in df.columns:
-        return set()
+        return {}
+
     tails = (
         df["Tail"].astype(str).str.strip().str.upper().str.replace("-", "", regex=False)
     )
-    return {tail for tail in tails if tail}
+    codes = None
+    if "CODE" in df.columns:
+        codes = df["CODE"].astype(str).str.strip().str.upper()
+
+    registry: dict[str, str | None] = {}
+    for idx, tail in tails.items():
+        if not tail:
+            continue
+        code: str | None = None
+        if codes is not None:
+            raw = codes.get(idx)
+            if raw:
+                code = raw
+        registry[tail] = code
+    return registry
 
 
 def _classify_rows(
     rows: Iterable[Mapping[str, object]],
-    tail_registry: Iterable[str],
+    tail_registry: Mapping[str, str | None],
 ) -> tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]]]:
-    real_tails = {str(code).strip().upper() for code in tail_registry if str(code).strip()}
+    real_tails = {tail for tail in tail_registry.keys() if isinstance(tail, str) and tail}
 
     scheduled: list[dict[str, object]] = []
     unscheduled: list[dict[str, object]] = []
@@ -87,6 +102,11 @@ def _classify_rows(
         is_add = _is_add_line(tail_normalised)
         row_dict["is_add_line"] = is_add
         row_dict["fleet_class"] = _derive_fleet_class(row_dict)
+
+        if tail_normalised and tail_normalised in tail_registry:
+            registry_code = tail_registry.get(tail_normalised)
+            if registry_code:
+                row_dict["fleet_class"] = registry_code
 
         if tail_normalised and tail_normalised in real_tails:
             scheduled.append(row_dict)
@@ -438,14 +458,18 @@ def fetch_negotiation_data(
 
     tail_classes: dict[str, str] = {}
     if tail_registry:
-        for tail in tail_registry:
-            tail_classes.setdefault(tail, "GEN")
+        for tail, code in tail_registry.items():
+            tail_classes[tail] = code or "GEN"
 
     for row in scheduled_rows:
         tail_id = row.get("tail_normalized")
         if not isinstance(tail_id, str) or not tail_id:
             continue
         fleet_class = row.get("fleet_class") or _derive_fleet_class(row)
+        if isinstance(fleet_class, str):
+            fleet_class = fleet_class.strip().upper() or "GEN"
+        else:
+            fleet_class = "GEN"
         current = tail_classes.get(tail_id)
         if current in (None, "GEN") or fleet_class != "GEN":
             tail_classes[tail_id] = fleet_class
