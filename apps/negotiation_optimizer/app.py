@@ -461,6 +461,40 @@ def render_page() -> None:
                     and flight.id not in selected_unscheduled_ids
                 )
             ]
+
+        tail_ids = {tail.id for tail in tails}
+        missing_refs = [
+            (flight.id, flight.current_tail_id)
+            for flight in solver_flights
+            if flight.current_tail_id and flight.current_tail_id not in tail_ids
+        ]
+        if missing_refs:
+            st.error(
+                "Flights reference unknown tails: "
+                + str(missing_refs[:6])
+                + ("…" if len(missing_refs) > 6 else "")
+            )
+
+        tails_by_id = {tail.id: tail for tail in tails}
+        incompatible_refs = [
+            (
+                flight.id,
+                flight.current_tail_id,
+                flight.fleet_class,
+                tails_by_id[flight.current_tail_id].fleet_class,
+            )
+            for flight in solver_flights
+            if flight.current_tail_id in tails_by_id
+            and not _class_compatible(
+                flight.fleet_class, tails_by_id[flight.current_tail_id].fleet_class
+            )
+        ]
+        if incompatible_refs:
+            st.warning(
+                "Scheduled flights have incompatible current tails: "
+                + str(incompatible_refs[:6])
+                + ("…" if len(incompatible_refs) > 6 else "")
+            )
         try:
             scheduler = NegotiationScheduler(solver_flights, tails, policy)
             status, solution = scheduler.solve()
