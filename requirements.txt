@@ -39,3 +39,7 @@ html5lib>=1.1
 streamlit-autorefresh
 tzdata
 backports.zoneinfo; python_version < "3.9"
+
+# Options App
+ortools==9.10.*
+pydantic>=2.7
