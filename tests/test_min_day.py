@@ -84,3 +84,35 @@ def test_turn_time_requires_positive_shift():
     assert status_relaxed == cp.OPTIMAL
     assert solution_relaxed["outsourced"].empty
     assert solution_relaxed["assigned"].shape[0] == len(flights)
+
+
+def test_solver_handles_long_turn_buffer_window():
+    flights = [
+        Flight(
+            id="L1",
+            origin="CYBW",
+            dest="CYVR",
+            duration_min=5 * 60,
+            earliest_etd_min=23 * 60,
+            latest_etd_min=23 * 60,
+            preferred_etd_min=23 * 60,
+            fleet_class="CJ",
+            owner_id="A",
+        )
+    ]
+    tails = [
+        Tail(
+            id="C-GCJ1",
+            fleet_class="CJ",
+            available_from_min=20 * 60,
+            available_to_min=2 * 24 * 60,
+        )
+    ]
+
+    policy = LeverPolicy(turn_min=3 * 60)
+    scheduler = NegotiationScheduler(flights, tails, policy)
+    status, solution = scheduler.solve()
+
+    cp = scheduler.cp_model
+    assert status in (cp.OPTIMAL, cp.FEASIBLE)
+    assert solution["assigned"].shape[0] == len(flights)
