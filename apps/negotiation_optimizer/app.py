@@ -8,6 +8,7 @@ from collections import Counter
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+from matplotlib.patches import Patch
 import pandas as pd
 import streamlit as st
 
@@ -172,6 +173,16 @@ def _build_gantt_solution(df: pd.DataFrame) -> pd.DataFrame:
     if "end_min" not in gantt_df.columns and "duration_min" in gantt_df.columns:
         gantt_df["end_min"] = gantt_df["start_min"] + gantt_df["duration_min"]
     gantt_df["tail"] = gantt_df["tail"].astype(str)
+    if "original_tail" in gantt_df.columns:
+        gantt_df["was_unscheduled"] = gantt_df["original_tail"].isna() | (
+            gantt_df["original_tail"].astype(str).str.len() == 0
+        )
+        gantt_df["assignment_source"] = gantt_df["was_unscheduled"].map(
+            {
+                True: "Added from unscheduled",
+                False: "Previously scheduled",
+            }
+        )
     return gantt_df
 
 
@@ -185,6 +196,7 @@ def draw_gantt(
     label_from: str | None = "origin",
     label_to: str | None = "dest",
     color_by: str | None = None,
+    color_palette: dict[object, str] | None = None,
     minutes_range: tuple[int, int] = (0, 24 * 60),
     min_label_width: int = 50,
 ) -> None:
@@ -214,10 +226,25 @@ def draw_gantt(
     ymap = {t: i for i, t in enumerate(tails_sorted)}
 
     colors = None
+    legend_info: dict[object, str] = {}
     if color_by and color_by in df.columns:
-        values, _ = pd.factorize(df[color_by].astype(str))
-        cmap = plt.get_cmap("tab20")
-        colors = [cmap(v % 20) for v in values]
+        color_values = df[color_by]
+        if color_palette:
+            mapped_colors = [
+                color_palette.get(value, color_palette.get(str(value)))
+                for value in color_values
+            ]
+            if all(color is not None for color in mapped_colors):
+                colors = mapped_colors
+                legend_info = {
+                    value: color_palette.get(value, color_palette.get(str(value)))
+                    for value in pd.unique(color_values)
+                }
+        if colors is None:
+            values, uniques = pd.factorize(color_values.astype(str))
+            cmap = plt.get_cmap("tab20")
+            colors = [cmap(v % 20) for v in values]
+            legend_info = {label: cmap(i % 20) for i, label in enumerate(uniques)}
 
     fig_h = max(4, 0.4 * len(tails_sorted))
     fig, ax = plt.subplots(figsize=(12, fig_h))
@@ -251,6 +278,12 @@ def draw_gantt(
     ax.set_xlabel("Minutes from window start")
     ax.set_title("Per-tail Gantt (single day)")
     ax.grid(True, axis="x", linestyle=":", linewidth=0.5)
+    if legend_info:
+        handles = [
+            Patch(facecolor=color, edgecolor=color, label=str(label))
+            for label, color in legend_info.items()
+        ]
+        ax.legend(handles=handles, title=color_by)
     st.pyplot(fig, clear_figure=True)
 
 
@@ -561,7 +594,11 @@ def render_page() -> None:
                 else:
                     draw_gantt(
                         gantt_df,
-                        color_by="tail_swapped",
+                        color_by="assignment_source",
+                        color_palette={
+                            "Added from unscheduled": "#d62728",
+                            "Previously scheduled": "#1f77b4",
+                        },
                     )
 
         st.subheader("Unscheduled / outsourced")
