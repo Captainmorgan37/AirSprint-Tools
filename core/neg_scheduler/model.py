@@ -40,9 +40,26 @@ class NegotiationScheduler:
         self.flights = flights
         self.tails = tails
         self.policy = policy
-        self.horizon = 24 * 60
+        self.horizon = self._compute_horizon()
         self.model = self.cp_model.CpModel()
         self._build()
+
+    def _compute_horizon(self) -> int:
+        """Derive an upper bound for the scheduling horizon."""
+
+        default_horizon = 24 * 60
+        latest = default_horizon
+
+        for flight in self.flights:
+            latest = max(
+                latest,
+                flight.latest_etd_min + flight.duration_min + self.policy.turn_min,
+            )
+
+        for tail in self.tails:
+            latest = max(latest, tail.available_to_min + self.policy.turn_min)
+
+        return latest
 
     def _build(self) -> None:
         m = self.model

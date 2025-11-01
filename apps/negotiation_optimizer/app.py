@@ -211,12 +211,13 @@ def render_page() -> None:
                 options_df = pd.DataFrame(sorted(options, key=lambda d: d["penalty"]))
                 st.dataframe(options_df, use_container_width=True)
 
-                st.code(
-                    "Hi Owner {owner},\n\n"
+                message = (
+                    f"Hi Owner {row['owner']},\n\n"
                     "Could you slide departure by 30 minutes? This avoids a tail swap and keeps crew within duty limits.\n"
                     "We can offer a small courtesy credit.\n\n"
-                    "— Dispatch\n".format(owner=row["owner"])
+                    "— Dispatch\n"
                 )
+                st.code(message)
 
 
 if __name__ == "__main__":  # pragma: no cover - Streamlit executes as a script
