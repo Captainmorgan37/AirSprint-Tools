@@ -1,9 +1,7 @@
-# core/__init__.py
-# (can be empty)
+"""Negotiation-aware scheduling core package."""
 
-# core/neg_scheduler/__init__.py
-from .contracts import Flight, Tail
-from .model import NegotiationScheduler, LeverPolicy
+from .contracts import Leg, Tail
+from .model import LeverPolicy, NegotiationScheduler
 
-__all__ = ["Flight", "Tail", "NegotiationScheduler", "LeverPolicy"]
+__all__ = ["Leg", "Tail", "LeverPolicy", "NegotiationScheduler"]
 
