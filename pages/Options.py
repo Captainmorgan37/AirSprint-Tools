@@ -1,3 +1,11 @@
+import sys, traceback, ast, pathlib
+try:
+    ast.parse(pathlib.Path(__file__).read_text(encoding="utf-8"))
+except Exception:
+    traceback.print_exc(); sys.exit(1)
+
+
+
 """
 Negotiation-Aware Scheduler — Minimal Prototype
 ------------------------------------------------
