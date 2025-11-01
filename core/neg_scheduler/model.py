@@ -100,16 +100,18 @@ class NegotiationScheduler:
         # safely sliced when padding/trimming below.
         matrix = [list(row) for row in reposition_min]
 
-        if len(matrix) == flight_count and all(len(row) == flight_count for row in matrix):
-            return matrix
+        if len(matrix) != flight_count or any(len(row) != flight_count for row in matrix):
+            mismatch = f"{len(matrix)}x"
+            if matrix:
+                mismatch += str(len(matrix[0]))
+            else:
+                mismatch += "0"
+            raise ValueError(
+                "reposition_min shape "
+                f"{mismatch} does not match flights {flight_count}"
+            )
 
-        safe_matrix: List[List[int]] = [[0] * flight_count for _ in range(flight_count)]
-        for i, row in enumerate(matrix):
-            if i >= flight_count:
-                break
-            limit = min(len(row), flight_count)
-            safe_matrix[i][:limit] = row[:limit]
-        return safe_matrix
+        return matrix
 
     def _compute_horizon(self) -> int:
         """Derive an upper bound for the scheduling horizon."""
