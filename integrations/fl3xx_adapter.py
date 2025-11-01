@@ -254,11 +254,12 @@ def _build_flight(
     allow_swap = allow_outsource = False
 
     if not fixed_tail:
-        earliest = max(0, start_min - 60)
-        latest = min(24 * 60, start_min + 120)
+        earliest = 0
+        latest = 24 * 60
         preferred = start_min
-        shift_plus = 90
-        shift_minus = 30
+        full_day = 24 * 60
+        shift_plus = full_day
+        shift_minus = full_day
         allow_swap = True
         allow_outsource = True
 
