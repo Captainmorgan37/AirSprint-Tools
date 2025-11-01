@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date
 
+import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
 
@@ -63,6 +64,188 @@ def _lever_options(policy: LeverPolicy) -> list[dict[str, object]]:
             "notes": "Zero internal perturbation; highest direct cost.",
         },
     ]
+
+
+def _parse_timestamp(value: object) -> pd.Timestamp | None:
+    if value in (None, ""):
+        return None
+
+    ts = pd.to_datetime(value, utc=True, errors="coerce")
+    if pd.isna(ts):
+        return None
+    return ts
+
+
+def _extract_duration_minutes(row: dict[str, object], fallback: int = 60) -> int:
+    duration_keys = (
+        "duration_min",
+        "durationMinutes",
+        "duration",
+        "scheduledBlockMinutes",
+        "scheduledBlockTime",
+        "estimatedBlockTime",
+        "blockTime",
+        "block_time",
+        "flightTime",
+        "flight_time",
+    )
+
+    for key in duration_keys:
+        value = row.get(key)
+        if value in (None, ""):
+            continue
+        minutes = pd.to_numeric(value, errors="coerce")
+        if pd.isna(minutes):
+            continue
+        minutes_int = int(round(float(minutes)))
+        if minutes_int > 0:
+            return minutes_int
+
+    return fallback
+
+
+def _build_gantt_schedule(rows: list[dict[str, object]], window_start: object | None) -> pd.DataFrame:
+    if not rows:
+        return pd.DataFrame()
+
+    window_ref = _parse_timestamp(window_start)
+    gantt_rows: list[dict[str, object]] = []
+
+    arrival_keys = (
+        "arrival_time",
+        "arrivalTimeUtc",
+        "arrivalScheduledUtc",
+        "arrivalActualUtc",
+        "arrivalUtc",
+        "onBlockUtc",
+    )
+
+    for row in rows:
+        tail = row.get("tail_normalized") or row.get("tail")
+        dep_ts = _parse_timestamp(row.get("dep_time"))
+        if not tail or dep_ts is None:
+            continue
+
+        if window_ref is not None:
+            start_min = int((dep_ts - window_ref).total_seconds() // 60)
+        else:
+            start_min = dep_ts.hour * 60 + dep_ts.minute
+
+        arr_ts = None
+        for key in arrival_keys:
+            arr_ts = _parse_timestamp(row.get(key))
+            if arr_ts is not None:
+                break
+
+        if arr_ts is not None:
+            duration = max(1, int((arr_ts - dep_ts).total_seconds() // 60))
+        else:
+            duration = max(1, _extract_duration_minutes(row))
+
+        gantt_rows.append(
+            {
+                "tail": str(tail),
+                "start_min": max(0, start_min),
+                "duration_min": duration,
+                "end_min": max(0, start_min) + duration,
+                "origin": row.get("departure_airport"),
+                "dest": row.get("arrival_airport"),
+                "workflow": row.get("workflowCustomName") or row.get("workflow"),
+                "account": row.get("accountName") or row.get("account"),
+            }
+        )
+
+    return pd.DataFrame(gantt_rows)
+
+
+def _build_gantt_solution(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+
+    gantt_df = df.copy()
+    if "end_min" not in gantt_df.columns and "duration_min" in gantt_df.columns:
+        gantt_df["end_min"] = gantt_df["start_min"] + gantt_df["duration_min"]
+    gantt_df["tail"] = gantt_df["tail"].astype(str)
+    return gantt_df
+
+
+def draw_gantt(
+    data: pd.DataFrame,
+    *,
+    tail_col: str = "tail",
+    start_col: str = "start_min",
+    dur_col: str = "duration_min",
+    end_col: str | None = "end_min",
+    label_from: str | None = "origin",
+    label_to: str | None = "dest",
+    color_by: str | None = None,
+    minutes_range: tuple[int, int] = (0, 24 * 60),
+    min_label_width: int = 50,
+) -> None:
+    required = {tail_col, start_col}
+    if not required.issubset(data.columns):
+        st.warning(
+            f"Gantt missing required columns: {sorted(required - set(data.columns))}"
+        )
+        return
+
+    df = data.copy()
+    if end_col and end_col in df.columns:
+        df["_dur_min"] = (df[end_col] - df[start_col]).clip(lower=1)
+    else:
+        if dur_col not in df.columns:
+            st.warning("Provide either end_min or duration_min.")
+            return
+        df["_dur_min"] = df[dur_col].clip(lower=1)
+
+    lo, hi = minutes_range
+    df = df[(df[start_col] < hi) & ((df[start_col] + df["_dur_min"]) > lo)]
+    if df.empty:
+        st.info("No legs in selected time window.")
+        return
+
+    tails_sorted = sorted(df[tail_col].astype(str).unique())
+    ymap = {t: i for i, t in enumerate(tails_sorted)}
+
+    colors = None
+    if color_by and color_by in df.columns:
+        values, _ = pd.factorize(df[color_by].astype(str))
+        cmap = plt.get_cmap("tab20")
+        colors = [cmap(v % 20) for v in values]
+
+    fig_h = max(4, 0.4 * len(tails_sorted))
+    fig, ax = plt.subplots(figsize=(12, fig_h))
+    for i, record in df.reset_index(drop=True).iterrows():
+        y = ymap[str(record[tail_col])]
+        x = float(record[start_col])
+        width = float(record["_dur_min"])
+        kwargs: dict[str, object] = {}
+        if colors is not None:
+            kwargs["facecolors"] = colors[i]
+        ax.broken_barh([(x, width)], (y - 0.4, 0.8), **kwargs)
+
+        if (
+            width >= min_label_width
+            and label_from
+            and label_from in df.columns
+            and label_to
+            and label_to in df.columns
+        ):
+            ax.text(
+                x + width / 2,
+                y,
+                f"{record[label_from]}→{record[label_to]}",
+                ha="center",
+                va="center",
+                fontsize=8,
+            )
+
+    ax.set_yticks(range(len(tails_sorted)), tails_sorted)
+    ax.set_xlim(lo, hi)
+    ax.set_xlabel("Minutes from window start")
+    ax.set_title("Per-tail Gantt (single day)")
+    ax.grid(True, axis="x", linestyle=":", linewidth=0.5)
+    st.pyplot(fig, clear_figure=True)
 
 
 def render_page() -> None:
@@ -167,7 +350,19 @@ def render_page() -> None:
         scheduled_df = _format_leg_rows(schedule_rows)
         if not scheduled_df.empty:
             st.markdown("**Scheduled legs (locked to current tails)**")
-            st.dataframe(scheduled_df, use_container_width=True)
+            table_tab, gantt_tab = st.tabs(["Table", "Gantt"])
+            with table_tab:
+                st.dataframe(scheduled_df, use_container_width=True)
+            with gantt_tab:
+                gantt_df = _build_gantt_schedule(schedule_rows, fetch_metadata.get("window_start_utc"))
+                if gantt_df.empty:
+                    st.info("Not enough timing data to display the Gantt view.")
+                else:
+                    draw_gantt(
+                        gantt_df,
+                        color_by="workflow",
+                        minutes_range=(0, 24 * 60),
+                    )
         else:
             st.info("No scheduled legs detected for the selected window.")
 
@@ -238,7 +433,18 @@ def render_page() -> None:
         if assigned_df.empty:
             st.write("— No internal assignments —")
         else:
-            st.dataframe(assigned_df, use_container_width=True)
+            table_tab, gantt_tab = st.tabs(["Table", "Gantt"])
+            with table_tab:
+                st.dataframe(assigned_df, use_container_width=True)
+            with gantt_tab:
+                gantt_df = _build_gantt_solution(assigned_df)
+                if gantt_df.empty:
+                    st.info("Not enough timing data to display the Gantt view.")
+                else:
+                    draw_gantt(
+                        gantt_df,
+                        color_by="tail_swapped",
+                    )
 
         st.subheader("Unscheduled / outsourced")
         outsourced_df: pd.DataFrame = solution["outsourced"]
