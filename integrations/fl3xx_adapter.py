@@ -85,6 +85,7 @@ def _classify_rows(
         row_dict["tail_normalized"] = tail_normalised
         is_add = _is_add_line(tail_normalised)
         row_dict["is_add_line"] = is_add
+        row_dict["fleet_class"] = _derive_fleet_class(row_dict)
 
         if tail_normalised and tail_normalised in real_tails:
             scheduled.append(row_dict)
@@ -146,33 +147,79 @@ def _coerce_minutes(value: object) -> int | None:
     return None
 
 
+FLEET_PATTERN_MAP: list[tuple[str, tuple[str, ...]]] = [
+    ("LEG", ("LEGACY", "PRAETOR", "EMB", "EMBRAER")),
+    ("CJ2", ("CJ2", "CJ-2", "CJII", "CJ 2", "525A")),
+    ("CJ3", ("CJ3", "CJ-3", "CJIII", "CJ 3", "525B", "525C")),
+    ("CJ", ("CITATION", "CJ")),
+    ("PC12", ("PC12", "PC-12", "PC 12")),
+    ("CHALLENGER", ("CHALLENGER", "CL30", "CL-30", "CL 30", "CL350", "CL300")),
+    ("HAWKER", ("HAWKER", "H25", "HS125")),
+]
+
+
+def _normalise_fleet_hint(value: object) -> str | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, str):
+        text = value.strip()
+    else:
+        text = str(value).strip()
+    if not text:
+        return None
+    return text.upper()
+
+
 def _derive_fleet_class(row: Mapping[str, object]) -> str:
     candidates: list[str] = []
-    for key in (
+
+    simple_keys = (
         "assignedAircraftType",
         "aircraftCategory",
         "aircraftType",
+        "aircraftClass",
+        "aircraftModel",
+        "aircraftName",
+        "aircraftTypeName",
         "ownerClass",
+        "ownerClassification",
         "tail",
-    ):
-        value = row.get(key)
-        if not value:
+    )
+
+    for key in simple_keys:
+        hint = _normalise_fleet_hint(row.get(key))
+        if hint:
+            candidates.append(hint)
+
+    nested_sources = (
+        row.get("aircraft"),
+        row.get("owner"),
+    )
+    nested_keys = (
+        "category",
+        "type",
+        "typeName",
+        "model",
+        "name",
+        "assignedType",
+        "requestedType",
+        "aircraftType",
+        "aircraftClass",
+    )
+    for source in nested_sources:
+        if not isinstance(source, Mapping):
             continue
-        text = str(value).strip().upper()
-        if text:
-            candidates.append(text)
+        for key in nested_keys:
+            hint = _normalise_fleet_hint(source.get(key))
+            if hint:
+                candidates.append(hint)
 
     for text in candidates:
-        if "LEG" in text or "EMB" in text:
-            return "LEG"
-        if "PC" in text and "12" in text:
-            return "PC12"
-        if "CHALLENGER" in text or text.startswith("CL"):
-            return "CHALLENGER"
-        if "HAWKER" in text or text.startswith("H25"):
-            return "HAWKER"
-        if "CJ" in text or "CITATION" in text:
-            return "CJ"
+        for fleet_class, patterns in FLEET_PATTERN_MAP:
+            for pattern in patterns:
+                if pattern in text:
+                    return fleet_class
+
     return "GEN"
 
 
@@ -242,7 +289,7 @@ def _build_flight(
     start_min = max(0, min(24 * 60, _minutes_from_window(dep_dt, window_start)))
     duration_min = max(15, min(23 * 60, _estimate_duration(row, dep_dt)))
 
-    fleet_class = _derive_fleet_class(row)
+    fleet_class = row.get("fleet_class") or _derive_fleet_class(row)
     tail_normalised = _normalise_tail(row.get("tail"))
     owner = row.get("accountName") or row.get("account") or row.get("owner") or "Unknown"
 
@@ -342,7 +389,7 @@ def fetch_negotiation_data(
         tail_id = row.get("tail_normalized")
         if not isinstance(tail_id, str) or not tail_id:
             continue
-        fleet_class = _derive_fleet_class(row)
+        fleet_class = row.get("fleet_class") or _derive_fleet_class(row)
         current = tail_classes.get(tail_id)
         if current in (None, "GEN") or fleet_class != "GEN":
             tail_classes[tail_id] = fleet_class
