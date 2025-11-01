@@ -53,16 +53,26 @@ class LeverPolicy:
     unassigned_penalty: int = 5_000
     turn_min: int = 30
     tail_swap_cost: int = 1_200
+    reposition_cost_per_min: int = 1
 
 
 class NegotiationScheduler:
     """Minimal CP-SAT assignment model with soft negotiation levers."""
 
-    def __init__(self, flights: List[Flight], tails: List[Tail], policy: LeverPolicy):
+    def __init__(
+        self,
+        flights: List[Flight],
+        tails: List[Tail],
+        policy: LeverPolicy,
+        reposition_min: Optional[List[List[int]]] = None,
+    ):
         self.cp_model = _cp_model()
         self.flights = flights
         self.tails = tails
         self.policy = policy
+        self.reposition_min = reposition_min or [
+            [0] * len(flights) for _ in range(len(flights))
+        ]
         self.horizon = self._compute_horizon()
         self.model = self.cp_model.CpModel()
         self._build()
@@ -97,6 +107,7 @@ class NegotiationScheduler:
         self.start: Dict[int, object] = {}
         self.swap: Dict[int, object] = {}
         self.intervals_per_tail: Dict[int, List[object]] = {k: [] for k in T}
+        self.order: Dict[Tuple[int, int, int], object] = {}
 
         for i in F:
             flight = self.flights[i]
@@ -180,6 +191,32 @@ class NegotiationScheduler:
                     <= tail.available_to_min
                 ).OnlyEnforceIf(self.assign[(i, k)])
 
+        o = self.order
+        for k in T:
+            for i in F:
+                for j in F:
+                    if i == j:
+                        continue
+                    o[(i, j, k)] = m.NewBoolVar(f"ord[{i},{j},{k}]")
+
+        for k in T:
+            for i in F:
+                for j in F:
+                    if i == j:
+                        continue
+                    lhs = o[(i, j, k)] + o[(j, i, k)]
+                    m.Add(lhs >= self.assign[(i, k)] + self.assign[(j, k)] - 1)
+                    m.Add(lhs <= self.assign[(i, k)] + self.assign[(j, k)])
+
+                    repo = self.reposition_min[i][j]
+                    m.Add(
+                        self.start[j]
+                        >= self.start[i]
+                        + self.flights[i].duration_min
+                        + self.policy.turn_min
+                        + repo
+                    ).OnlyEnforceIf(o[(i, j, k)])
+
         objective_terms = []
         for i in F:
             flight = self.flights[i]
@@ -192,6 +229,17 @@ class NegotiationScheduler:
         if not self.tails:
             for i in F:
                 objective_terms.append(self.outsource[i] * self.policy.unassigned_penalty)
+
+        for k in T:
+            for i in F:
+                for j in F:
+                    if i == j:
+                        continue
+                    repo = self.reposition_min[i][j]
+                    if repo > 0:
+                        objective_terms.append(
+                            o[(i, j, k)] * repo * self.policy.reposition_cost_per_min
+                        )
 
         m.Minimize(sum(objective_terms))
 
