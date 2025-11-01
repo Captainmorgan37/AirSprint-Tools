@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timezone, timedelta
 
 from collections import Counter
 from pathlib import Path
@@ -292,6 +292,7 @@ def draw_gantt(
     color_palette: dict[object, str] | None = None,
     minutes_range: tuple[int, int] = (0, 24 * 60),
     min_label_width: int = 50,
+    window_start: object | None = None,
 ) -> None:
     required = {tail_col, start_col}
     if not required.issubset(data.columns):
@@ -314,6 +315,8 @@ def draw_gantt(
     if df.empty:
         st.info("No legs in selected time window.")
         return
+
+    window_ref = _parse_timestamp(window_start)
 
     order_lookup = {tail: idx for idx, tail in enumerate(TAIL_SCHEDULE_ORDER)}
 
@@ -383,7 +386,24 @@ def draw_gantt(
     ax.set_yticks(range(len(tails_sorted)), tails_sorted)
     ax.invert_yaxis()
     ax.set_xlim(lo, hi)
-    ax.set_xlabel("Minutes from window start")
+    if window_ref is not None:
+        tick_step = 60
+        tick_start = (lo // tick_step) * tick_step
+        if tick_start > lo:
+            tick_start -= tick_step
+        tick_end = ((hi + tick_step - 1) // tick_step) * tick_step
+        xticks = list(range(tick_start, tick_end + tick_step, tick_step))
+        ax.set_xticks(xticks)
+        ax.set_xticklabels(
+            [
+                (window_ref + timedelta(minutes=int(offset))).strftime("%Y-%m-%d %H:%MZ")
+                for offset in xticks
+            ]
+        )
+        ax.tick_params(axis="x", labelrotation=45)
+        ax.set_xlabel("UTC time")
+    else:
+        ax.set_xlabel("Minutes from window start")
     ax.set_title("Per-tail Gantt (single day)")
     ax.grid(True, axis="x", linestyle=":", linewidth=0.5)
     if legend_info:
@@ -492,6 +512,8 @@ def render_page() -> None:
     schedule_rows: list[dict[str, object]] = []
     add_line_rows: list[dict[str, object]] = []
     fetch_metadata: dict[str, object] = {}
+    window_start_utc: object | None = None
+    window_end_utc: object | None = None
     selected_unscheduled_ids: set[str] | None = None
 
     if dataset == "Demo":
@@ -540,10 +562,10 @@ def render_page() -> None:
         col2.metric("Add-line legs", fetch_metadata.get("unscheduled_count", len(add_line_rows)))
         col3.metric("Flights sent to solver", len(legs))
 
-        window_start = fetch_metadata.get("window_start_utc")
-        window_end = fetch_metadata.get("window_end_utc")
-        if window_start and window_end:
-            st.caption(f"Window: {window_start} → {window_end} (UTC)")
+        window_start_utc = fetch_metadata.get("window_start_utc")
+        window_end_utc = fetch_metadata.get("window_end_utc")
+        if window_start_utc and window_end_utc:
+            st.caption(f"Window: {window_start_utc} → {window_end_utc} (UTC)")
 
         skipped_sched = fetch_metadata.get("skipped_scheduled") or []
         skipped_unsched = fetch_metadata.get("skipped_unscheduled") or []
@@ -572,7 +594,7 @@ def render_page() -> None:
             with table_tab:
                 st.dataframe(scheduled_df, use_container_width=True)
             with gantt_tab:
-                gantt_df = _build_gantt_schedule(schedule_rows, fetch_metadata.get("window_start_utc"))
+                gantt_df = _build_gantt_schedule(schedule_rows, window_start_utc)
                 if gantt_df.empty:
                     st.info("Not enough timing data to display the Gantt view.")
                 else:
@@ -580,6 +602,7 @@ def render_page() -> None:
                         gantt_df,
                         color_by="workflow",
                         minutes_range=(0, 24 * 60),
+                        window_start=window_start_utc,
                     )
         else:
             st.info("No scheduled legs detected for the selected window.")
@@ -763,6 +786,7 @@ def render_page() -> None:
                             "Previously scheduled": "#1f77b4",
                             "Reposition leg": "#ffbf00",
                         },
+                        window_start=window_start_utc,
                     )
 
         st.subheader("Unscheduled / outsourced")
