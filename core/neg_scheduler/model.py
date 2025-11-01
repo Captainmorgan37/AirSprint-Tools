@@ -71,9 +71,9 @@ class NegotiationScheduler:
         self.flights = flights
         self.tails = tails
         self.policy = policy
-        self.reposition_min = reposition_min or [
-            [0] * len(flights) for _ in range(len(flights))
-        ]
+        self.reposition_min = self._normalize_reposition_matrix(
+            reposition_min, len(flights)
+        )
         self.horizon = self._compute_horizon()
         self.model = self.cp_model.CpModel()
         self.day_active: Dict[int, object] = {}
@@ -82,6 +82,34 @@ class NegotiationScheduler:
         self.first: Dict[Tuple[int, int], object] = {}
         self.last: Dict[Tuple[int, int], object] = {}
         self._build()
+
+    @staticmethod
+    def _normalize_reposition_matrix(
+        reposition_min: Optional[List[List[int]]],
+        flight_count: int,
+    ) -> List[List[int]]:
+        """Return a square reposition matrix sized to the provided flights."""
+
+        if flight_count <= 0:
+            return []
+
+        if not reposition_min:
+            return [[0] * flight_count for _ in range(flight_count)]
+
+        # Convert potential tuples/other iterables to concrete lists so they can be
+        # safely sliced when padding/trimming below.
+        matrix = [list(row) for row in reposition_min]
+
+        if len(matrix) == flight_count and all(len(row) == flight_count for row in matrix):
+            return matrix
+
+        safe_matrix: List[List[int]] = [[0] * flight_count for _ in range(flight_count)]
+        for i, row in enumerate(matrix):
+            if i >= flight_count:
+                break
+            limit = min(len(row), flight_count)
+            safe_matrix[i][:limit] = row[:limit]
+        return safe_matrix
 
     def _compute_horizon(self) -> int:
         """Derive an upper bound for the scheduling horizon."""

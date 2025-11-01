@@ -238,6 +238,30 @@ def test_reposition_time_enforced_in_schedule():
     assert solution["objective"] == pytest.approx(expected_cost)
 
 
+def test_scheduler_handles_ragged_reposition_matrix():
+    flights, tails = _three_leg_single_tail_scenario()
+    flights = flights[:2]
+
+    ragged_matrix = [[0, 42]]
+
+    policy = LeverPolicy(turn_min=30)
+    scheduler = NegotiationScheduler(
+        flights,
+        tails,
+        policy,
+        reposition_min=ragged_matrix,
+    )
+
+    status, solution = scheduler.solve()
+
+    cp = scheduler.cp_model
+    assert status in (cp.OPTIMAL, cp.FEASIBLE)
+    assert solution["assigned"].shape[0] == len(flights)
+
+    # Ensure the provided reposition value is preserved for the overlapping portion.
+    assert scheduler.reposition_min[0][1] == 42
+
+
 def test_unscheduled_flight_does_not_use_idle_tail():
     flights = [
         Flight(
