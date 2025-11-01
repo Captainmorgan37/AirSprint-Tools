@@ -21,6 +21,50 @@ from flight_leg_utils import FlightDataError
 from integrations.fl3xx_adapter import NegotiationData, fetch_negotiation_data, get_demo_data
 
 
+TAIL_SCHEDULE_ORDER: tuple[str, ...] = (
+    "CGASL",
+    "CFASV",
+    "CFLAS",
+    "CFJAS",
+    "CFASF",
+    "CGASE",
+    "CGASK",
+    "CGXAS",
+    "CGBAS",
+    "CFSNY",
+    "CFSYX",
+    "CFSBR",
+    "CFSRX",
+    "CFSJR",
+    "CFASQ",
+    "CFSDO",
+    "CFASP",
+    "CFASR",
+    "CFASW",
+    "CFIAS",
+    "CGASR",
+    "CGZAS",
+    "CFASY",
+    "CGASW",
+    "CGAAS",
+    "CFNAS",
+    "CGNAS",
+    "CGFFS",
+    "CFSFS",
+    "CGFSX",
+    "CFSFO",
+    "CFSNP",
+    "CFSQX",
+    "CFSFP",
+    "CFSEF",
+    "CFSDN",
+    "CGFSD",
+    "CFSUP",
+    "CFSRY",
+    "CGFSJ",
+)
+
+
 def _format_leg_rows(rows: list[dict[str, object]]) -> pd.DataFrame:
     if not rows:
         return pd.DataFrame()
@@ -239,7 +283,18 @@ def draw_gantt(
         st.info("No legs in selected time window.")
         return
 
-    tails_sorted = sorted(df[tail_col].astype(str).unique())
+    order_lookup = {tail: idx for idx, tail in enumerate(TAIL_SCHEDULE_ORDER)}
+
+    def _tail_sort_key(tail: str) -> tuple[int, int | str]:
+        tail_upper = tail.upper()
+        order_idx = order_lookup.get(tail_upper)
+        if order_idx is not None:
+            return (0, order_idx)
+        return (1, tail_upper)
+
+    tail_values = df[tail_col].dropna()
+    tail_strings = [str(value).strip() for value in tail_values]
+    tails_sorted = sorted(set(tail_strings), key=_tail_sort_key)
     ymap = {t: i for i, t in enumerate(tails_sorted)}
 
     colors = None
@@ -266,7 +321,10 @@ def draw_gantt(
     fig_h = max(4, 0.4 * len(tails_sorted))
     fig, ax = plt.subplots(figsize=(12, fig_h))
     for i, record in df.reset_index(drop=True).iterrows():
-        y = ymap[str(record[tail_col])]
+        tail_label = str(record[tail_col]).strip()
+        if tail_label not in ymap:
+            continue
+        y = ymap[tail_label]
         x = float(record[start_col])
         width = float(record["_dur_min"])
         kwargs: dict[str, object] = {}
