@@ -100,6 +100,12 @@ class NegotiationScheduler:
         T = range(len(self.tails))
         tail_index = {tail.id: idx for idx, tail in enumerate(self.tails)}
 
+        active_tail_ids = {
+            flight.current_tail_id
+            for flight in self.flights
+            if flight.current_tail_id
+        }
+
         self.assign: Dict[Tuple[int, int], object] = {}
         self.outsource: Dict[int, object] = {}
         self.shift_plus: Dict[int, object] = {}
@@ -121,6 +127,11 @@ class NegotiationScheduler:
             for k in T:
                 tail = self.tails[k]
                 self.assign[(i, k)] = m.NewBoolVar(f"assign[{i},{k}]")
+                if active_tail_ids and tail.id not in active_tail_ids and (
+                    flight.current_tail_id != tail.id
+                ):
+                    m.Add(self.assign[(i, k)] == 0)
+                    continue
                 if not _class_compatible(flight.fleet_class, tail.fleet_class):
                     m.Add(self.assign[(i, k)] == 0)
                     continue

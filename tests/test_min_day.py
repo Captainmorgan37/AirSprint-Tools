@@ -200,3 +200,66 @@ def test_reposition_time_enforced_in_schedule():
 
     expected_cost = repo_matrix[0][1] * policy.reposition_cost_per_min
     assert solution["objective"] == pytest.approx(expected_cost)
+
+
+def test_unscheduled_flight_does_not_use_idle_tail():
+    flights = [
+        Flight(
+            id="F1",
+            origin="CYBW",
+            dest="CYVR",
+            duration_min=120,
+            earliest_etd_min=8 * 60,
+            latest_etd_min=8 * 60,
+            preferred_etd_min=8 * 60,
+            fleet_class="CJ",
+            owner_id="A",
+            current_tail_id="C-GCJ1",
+            allow_outsource=False,
+            allow_tail_swap=False,
+            shift_plus_cap=0,
+            shift_minus_cap=0,
+            shift_cost_per_min=0,
+        ),
+        Flight(
+            id="F2",
+            origin="CYBW",
+            dest="CYVR",
+            duration_min=60,
+            earliest_etd_min=9 * 60,
+            latest_etd_min=12 * 60,
+            preferred_etd_min=9 * 60,
+            fleet_class="CJ",
+            owner_id="B",
+            allow_outsource=False,
+            shift_plus_cap=180,
+            shift_minus_cap=0,
+            shift_cost_per_min=5,
+        ),
+    ]
+
+    tails = [
+        Tail(
+            id="C-GCJ1",
+            fleet_class="CJ",
+            available_from_min=7 * 60,
+            available_to_min=20 * 60,
+        ),
+        Tail(
+            id="C-GCJ2",
+            fleet_class="CJ",
+            available_from_min=7 * 60,
+            available_to_min=20 * 60,
+        ),
+    ]
+
+    policy = LeverPolicy(turn_min=30)
+    scheduler = NegotiationScheduler(flights, tails, policy)
+    status, solution = scheduler.solve()
+
+    cp = scheduler.cp_model
+    assert status == cp.OPTIMAL
+
+    assigned = solution["assigned"].set_index("flight")
+    assert assigned.loc["F1", "tail"] == "C-GCJ1"
+    assert assigned.loc["F2", "tail"] == "C-GCJ1"
