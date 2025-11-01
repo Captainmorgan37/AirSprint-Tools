@@ -104,10 +104,10 @@ class NegotiationScheduler:
         for i in F:
             m.Add(sum(self.assign[(i, k)] for k in T) + self.outsource[i] == 1)
             flight = self.flights[i]
-            m.Add(self.start[i] >= flight.earliest_etd_min)
-            m.Add(self.start[i] <= flight.latest_etd_min)
-            m.Add(self.start[i] >= flight.preferred_etd_min - self.shift_minus[i])
-            m.Add(self.start[i] <= flight.preferred_etd_min + self.shift_plus[i])
+            m.Add(self.start[i] >= flight.earliest_etd_min - self.shift_minus[i])
+            m.Add(self.start[i] <= flight.latest_etd_min + self.shift_plus[i])
+            m.Add(self.start[i] - flight.preferred_etd_min <= self.shift_plus[i])
+            m.Add(flight.preferred_etd_min - self.start[i] <= self.shift_minus[i])
 
             if not flight.allow_outsource:
                 m.Add(self.outsource[i] == 0)
@@ -141,9 +141,10 @@ class NegotiationScheduler:
                 if flight.fleet_class != tail.fleet_class:
                     continue
                 m.Add(self.start[i] >= tail.available_from_min).OnlyEnforceIf(self.assign[(i, k)])
-                m.Add(self.start[i] + flight.duration_min <= tail.available_to_min).OnlyEnforceIf(
-                    self.assign[(i, k)]
-                )
+                m.Add(
+                    self.start[i] + flight.duration_min + self.policy.turn_min
+                    <= tail.available_to_min
+                ).OnlyEnforceIf(self.assign[(i, k)])
 
         objective_terms = []
         for i in F:
