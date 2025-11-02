@@ -498,10 +498,9 @@ def _render_solution_summary(solution: dict[str, object]) -> None:
         working_df = assigned_df.copy()
         if "original_tail" not in working_df.columns:
             working_df["original_tail"] = pd.NA
-        orig_tail = working_df["original_tail"]
-        unscheduled_mask = orig_tail.isna() | (
-            orig_tail.astype(str).str.strip() == ""
-        )
+        original_tail_series = working_df["original_tail"].astype("string")
+        original_tail_clean = original_tail_series.str.strip().fillna("")
+        unscheduled_mask = original_tail_clean.eq("")
         unscheduled_df = working_df[unscheduled_mask]
 
         if not unscheduled_df.empty:
@@ -517,6 +516,40 @@ def _render_solution_summary(solution: dict[str, object]) -> None:
         else:
             lines = ["- None"]
         summary_sections.append("**Unscheduled assignments**\n" + "\n".join(lines))
+
+        tail_change_df = working_df[~unscheduled_mask].copy()
+        if "tail" not in tail_change_df.columns:
+            tail_change_df["tail"] = pd.NA
+        if "original_tail" not in tail_change_df.columns:
+            tail_change_df["original_tail"] = pd.NA
+        current_tail = (
+            tail_change_df["tail"].astype("string").str.strip().fillna("")
+        )
+        previous_tail = (
+            tail_change_df["original_tail"].astype("string").str.strip().fillna("")
+        )
+        reassigned_mask = (
+            previous_tail.ne("")
+            & current_tail.ne("")
+            & current_tail.ne(previous_tail)
+        )
+        reassigned_df = tail_change_df[reassigned_mask]
+        if not reassigned_df.empty:
+            normalized_prev = previous_tail[reassigned_mask]
+            normalized_curr = current_tail[reassigned_mask]
+            reassigned_lines = [
+                "- Flight {flight} moved from tail {old} to {new} ({origin}→{dest})".format(
+                    flight=row.get("flight", "?"),
+                    old=normalized_prev.loc[index] or "?",
+                    new=normalized_curr.loc[index] or "?",
+                    origin=row.get("origin", "?"),
+                    dest=row.get("dest", "?"),
+                )
+                for index, row in reassigned_df.iterrows()
+            ]
+        else:
+            reassigned_lines = ["- None"]
+        summary_sections.append("**Tail reassignments**\n" + "\n".join(reassigned_lines))
 
         for col in ("shift_plus", "shift_minus"):
             if col not in working_df.columns:
@@ -544,6 +577,7 @@ def _render_solution_summary(solution: dict[str, object]) -> None:
                         tail=row.get("tail", "?"),
                         origin=row.get("origin", "?"),
                         dest=row.get("dest", "?"),
+                        delta=delta,
                     )
                 )
         else:
