@@ -421,6 +421,14 @@ def _build_flight(
     shift_minus_cap = base_shift_minus or 0
     shift_cost = policy.cost_per_min_shift + 1
     allow_swap = allow_outsource = False
+    allow_any_tail = False
+
+    workflow_tokens = [
+        str(row.get(key) or "")
+        for key in ("workflowCustomName", "workflow", "workflow_name")
+    ]
+    workflow_text = " ".join(token.strip() for token in workflow_tokens if token).upper()
+    is_upgrade_workflow = "UPGRADE" in workflow_text
 
     if not fixed_tail:
         earliest = 0
@@ -433,10 +441,16 @@ def _build_flight(
         shift_cost = policy.cost_per_min_shift
         allow_swap = True
         allow_outsource = True
+        if is_upgrade_workflow:
+            allow_any_tail = True
 
     if fixed_tail:
         shift_plus_cap = max(15, shift_plus_cap or 0)
         shift_minus_cap = max(10, shift_minus_cap or 0)
+        if is_upgrade_workflow:
+            allow_swap = True
+            if "LEG" in str(fleet_class or "").upper():
+                allow_any_tail = True
     else:
         shift_plus_cap = max(90, shift_plus_cap or 0)
         shift_minus_cap = max(30, shift_minus_cap or 0)
@@ -462,6 +476,7 @@ def _build_flight(
         requested_start_utc=dep_dt,
         current_tail_id=tail_normalised if fixed_tail else None,
         allow_tail_swap=allow_swap,
+        allow_any_tail=allow_any_tail,
         allow_outsource=allow_outsource,
         shift_plus_cap=shift_plus_cap,
         shift_minus_cap=shift_minus_cap,

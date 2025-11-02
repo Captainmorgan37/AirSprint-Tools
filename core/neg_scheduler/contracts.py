@@ -23,6 +23,7 @@ class Flight:
     requested_start_utc: Optional[datetime] = None
     current_tail_id: Optional[str] = None
     allow_tail_swap: bool = False
+    allow_any_tail: bool = False
     allow_outsource: bool = True
     shift_plus_cap: int = 90
     shift_minus_cap: int = 30
