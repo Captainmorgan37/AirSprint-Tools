@@ -22,7 +22,10 @@ class Flight:
     owner_id: str
     requested_start_utc: Optional[datetime] = None
     current_tail_id: Optional[str] = None
+    base_tail_id: Optional[str] = None
+    base_start_min: Optional[int] = None
     allow_tail_swap: bool = False
+    allow_any_tail: bool = False
     allow_outsource: bool = True
     shift_plus_cap: int = 90
     shift_minus_cap: int = 30
@@ -39,6 +42,10 @@ class Flight:
             raise ValueError("latest_etd_min must be within a day")
         if self.preferred_etd_min < 0 or self.preferred_etd_min > 24 * 60:
             raise ValueError("preferred_etd_min must be within a day")
+        if self.base_start_min is not None and (
+            self.base_start_min < 0 or self.base_start_min > 24 * 60
+        ):
+            raise ValueError("base_start_min must be within a day when provided")
         if self.latest_etd_min < self.earliest_etd_min:
             raise ValueError("latest_etd_min must be greater than or equal to earliest_etd_min")
         if self.shift_plus_cap < 0:
