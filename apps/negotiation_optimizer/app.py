@@ -932,7 +932,9 @@ def render_page() -> None:
         adds = [f for f in flights if not f.current_tail_id]
         for f in adds[:5]:
             compatible = [
-                t.id for t in tails if _class_compatible(f.fleet_class, t.fleet_class)
+                t.id
+                for t in tails
+                if _class_compatible(f.fleet_class, t.fleet_class, f.allow_any_tail)
             ]
             tail_list = compatible[:10]
             suffix = "..." if len(compatible) > 10 else ""
@@ -985,7 +987,9 @@ def render_page() -> None:
             for flight in solver_flights
             if flight.current_tail_id in tails_by_id
             and not _class_compatible(
-                flight.fleet_class, tails_by_id[flight.current_tail_id].fleet_class
+                flight.fleet_class,
+                tails_by_id[flight.current_tail_id].fleet_class,
+                flight.allow_any_tail,
             )
         ]
         if incompatible_refs:

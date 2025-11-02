@@ -40,8 +40,13 @@ def _norm_class(s: str) -> str:
     return text
 
 
-def _class_compatible(fclass: str, tclass: str) -> bool:
+def _class_compatible(
+    fclass: str, tclass: str, allow_any_tail: bool = False
+) -> bool:
     """Return True when a tail can operate a flight based on fleet class."""
+
+    if allow_any_tail:
+        return True
 
     flight_class = _norm_class(fclass)
     tail_class = _norm_class(tclass)
@@ -56,9 +61,12 @@ def _class_compatible(fclass: str, tclass: str) -> bool:
 
 
 def _class_assignment_penalty(
-    fclass: str, tclass: str, policy: "LeverPolicy"
+    fclass: str, tclass: str, policy: "LeverPolicy", allow_any_tail: bool = False
 ) -> int:
     """Return the soft penalty for assigning a flight to a tail class."""
+
+    if allow_any_tail:
+        return 0
 
     flight_class = _norm_class(fclass)
     tail_class = _norm_class(tclass)
@@ -230,7 +238,9 @@ class NegotiationScheduler:
                 ):
                     m.Add(self.assign[(i, k)] == 0)
                     continue
-                if not _class_compatible(flight.fleet_class, tail.fleet_class):
+                if not _class_compatible(
+                    flight.fleet_class, tail.fleet_class, flight.allow_any_tail
+                ):
                     m.Add(self.assign[(i, k)] == 0)
                     continue
 
@@ -270,7 +280,9 @@ class NegotiationScheduler:
                 else:
                     current_tail = self.tails[k_cur]
                     if not _class_compatible(
-                        flight.fleet_class, current_tail.fleet_class
+                        flight.fleet_class,
+                        current_tail.fleet_class,
+                        flight.allow_any_tail,
                     ):
                         # Incompatible tail under the solver's rules; allow reassignment.
                         pass
@@ -303,7 +315,9 @@ class NegotiationScheduler:
                 m.AddNoOverlap(intervals)
             for i in F:
                 flight = self.flights[i]
-                if not _class_compatible(flight.fleet_class, tail.fleet_class):
+                if not _class_compatible(
+                    flight.fleet_class, tail.fleet_class, flight.allow_any_tail
+                ):
                     continue
                 m.Add(self.start[i] >= tail.available_from_min).OnlyEnforceIf(self.assign[(i, k)])
                 m.Add(
@@ -391,7 +405,10 @@ class NegotiationScheduler:
             for k in T:
                 tail = self.tails[k]
                 penalty = _class_assignment_penalty(
-                    flight.fleet_class, tail.fleet_class, self.policy
+                    flight.fleet_class,
+                    tail.fleet_class,
+                    self.policy,
+                    flight.allow_any_tail,
                 )
                 if penalty:
                     objective_terms.append(self.assign[(i, k)] * penalty)
