@@ -26,6 +26,9 @@ UTC = timezone.utc
 ADD_LINE_PREFIXES = {"ADD", "REMOVE"}
 TAILS_PATH = Path(__file__).resolve().parent.parent / "tails.csv"
 WINDOW_START_UTC = time(8, 0, tzinfo=UTC)
+# Include prior-day flying when pulling FL3XX data so we can locate tails
+# based on their previous arrivals.
+FLIGHTS_LOOKBACK_DAYS = 2
 
 
 @dataclass(frozen=True)
@@ -419,7 +422,7 @@ def fetch_negotiation_data(
 
     flights_payload, raw_metadata = fetch_flights(
         config,
-        from_date=window_start.date(),
+        from_date=(window_start - timedelta(days=FLIGHTS_LOOKBACK_DAYS)).date(),
         to_date=to_date_exclusive,
     )
 
