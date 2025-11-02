@@ -515,56 +515,10 @@ class NegotiationScheduler:
         cp = self.cp_model
         top_n = max(1, int(top_n or 1))
         solutions = []
-        seen_signatures = set()
         status = cp.UNKNOWN
 
         objective_floor: Optional[int] = None
-        exclusion_clauses: List[List[Tuple[str, Tuple[int, ...]]]] = []
-
-        def _build_signature(scheduler: "NegotiationScheduler", solver_like) -> Tuple[Tuple[str, int, Optional[int]], ...]:
-            signature: List[Tuple[str, int, Optional[int]]] = []
-            flight_range = range(len(scheduler.flights))
-            tail_range = range(len(scheduler.tails))
-
-            for i in flight_range:
-                assigned_tail = None
-                for k in tail_range:
-                    if solver_like.Value(scheduler.assign[(i, k)]) == 1:
-                        assigned_tail = k
-                        break
-
-                if assigned_tail is not None:
-                    signature.append(("assign", i, assigned_tail))
-                elif solver_like.Value(scheduler.skip[i]) == 1:
-                    signature.append(("skip", i, None))
-                elif solver_like.Value(scheduler.outsource[i]) == 1:
-                    signature.append(("outsource", i, None))
-                else:
-                    signature.append(("unassigned", i, None))
-
-            return tuple(signature)
-
-        class _IncumbentCollector(cp.CpSolverSolutionCallback):
-            def __init__(self, scheduler: "NegotiationScheduler", keep: int):
-                super().__init__()
-                self.scheduler = scheduler
-                self.keep = keep
-                self.snapshots: List[Tuple[Tuple[Tuple[str, int, Optional[int]], ...], Dict[str, pd.DataFrame]]] = []
-
-            def on_solution_callback(self) -> None:
-                if self.keep and len(self.snapshots) >= self.keep:
-                    self.StopSearch()
-                    return
-
-                signature = _build_signature(self.scheduler, self)
-                if signature in seen_signatures:
-                    return
-
-                solution = self.scheduler._build_solution(self)
-                self.snapshots.append((signature, solution))
-
-                if self.keep and len(self.snapshots) >= self.keep:
-                    self.StopSearch()
+        exclusion_clauses: List[List[Tuple[str, Tuple[int, ...], int]]] = []
 
         for attempt in range(top_n):
             if attempt == 0:
@@ -582,54 +536,35 @@ class NegotiationScheduler:
 
             for clause in exclusion_clauses:
                 literals = []
-                for kind, key in clause:
+                for kind, key, value in clause:
                     if kind == "assign":
-                        literals.append(working.assign[tuple(key)])
+                        var = working.assign[tuple(key)]
                     elif kind == "outsource":
-                        literals.append(working.outsource[key[0]])
+                        var = working.outsource[key[0]]
                     elif kind == "skip":
-                        literals.append(working.skip[key[0]])
+                        var = working.skip[key[0]]
+                    else:
+                        continue
+
+                    literals.append(var.Not() if value else var)
 
                 if literals:
-                    working.model.Add(sum(literals) <= len(literals) - 1)
+                    working.model.AddBoolOr(literals)
 
             solver = cp.CpSolver()
             if time_limit_s:
                 solver.parameters.max_time_in_seconds = time_limit_s
             solver.parameters.num_search_workers = workers
 
-            collector: Optional[_IncumbentCollector] = None
-            remaining = top_n - len(solutions)
-            if remaining > 0:
-                collector = _IncumbentCollector(working, remaining)
-                current_status = solver.SolveWithSolutionCallback(working.model, collector)
-            else:
-                current_status = solver.Solve(working.model)
+            current_status = solver.Solve(working.model)
             if current_status not in (cp.OPTIMAL, cp.FEASIBLE):
                 if not solutions:
                     status = current_status
                 break
 
             status = current_status
-
-            if collector:
-                for signature, snapshot in collector.snapshots:
-                    if signature in seen_signatures:
-                        continue
-                    seen_signatures.add(signature)
-                    solutions.append(snapshot)
-                    if len(solutions) >= top_n:
-                        break
-                if len(solutions) >= top_n:
-                    break
-
             solution = working._build_solution(solver)
-            signature = _build_signature(working, solver)
-            if signature not in seen_signatures:
-                seen_signatures.add(signature)
-                solutions.append(solution)
-            if len(solutions) >= top_n:
-                break
+            solutions.append(solution)
 
             objective_value = solution.get("objective", math.inf)
             if not math.isfinite(objective_value):
@@ -637,16 +572,13 @@ class NegotiationScheduler:
 
             objective_floor = math.floor(objective_value)
 
-            clause: List[Tuple[str, Tuple[int, ...]]] = []
+            clause: List[Tuple[str, Tuple[int, ...], int]] = []
             for key, var in working.assign.items():
-                if solver.Value(var) == 1:
-                    clause.append(("assign", tuple(key)))
+                clause.append(("assign", tuple(key), int(solver.Value(var))))
             for key, var in working.outsource.items():
-                if solver.Value(var) == 1:
-                    clause.append(("outsource", (key,)))
+                clause.append(("outsource", (key,), int(solver.Value(var))))
             for key, var in working.skip.items():
-                if solver.Value(var) == 1:
-                    clause.append(("skip", (key,)))
+                clause.append(("skip", (key,), int(solver.Value(var))))
 
             if clause:
                 exclusion_clauses.append(clause)
