@@ -38,14 +38,16 @@ Develop a solver add-on that augments the existing schedule optimizer so it can 
 
 ## Current Prototype Status
 
-- **Solver kernel in place.** A minimal CP-SAT model (`core.neg_scheduler.model.NegotiationScheduler`) now supports
-  fleet-compatible tail assignment, ± time shifts, and outsourcing penalties governed by a `LeverPolicy` dataclass.
-- **Contracts formalized.** All solver inputs flow through Pydantic `Leg` and `Tail` contracts so the optimization core has
-  consistent typing and validation hooks.
-- **Streamlit pilot UI.** The `apps/negotiation_optimizer` page lets the team run the solver on demo data, adjust lever bounds
-  interactively, review assignments/outsourcing, and inspect suggested negotiation levers with pre-drafted messaging blocks.
-- **Data adapters stubbed.** `integrations.fl3xx_adapter` exposes deterministic demo data today and provides a shim for wiring
-  real FL3XX pulls without breaking the UI contract.
+- **Solver kernel hardened.** `core.neg_scheduler.model.NegotiationScheduler` handles fleet-compatible assignments, ± time
+  shifts, optional tail swaps, skip/outsource controls, duty-day caps, and reposition penalties via the `LeverPolicy`
+  contract while surfacing up to five ranked solutions per run.
+- **Domain contracts in production.** The frozen dataclasses in `core.neg_scheduler.contracts` enforce validation on every
+  `Flight`/`Tail`, keeping the CP-SAT core resilient to upstream data issues.
+- **Streamlit operations console.** `apps/negotiation_optimizer` now fetches FL3XX windows with caching, exposes lever
+  sliders, builds reposition matrices from the airport index, renders diagnostics, and presents option tabs with
+  Gantt/summary breakdowns for each solver outcome.
+- **FL3XX ingestion pipeline.** `integrations.fl3xx_adapter.fetch_negotiation_data` normalizes payloads, classifies
+  scheduled vs. add-line demand, infers fleet classes/tails, and returns solver-ready contracts plus metadata for auditing.
 
 ## Deliverables by Sprint
 
@@ -54,15 +56,17 @@ Develop a solver add-on that augments the existing schedule optimizer so it can 
 - Highlight unassigned legs and their blocking constraints inside the Streamlit solver dev app. *(Outsourced table with lever
   suggestions surfaces unresolved demand.)*
 
-### Sprint 2 – Leverized Re-Solver *(🚧 in progress)*
-- Implement a minimal lever catalog (owner ±30/60/90, tail swap, outsource). *(Costed shifts and placeholder swap penalty
-  available in UI; tail swap mechanics still implicit via solver assignments.)*
-- Add penalty-aware re-optimization and display ranked resolution options per conflict. *(Objective includes shift/outsourcing
-  costs; UI ranks lever suggestions for unscheduled legs.)*
+### Sprint 2 – Leverized Re-Solver *(✅ complete)*
+- Implement a minimal lever catalog (owner ±30/60/90, tail swap, outsource). *(`LeverPolicy` caps/costs drive solver
+  penalties, tail swap toggles apply to scheduled legs, and POS drop penalties are configurable in the UI.)*
+- Add penalty-aware re-optimization and display ranked resolution options per conflict. *(Objective blends shift, swap,
+  outsource, skip, and reposition costs; the Streamlit app surfaces up to five ranked solver alternatives with narrative
+  summaries.)*
 
-### Sprint 3 – Operator Workflow *(🔜 upcoming)*
-- Extend UI to let ops select an option, auto-draft negotiation messages, and re-solve based on responses.
-- Track accepted/declined levers.
+### Sprint 3 – Operator Workflow *(🚧 in progress)*
+- Let ops review multiple solver options side-by-side. *(Top-N option tabs with summaries are live; acceptance/locking flow
+  still outstanding.)*
+- Extend UI to accept/lock lever choices, trigger re-solves, and capture negotiation outcomes.
 
 ### Sprint 4 – Learning & Expansion *(🔜 upcoming)*
 - Capture negotiation outcomes to adjust lever costs and owner flexibility heuristics.
@@ -80,13 +84,13 @@ Develop a solver add-on that augments the existing schedule optimizer so it can 
 - Required audit trail for compliance when altering planned duties or owner windows.
 
 ## Next Steps
-- **Wire real data.** Replace the FL3XX adapter stub with authenticated pulls (legs, tails, owner preferences) and confirm it
-  hydrates the `Leg`/`Tail` contracts without manual cleanup.
-- **Expose conflict diagnostics.** Enrich solver outputs with blocking explanations (e.g., specific tail overlap, duty window
-  breaches) so negotiators understand *why* a lever is recommended.
-- **Interactive lever application.** Allow the Streamlit UI to accept/lock proposed shifts or tail swaps, trigger a re-solve,
-  and log accepted versus rejected asks for future tuning.
-- **Expand lever catalog.** Model crew augmentation, tech stop insertion, and limited-duty splits with appropriate penalty
-  scaffolding.
-- **Close the messaging loop.** Integrate with the existing comms tooling (email/SMS templates) to auto-fill and send
-  negotiation requests while capturing outcomes for the learning layer.
+- **Surface blocking diagnostics.** Add per-leg explanations (tail overlap, duty breaches, missing reposition time) to each
+  solver option so negotiators understand the rationale behind suggested levers.
+- **Implement lever locking.** Persist accepted shifts/swaps/outsourcing decisions in the UI, re-run the solver with those
+  constraints, and track decision history for auditability.
+- **Connect communications tooling.** Generate owner/crew negotiation drafts from selected levers and push them through the
+  existing email/SMS channels while recording responses.
+- **Broaden lever catalog.** Model crew augmentations, duty splits, tech stops, and ground transfer substitutions with
+  calibrated penalties.
+- **Learn from outcomes.** Store negotiation results to tune penalty weights, owner flexibility assumptions, and option
+  ranking heuristics over time.
