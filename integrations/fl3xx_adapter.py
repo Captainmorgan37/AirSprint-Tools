@@ -187,6 +187,92 @@ def _infer_tail_positions(
     }
 
 
+def _first_scheduled_departures(
+    rows: Iterable[Mapping[str, object]],
+    *,
+    window_start: datetime,
+) -> dict[str, tuple[str, int]]:
+    """Return the origin airport for each tail's first scheduled leg."""
+
+    earliest: dict[str, tuple[datetime, str, int]] = {}
+
+    for row in rows:
+        tail_id = row.get("tail_normalized")
+        if not isinstance(tail_id, str) or not tail_id:
+            continue
+
+        dep_raw = row.get("dep_time")
+        if dep_raw in (None, ""):
+            continue
+        try:
+            dep_dt = safe_parse_dt(str(dep_raw))
+        except Exception:
+            continue
+        if dep_dt.tzinfo is None:
+            dep_dt = dep_dt.replace(tzinfo=UTC)
+        else:
+            dep_dt = dep_dt.astimezone(UTC)
+
+        origin_raw = row.get("departure_airport") or row.get("dep_airport")
+        if not origin_raw:
+            continue
+        origin = str(origin_raw).strip().upper()
+        if not origin:
+            continue
+
+        minutes = max(0, min(24 * 60, _minutes_from_window(dep_dt, window_start)))
+
+        previous = earliest.get(tail_id)
+        if previous is None or dep_dt < previous[0]:
+            earliest[tail_id] = (dep_dt, origin, minutes)
+
+    return {
+        tail_id: (origin, ready_min)
+        for tail_id, (_, origin, ready_min) in earliest.items()
+    }
+
+
+def _initial_tail_snapshot(
+    tail_classes: Mapping[str, str],
+    tail_positions: Mapping[str, tuple[str, int]],
+    scheduled_rows: Iterable[Mapping[str, object]],
+    *,
+    window_start: datetime,
+) -> list[Tail]:
+    """Build ``Tail`` contracts including inferred starting positions."""
+
+    fallback_positions = _first_scheduled_departures(
+        scheduled_rows, window_start=window_start
+    )
+
+    tails: list[Tail] = []
+    for tail_id, fleet_class in sorted(tail_classes.items()):
+        last_airport: str | None = None
+        ready_min: int | None = None
+
+        if tail_id in tail_positions:
+            last_airport, ready_min = tail_positions[tail_id]
+        elif tail_id in fallback_positions:
+            last_airport, ready_min = fallback_positions[tail_id]
+
+        available_from = 0
+        if ready_min is not None:
+            available_from = max(0, min(ready_min, 24 * 60))
+
+        tails.append(
+            Tail(
+                id=tail_id,
+                fleet_class=fleet_class,
+                available_from_min=available_from,
+                available_to_min=24 * 60,
+                last_position_airport=last_airport,
+                last_position_ready_min=ready_min,
+            )
+        )
+
+    return tails
+
+
 def _resolve_settings(settings: Mapping[str, object] | None) -> Mapping[str, object]:
     if settings is not None:
         return settings
@@ -575,25 +661,12 @@ def fetch_negotiation_data(
         # Ensure we have at least one placeholder tail so the solver can run.
         tail_classes["GEN-TAIL"] = "GEN"
 
-    tails: list[Tail] = []
-    for tail_id, fleet_class in sorted(tail_classes.items()):
-        last_airport: str | None = None
-        ready_min: int | None = None
-        if tail_id in tail_positions:
-            last_airport, ready_min = tail_positions[tail_id]
-        available_from = 0
-        if ready_min is not None:
-            available_from = max(0, min(ready_min, 24 * 60))
-        tails.append(
-            Tail(
-                id=tail_id,
-                fleet_class=fleet_class,
-                available_from_min=available_from,
-                available_to_min=24 * 60,
-                last_position_airport=last_airport,
-                last_position_ready_min=ready_min,
-            )
-        )
+    tails = _initial_tail_snapshot(
+        tail_classes,
+        tail_positions,
+        scheduled_rows,
+        window_start=window_start,
+    )
 
     metadata: dict[str, object] = {
         "window_start_utc": window_start.isoformat().replace("+00:00", "Z"),

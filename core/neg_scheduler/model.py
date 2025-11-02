@@ -401,9 +401,7 @@ class NegotiationScheduler:
                     flight.fleet_class, tail.fleet_class, flight.allow_any_tail
                 ):
                     continue
-                m.Add(self.start[i] >= tail_ready_min).OnlyEnforceIf(
-                    [self.assign[(i, k)], self.chg[i]]
-                )
+                m.Add(self.start[i] >= tail_ready_min).OnlyEnforceIf(self.assign[(i, k)])
                 m.Add(
                     self.start[i] + flight.duration_min + self.policy.turn_min
                     <= tail.available_to_min
@@ -531,6 +529,31 @@ class NegotiationScheduler:
                     repo = self.initial_reposition_min[k][i]
                     m.Add(self.start[i] >= tail_ready_min + repo).OnlyEnforceIf(
                         [assign_var, first_var, self.chg[i]]
+                    )
+
+        for k in T:
+            tail = self.tails[k]
+            tail_ready_min = max(tail.available_from_min, 0)
+            if tail.last_position_ready_min is not None:
+                tail_ready_min = max(tail_ready_min, tail.last_position_ready_min)
+            first_vars = [self.first[(i, k)] for i in F]
+            if first_vars:
+                m.Add(sum(first_vars) <= 1)
+            for i in F:
+                assign_var = self.assign[(i, k)]
+                first_var = self.first[(i, k)]
+                m.Add(first_var <= assign_var)
+                predecessors = [o[(j, i, k)] for j in F if j != i]
+                if predecessors:
+                    m.Add(assign_var <= first_var + sum(predecessors))
+                    m.Add(first_var >= assign_var - sum(predecessors))
+                else:
+                    m.Add(first_var == assign_var)
+
+                if self.initial_reposition_min and self.initial_reposition_min[k][i] > 0:
+                    repo = self.initial_reposition_min[k][i]
+                    m.Add(self.start[i] >= tail_ready_min + repo).OnlyEnforceIf(
+                        [assign_var, first_var]
                     )
 
         objective_terms = []
