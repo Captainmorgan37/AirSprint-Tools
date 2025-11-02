@@ -98,6 +98,32 @@ TAIL_SCHEDULE_ORDER: tuple[str, ...] = (
 )
 
 
+def _ordinal(value: int) -> str:
+    if 10 <= value % 100 <= 20:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(value % 10, "th")
+    return f"{value}{suffix}"
+
+
+def _format_schedule_title(prefix: str, schedule_day: date | datetime | None) -> str:
+    schedule_date: date | None
+    if isinstance(schedule_day, datetime):
+        schedule_date = schedule_day.date()
+    elif isinstance(schedule_day, date):
+        schedule_date = schedule_day
+    else:
+        schedule_date = None
+
+    if schedule_date is None:
+        return prefix
+
+    return (
+        f"{prefix} - {schedule_date.strftime('%B')} "
+        f"{_ordinal(schedule_date.day)}, {schedule_date.year}"
+    )
+
+
 def _format_leg_rows(rows: list[dict[str, object]]) -> pd.DataFrame:
     if not rows:
         return pd.DataFrame()
@@ -154,6 +180,7 @@ def _render_solution_details(
     solution: dict[str, object],
     window_start_utc: datetime,
     policy: LeverPolicy,
+    schedule_day: date | None = None,
 ) -> None:
     st.subheader("Summary of changes")
     _render_solution_summary(solution)
@@ -181,6 +208,7 @@ def _render_solution_details(
                         "Reposition leg": "#ffbf00",
                     },
                     window_start=window_start_utc,
+                    title=_format_schedule_title("Updated Schedule", schedule_day or window_start_utc),
                 )
 
     st.subheader("Unscheduled / outsourced")
@@ -366,6 +394,7 @@ def draw_gantt(
     minutes_range: tuple[int, int] = (0, 24 * 60),
     min_label_width: int = 50,
     window_start: object | None = None,
+    title: str | None = None,
 ) -> None:
     required = {tail_col, start_col}
     if not required.issubset(data.columns):
@@ -469,15 +498,27 @@ def draw_gantt(
         ax.set_xticks(xticks)
         ax.set_xticklabels(
             [
-                (window_ref + timedelta(minutes=int(offset))).strftime("%Y-%m-%d %H:%MZ")
+                (window_ref + timedelta(minutes=int(offset))).strftime("%H:%MZ")
                 for offset in xticks
             ]
         )
-        ax.tick_params(axis="x", labelrotation=45)
+        ax.tick_params(
+            axis="x",
+            labelrotation=45,
+            labelbottom=False,
+            bottom=False,
+            labeltop=True,
+            top=True,
+        )
+        ax.xaxis.set_label_position("top")
+        ax.xaxis.tick_top()
         ax.set_xlabel("UTC time")
     else:
         ax.set_xlabel("Minutes from window start")
-    ax.set_title("Per-tail Gantt (single day)")
+    if title:
+        ax.set_title(title)
+    else:
+        ax.set_title("Per-tail Gantt (single day)")
     ax.grid(True, axis="x", linestyle=":", linewidth=0.5)
     if legend_info:
         handles = [
@@ -817,6 +858,7 @@ def render_page() -> None:
                         color_by="workflow",
                         minutes_range=(0, 24 * 60),
                         window_start=window_start_utc,
+                        title=_format_schedule_title("Current Schedule", schedule_day),
                     )
         else:
             st.info("No scheduled legs detected for the selected window.")
@@ -1009,7 +1051,7 @@ def render_page() -> None:
         solution_tabs = st.tabs(tab_labels)
         for tab, solution in zip(solution_tabs, solutions):
             with tab:
-                _render_solution_details(solution, window_start_utc, policy)
+                _render_solution_details(solution, window_start_utc, policy, schedule_day)
 
 
 if __name__ == "__main__":  # pragma: no cover - Streamlit executes as a script
