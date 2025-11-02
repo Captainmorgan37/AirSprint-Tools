@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from typing import Dict, Iterable, List
 
-from .neg_scheduler.contracts import Flight
+from .neg_scheduler.contracts import Flight, Tail
 
 
 def gcd_nm(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -92,6 +92,29 @@ def build_reposition_matrix(
                 continue
             matrix[i][j] = repo_minutes_between(
                 flight_i.dest, flight_j.origin, flight_i.fleet_class, airports
+            )
+
+    return matrix
+
+
+def build_initial_reposition_matrix(
+    tails: Iterable[Tail],
+    flights: Iterable[Flight],
+    airports: Dict[str, Dict[str, object]],
+) -> List[List[int]]:
+    """Return reposition minutes required before a tail's first assigned flight."""
+
+    tail_list = list(tails)
+    flight_list = list(flights)
+    matrix: List[List[int]] = [[0] * len(flight_list) for _ in range(len(tail_list))]
+
+    for tail_idx, tail in enumerate(tail_list):
+        origin = (tail.last_position_airport or "").upper()
+        if not origin:
+            continue
+        for flight_idx, flight in enumerate(flight_list):
+            matrix[tail_idx][flight_idx] = repo_minutes_between(
+                origin, flight.origin, tail.fleet_class, airports
             )
 
     return matrix

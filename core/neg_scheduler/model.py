@@ -118,6 +118,7 @@ class NegotiationScheduler:
         tails: List[Tail],
         policy: LeverPolicy,
         reposition_min: Optional[List[List[int]]] = None,
+        initial_reposition_min: Optional[List[List[int]]] = None,
     ):
         self.cp_model = _cp_model()
         self.flights = flights
@@ -125,6 +126,9 @@ class NegotiationScheduler:
         self.policy = policy
         self.reposition_min = self._normalize_reposition_matrix(
             reposition_min, len(flights)
+        )
+        self.initial_reposition_min = self._normalize_initial_reposition_matrix(
+            initial_reposition_min, len(tails), len(flights)
         )
         self.horizon = self._compute_horizon()
         self.model = self.cp_model.CpModel()
@@ -161,6 +165,31 @@ class NegotiationScheduler:
             raise ValueError(
                 "reposition_min shape "
                 f"{mismatch} does not match flights {flight_count}"
+            )
+
+        return matrix
+
+    @staticmethod
+    def _normalize_initial_reposition_matrix(
+        initial: Optional[List[List[int]]],
+        tail_count: int,
+        flight_count: int,
+    ) -> List[List[int]]:
+        """Return a tail/flight matrix of initial reposition minutes."""
+
+        if tail_count <= 0 or flight_count <= 0:
+            return [[0] * max(flight_count, 0) for _ in range(max(tail_count, 0))]
+
+        if initial is None:
+            return [[0] * flight_count for _ in range(tail_count)]
+
+        matrix = [list(row) for row in initial]
+        if len(matrix) != tail_count or any(len(row) != flight_count for row in matrix):
+            raise ValueError(
+                "initial_reposition_min shape "
+                f"{len(matrix)}x"
+                f"{len(matrix[0]) if matrix else 0}"
+                f" does not match tails {tail_count} and flights {flight_count}"
             )
 
         return matrix
@@ -222,8 +251,8 @@ class NegotiationScheduler:
             for k in T:
                 tail = self.tails[k]
                 self.assign[(i, k)] = m.NewBoolVar(f"assign[{i},{k}]")
+                self.first[(i, k)] = m.NewBoolVar(f"first[{i},{k}]")
                 if enforce_day_length:
-                    self.first[(i, k)] = m.NewBoolVar(f"first[{i},{k}]")
                     self.last[(i, k)] = m.NewBoolVar(f"last[{i},{k}]")
                 if active_tail_ids and tail.id not in active_tail_ids and (
                     flight.current_tail_id != tail.id
@@ -294,6 +323,9 @@ class NegotiationScheduler:
 
         for k in T:
             tail = self.tails[k]
+            tail_ready_min = max(tail.available_from_min, 0)
+            if tail.last_position_ready_min is not None:
+                tail_ready_min = max(tail_ready_min, tail.last_position_ready_min)
             if enforce_day_length:
                 self.day_active[k] = m.NewBoolVar(f"day_active[{k}]")
                 self.day_start[k] = m.NewIntVar(0, self.horizon, f"day_start[{k}]")
@@ -305,7 +337,7 @@ class NegotiationScheduler:
                 flight = self.flights[i]
                 if not _class_compatible(flight.fleet_class, tail.fleet_class):
                     continue
-                m.Add(self.start[i] >= tail.available_from_min).OnlyEnforceIf(self.assign[(i, k)])
+                m.Add(self.start[i] >= tail_ready_min).OnlyEnforceIf(self.assign[(i, k)])
                 m.Add(
                     self.start[i] + flight.duration_min + self.policy.turn_min
                     <= tail.available_to_min
@@ -375,6 +407,31 @@ class NegotiationScheduler:
                         + repo
                     ).OnlyEnforceIf(o[(i, j, k)])
 
+        for k in T:
+            tail = self.tails[k]
+            tail_ready_min = max(tail.available_from_min, 0)
+            if tail.last_position_ready_min is not None:
+                tail_ready_min = max(tail_ready_min, tail.last_position_ready_min)
+            first_vars = [self.first[(i, k)] for i in F]
+            if first_vars:
+                m.Add(sum(first_vars) <= 1)
+            for i in F:
+                assign_var = self.assign[(i, k)]
+                first_var = self.first[(i, k)]
+                m.Add(first_var <= assign_var)
+                predecessors = [o[(j, i, k)] for j in F if j != i]
+                if predecessors:
+                    m.Add(assign_var <= first_var + sum(predecessors))
+                    m.Add(first_var >= assign_var - sum(predecessors))
+                else:
+                    m.Add(first_var == assign_var)
+
+                if self.initial_reposition_min and self.initial_reposition_min[k][i] > 0:
+                    repo = self.initial_reposition_min[k][i]
+                    m.Add(self.start[i] >= tail_ready_min + repo).OnlyEnforceIf(
+                        [assign_var, first_var]
+                    )
+
         objective_terms = []
         for i in F:
             flight = self.flights[i]
@@ -411,6 +468,17 @@ class NegotiationScheduler:
                             o[(i, j, k)] * repo * self.policy.reposition_cost_per_min
                         )
 
+        if self.initial_reposition_min:
+            for k in T:
+                for i in F:
+                    repo = self.initial_reposition_min[k][i]
+                    if repo > 0:
+                        objective_terms.append(
+                            self.first[(i, k)]
+                            * repo
+                            * self.policy.reposition_cost_per_min
+                        )
+
         objective_expr = sum(objective_terms)
         m.Minimize(objective_expr)
         self.objective_expr = objective_expr
@@ -419,6 +487,7 @@ class NegotiationScheduler:
         cp = self.cp_model
         assigned_rows, outsourced_rows, skipped_rows = [], [], []
         tail_sequences: Dict[str, List[Tuple[int, int]]] = {}
+        tail_index = {tail.id: idx for idx, tail in enumerate(self.tails)}
         for i, flight in enumerate(self.flights):
             tail_id = None
             for k, tail in enumerate(self.tails):
@@ -469,6 +538,30 @@ class NegotiationScheduler:
         reposition_rows = []
         for tail_id, sequence in tail_sequences.items():
             ordered = sorted(sequence, key=lambda item: item[1])
+            tail_idx = tail_index.get(tail_id)
+            if tail_idx is not None and ordered:
+                first_idx, _ = ordered[0]
+                repo = 0
+                if self.initial_reposition_min:
+                    repo = self.initial_reposition_min[tail_idx][first_idx]
+                tail = self.tails[tail_idx]
+                if repo > 0 and tail.last_position_airport:
+                    ready_min = max(tail.available_from_min, 0)
+                    if tail.last_position_ready_min is not None:
+                        ready_min = max(ready_min, tail.last_position_ready_min)
+                    repo_start = ready_min
+                    reposition_rows.append(
+                        {
+                            "tail": tail_id,
+                            "start_min": repo_start,
+                            "duration_min": repo,
+                            "end_min": repo_start + repo,
+                            "origin": tail.last_position_airport,
+                            "dest": self.flights[first_idx].origin,
+                            "source_flight": None,
+                            "target_flight": self.flights[first_idx].id,
+                        }
+                    )
             for (prev_idx, prev_start), (next_idx, next_start) in zip(ordered, ordered[1:]):
                 repo = self.reposition_min[prev_idx][next_idx]
                 if repo and repo > 0:
