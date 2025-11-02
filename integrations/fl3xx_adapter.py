@@ -26,6 +26,9 @@ UTC = timezone.utc
 ADD_LINE_PREFIXES = {"ADD", "REMOVE"}
 TAILS_PATH = Path(__file__).resolve().parent.parent / "tails.csv"
 WINDOW_START_UTC = time(8, 0, tzinfo=UTC)
+# Include prior-day flying when pulling FL3XX data so we can locate tails
+# based on their previous arrivals.
+FLIGHTS_LOOKBACK_DAYS = 2
 
 
 @dataclass(frozen=True)
@@ -116,6 +119,158 @@ def _classify_rows(
             other.append(row_dict)
 
     return scheduled, unscheduled, other
+
+
+def _infer_tail_positions(
+    rows: Iterable[Mapping[str, object]],
+    *,
+    window_start: datetime,
+    policy: LeverPolicy,
+) -> dict[str, tuple[str, int]]:
+    """Return the latest known location and ready time for each tail."""
+
+    latest: dict[str, tuple[datetime, str, int]] = {}
+
+    for row in rows:
+        tail_id = row.get("tail_normalized")
+        if not isinstance(tail_id, str) or not tail_id:
+            tail_id = _normalise_tail(row.get("tail"))
+        if not isinstance(tail_id, str) or not tail_id:
+            continue
+
+        dep_raw = row.get("dep_time")
+        if dep_raw in (None, ""):
+            continue
+        try:
+            dep_dt = safe_parse_dt(str(dep_raw))
+        except Exception:
+            continue
+        if dep_dt.tzinfo is None:
+            dep_dt = dep_dt.replace(tzinfo=UTC)
+        else:
+            dep_dt = dep_dt.astimezone(UTC)
+        if dep_dt >= window_start:
+            continue
+
+        arr_dt: datetime | None = None
+        arrival_raw = row.get("arrival_time") or row.get("arrivalTimeUtc")
+        if arrival_raw not in (None, ""):
+            try:
+                arr_dt = safe_parse_dt(str(arrival_raw))
+            except Exception:
+                arr_dt = None
+        if arr_dt is None:
+            duration = _estimate_duration(row, dep_dt)
+            arr_dt = dep_dt + timedelta(minutes=duration)
+        if arr_dt.tzinfo is None:
+            arr_dt = arr_dt.replace(tzinfo=UTC)
+        else:
+            arr_dt = arr_dt.astimezone(UTC)
+
+        arrival_airport_raw = row.get("arrival_airport") or row.get("arrivalAirport")
+        if not arrival_airport_raw:
+            continue
+        arrival_airport = str(arrival_airport_raw).strip().upper()
+        if not arrival_airport:
+            continue
+
+        ready_delta = arr_dt - window_start
+        ready_min = int(ready_delta.total_seconds() // 60) + int(policy.turn_min)
+
+        previous = latest.get(tail_id)
+        if previous is None or arr_dt > previous[0]:
+            latest[tail_id] = (arr_dt, arrival_airport, ready_min)
+
+    return {
+        tail_id: (airport, max(0, ready_min))
+        for tail_id, (_, airport, ready_min) in latest.items()
+    }
+
+
+def _first_scheduled_departures(
+    rows: Iterable[Mapping[str, object]],
+    *,
+    window_start: datetime,
+) -> dict[str, tuple[str, int]]:
+    """Return the origin airport for each tail's first scheduled leg."""
+
+    earliest: dict[str, tuple[datetime, str, int]] = {}
+
+    for row in rows:
+        tail_id = row.get("tail_normalized")
+        if not isinstance(tail_id, str) or not tail_id:
+            continue
+
+        dep_raw = row.get("dep_time")
+        if dep_raw in (None, ""):
+            continue
+        try:
+            dep_dt = safe_parse_dt(str(dep_raw))
+        except Exception:
+            continue
+        if dep_dt.tzinfo is None:
+            dep_dt = dep_dt.replace(tzinfo=UTC)
+        else:
+            dep_dt = dep_dt.astimezone(UTC)
+
+        origin_raw = row.get("departure_airport") or row.get("dep_airport")
+        if not origin_raw:
+            continue
+        origin = str(origin_raw).strip().upper()
+        if not origin:
+            continue
+
+        minutes = max(0, min(24 * 60, _minutes_from_window(dep_dt, window_start)))
+
+        previous = earliest.get(tail_id)
+        if previous is None or dep_dt < previous[0]:
+            earliest[tail_id] = (dep_dt, origin, minutes)
+
+    return {
+        tail_id: (origin, ready_min)
+        for tail_id, (_, origin, ready_min) in earliest.items()
+    }
+
+
+def _initial_tail_snapshot(
+    tail_classes: Mapping[str, str],
+    tail_positions: Mapping[str, tuple[str, int]],
+    scheduled_rows: Iterable[Mapping[str, object]],
+    *,
+    window_start: datetime,
+) -> list[Tail]:
+    """Build ``Tail`` contracts including inferred starting positions."""
+
+    fallback_positions = _first_scheduled_departures(
+        scheduled_rows, window_start=window_start
+    )
+
+    tails: list[Tail] = []
+    for tail_id, fleet_class in sorted(tail_classes.items()):
+        last_airport: str | None = None
+        ready_min: int | None = None
+
+        if tail_id in tail_positions:
+            last_airport, ready_min = tail_positions[tail_id]
+        elif tail_id in fallback_positions:
+            last_airport, ready_min = fallback_positions[tail_id]
+
+        available_from = 0
+        if ready_min is not None:
+            available_from = max(0, min(ready_min, 24 * 60))
+
+        tails.append(
+            Tail(
+                id=tail_id,
+                fleet_class=fleet_class,
+                available_from_min=available_from,
+                available_to_min=24 * 60,
+                last_position_airport=last_airport,
+                last_position_ready_min=ready_min,
+            )
+        )
+
+    return tails
 
 
 def _resolve_settings(settings: Mapping[str, object] | None) -> Mapping[str, object]:
@@ -419,7 +574,7 @@ def fetch_negotiation_data(
 
     flights_payload, raw_metadata = fetch_flights(
         config,
-        from_date=window_start.date(),
+        from_date=(window_start - timedelta(days=FLIGHTS_LOOKBACK_DAYS)).date(),
         to_date=to_date_exclusive,
     )
 
@@ -437,6 +592,9 @@ def fetch_negotiation_data(
     skipped_unscheduled: list[str] = []
 
     policy_obj = policy or LeverPolicy()
+    tail_positions = _infer_tail_positions(
+        filtered_rows, window_start=window_start, policy=policy_obj
+    )
 
     for row in scheduled_rows:
         try:
@@ -488,15 +646,12 @@ def fetch_negotiation_data(
         # Ensure we have at least one placeholder tail so the solver can run.
         tail_classes["GEN-TAIL"] = "GEN"
 
-    tails = [
-        Tail(
-            id=tail_id,
-            fleet_class=fleet_class,
-            available_from_min=0,
-            available_to_min=24 * 60,
-        )
-        for tail_id, fleet_class in sorted(tail_classes.items())
-    ]
+    tails = _initial_tail_snapshot(
+        tail_classes,
+        tail_positions,
+        scheduled_rows,
+        window_start=window_start,
+    )
 
     metadata: dict[str, object] = {
         "window_start_utc": window_start.isoformat().replace("+00:00", "Z"),

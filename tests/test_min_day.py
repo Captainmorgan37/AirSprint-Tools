@@ -207,6 +207,55 @@ def test_positioning_leg_can_be_skipped_before_outsource():
     assert set(solution["skipped"]["flight"]) == {"POS1"}
 
 
+def test_initial_reposition_leg_created_for_first_assignment():
+    flights = [
+        Flight(
+            id="F1",
+            origin="CYYZ",
+            dest="CYUL",
+            duration_min=120,
+            earliest_etd_min=9 * 60,
+            latest_etd_min=9 * 60,
+            preferred_etd_min=9 * 60,
+            fleet_class="CJ",
+            owner_id="OWN1",
+        )
+    ]
+    tails = [
+        Tail(
+            id="C-GCJ1",
+            fleet_class="CJ",
+            available_from_min=0,
+            available_to_min=24 * 60,
+            last_position_airport="CYUL",
+            last_position_ready_min=0,
+        )
+    ]
+
+    policy = LeverPolicy(turn_min=30)
+    scheduler = NegotiationScheduler(
+        flights,
+        tails,
+        policy,
+        reposition_min=[[0]],
+        initial_reposition_min=[[120]],
+    )
+    status, solutions = scheduler.solve()
+
+    cp = scheduler.cp_model
+    assert status in (cp.OPTIMAL, cp.FEASIBLE)
+    assert solutions
+    solution = solutions[0]
+    assert solution["assigned"].shape[0] == 1
+    assert not solution["reposition"].empty
+    row = solution["reposition"].iloc[0]
+    assert row["origin"] == "CYUL"
+    assert row["dest"] == "CYYZ"
+    assert row["duration_min"] == 120
+    assert row["source_flight"] is None
+    assert row["target_flight"] == "F1"
+
+
 def test_reposition_time_enforced_in_schedule():
     flights = [
         Flight(

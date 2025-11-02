@@ -66,6 +66,8 @@ class Tail:
     available_from_min: int = 0
     available_to_min: int = 24 * 60
     maintenance_due: Optional[datetime] = None
+    last_position_airport: Optional[str] = None
+    last_position_ready_min: Optional[int] = None
 
     def __post_init__(self) -> None:
         if self.available_from_min < 0 or self.available_from_min > 24 * 60:
