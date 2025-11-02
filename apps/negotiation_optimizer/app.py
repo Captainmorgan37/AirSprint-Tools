@@ -18,7 +18,7 @@ from Home import configure_page, password_gate, render_sidebar
 from core.airports import load_airports
 from core.neg_scheduler import LeverPolicy, NegotiationScheduler
 from core.neg_scheduler.model import _class_compatible
-from core.reposition import build_reposition_matrix
+from core.reposition import build_initial_reposition_matrix, build_reposition_matrix
 from flight_leg_utils import FlightDataError
 from integrations.fl3xx_adapter import NegotiationData, fetch_negotiation_data, get_demo_data
 
@@ -1017,6 +1017,9 @@ def render_page() -> None:
             repo_matrix = build_reposition_matrix(
                 solver_flights, relevant_airports or airport_catalog
             )
+            initial_repo_matrix = build_initial_reposition_matrix(
+                tails, solver_flights, relevant_airports or airport_catalog
+            )
             repo_rows = len(repo_matrix)
             repo_cols = len(repo_matrix[0]) if repo_matrix else 0
             if repo_rows != len(solver_flights) or any(
@@ -1028,7 +1031,11 @@ def render_page() -> None:
                 return
 
             scheduler = NegotiationScheduler(
-                solver_flights, tails, policy, reposition_min=repo_matrix
+                solver_flights,
+                tails,
+                policy,
+                reposition_min=repo_matrix,
+                initial_reposition_min=initial_repo_matrix,
             )
             status, solutions = scheduler.solve(top_n=5)
         except Exception as exc:  # pragma: no cover - surfaced in UI
