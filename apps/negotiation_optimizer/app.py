@@ -155,6 +155,9 @@ def _render_solution_details(
     window_start_utc: datetime,
     policy: LeverPolicy,
 ) -> None:
+    st.subheader("Summary of changes")
+    _render_solution_summary(solution)
+
     st.subheader("Assigned schedule")
     assigned_df: pd.DataFrame = solution.get("assigned", pd.DataFrame())
     reposition_df: pd.DataFrame = solution.get("reposition", pd.DataFrame())
@@ -485,6 +488,131 @@ def draw_gantt(
     st.pyplot(fig, clear_figure=True)
 
 
+def _render_solution_summary(solution: dict[str, object]) -> None:
+    assigned_df: pd.DataFrame = solution.get("assigned", pd.DataFrame())
+    reposition_df: pd.DataFrame = solution.get("reposition", pd.DataFrame())
+
+    summary_sections: list[str] = []
+
+    if isinstance(assigned_df, pd.DataFrame) and not assigned_df.empty:
+        working_df = assigned_df.copy()
+        if "original_tail" not in working_df.columns:
+            working_df["original_tail"] = pd.NA
+        original_tail_series = working_df["original_tail"].astype("string")
+        original_tail_clean = original_tail_series.str.strip().fillna("")
+        unscheduled_mask = original_tail_clean.eq("")
+        unscheduled_df = working_df[unscheduled_mask]
+
+        if not unscheduled_df.empty:
+            lines = [
+                "- Flight {flight} now on tail {tail} ({origin}→{dest})".format(
+                    flight=row.get("flight", "?"),
+                    tail=row.get("tail", "?"),
+                    origin=row.get("origin", "?"),
+                    dest=row.get("dest", "?"),
+                )
+                for _, row in unscheduled_df.iterrows()
+            ]
+        else:
+            lines = ["- None"]
+        summary_sections.append("**Unscheduled assignments**\n" + "\n".join(lines))
+
+        tail_change_df = working_df[~unscheduled_mask].copy()
+        if "tail" not in tail_change_df.columns:
+            tail_change_df["tail"] = pd.NA
+        if "original_tail" not in tail_change_df.columns:
+            tail_change_df["original_tail"] = pd.NA
+        current_tail = (
+            tail_change_df["tail"].astype("string").str.strip().fillna("")
+        )
+        previous_tail = (
+            tail_change_df["original_tail"].astype("string").str.strip().fillna("")
+        )
+        reassigned_mask = (
+            previous_tail.ne("")
+            & current_tail.ne("")
+            & current_tail.ne(previous_tail)
+        )
+        reassigned_df = tail_change_df[reassigned_mask]
+        if not reassigned_df.empty:
+            normalized_prev = previous_tail[reassigned_mask]
+            normalized_curr = current_tail[reassigned_mask]
+            reassigned_lines = [
+                "- Flight {flight} moved from tail {old} to {new} ({origin}→{dest})".format(
+                    flight=row.get("flight", "?"),
+                    old=normalized_prev.loc[index] or "?",
+                    new=normalized_curr.loc[index] or "?",
+                    origin=row.get("origin", "?"),
+                    dest=row.get("dest", "?"),
+                )
+                for index, row in reassigned_df.iterrows()
+            ]
+        else:
+            reassigned_lines = ["- None"]
+        summary_sections.append("**Tail reassignments**\n" + "\n".join(reassigned_lines))
+
+        for col in ("shift_plus", "shift_minus"):
+            if col not in working_df.columns:
+                working_df[col] = 0
+        working_df["shift_plus"] = (
+            pd.to_numeric(working_df["shift_plus"], errors="coerce").fillna(0).astype(int)
+        )
+        working_df["shift_minus"] = (
+            pd.to_numeric(working_df["shift_minus"], errors="coerce").fillna(0).astype(int)
+        )
+
+        time_shift_df = working_df[
+            (working_df["shift_plus"] > 0) | (working_df["shift_minus"] > 0)
+        ]
+        if not time_shift_df.empty:
+            change_lines = []
+            for _, row in time_shift_df.iterrows():
+                if row["shift_plus"] > 0:
+                    delta = f"+{int(row['shift_plus'])}"
+                else:
+                    delta = f"-{int(row['shift_minus'])}"
+                change_lines.append(
+                    "- Flight {flight} on tail {tail} shifted {delta} min ({origin}→{dest})".format(
+                        flight=row.get("flight", "?"),
+                        tail=row.get("tail", "?"),
+                        origin=row.get("origin", "?"),
+                        dest=row.get("dest", "?"),
+                        delta=delta,
+                    )
+                )
+        else:
+            change_lines = ["- None"]
+        summary_sections.append("**Time adjustments**\n" + "\n".join(change_lines))
+    else:
+        summary_sections.append("**Unscheduled assignments**\n- None")
+        summary_sections.append("**Time adjustments**\n- None")
+
+    if isinstance(reposition_df, pd.DataFrame) and not reposition_df.empty:
+        reposition_lines = []
+        for _, row in reposition_df.iterrows():
+            duration_value = pd.to_numeric(row.get("duration_min"), errors="coerce")
+            if pd.isna(duration_value):
+                duration_int = 0
+            else:
+                duration_int = int(duration_value)
+            reposition_lines.append(
+                "- Tail {tail} positioning {origin}→{dest} between {src} and {dst} ({dur} min)".format(
+                    tail=row.get("tail", "?"),
+                    origin=row.get("origin", "?"),
+                    dest=row.get("dest", "?"),
+                    src=row.get("source_flight", "?"),
+                    dst=row.get("target_flight", "?"),
+                    dur=duration_int,
+                )
+            )
+    else:
+        reposition_lines = ["- None"]
+    summary_sections.append("**Positioning legs created**\n" + "\n".join(reposition_lines))
+
+    for section in summary_sections:
+        st.markdown(section)
+
+
 @st.cache_data(show_spinner=False)
 def airports_index() -> dict[str, dict[str, object]]:
     """Load the airport reference table used for reposition calculations."""
@@ -738,40 +866,45 @@ def render_page() -> None:
 
     flights = legs
 
-    st.markdown("### 60-second diagnostics")
-    # 1) Basic counts
-    st.write(f"n_flights={len(flights)}  n_tails={len(tails)}")
+    with st.expander("Diagnostics", expanded=False):
+        st.markdown("### 60-second diagnostics")
+        # 1) Basic counts
+        st.write(f"n_flights={len(flights)}  n_tails={len(tails)}")
 
-    # 2) Fleet classes present
-    st.write("flight classes:", Counter([f.fleet_class for f in flights]))
-    st.write("tail classes:", Counter([t.fleet_class for t in tails]))
+        # 2) Fleet classes present
+        st.write("flight classes:", Counter([f.fleet_class for f in flights]))
+        st.write("tail classes:", Counter([t.fleet_class for t in tails]))
 
-    # 3) Tail availability sanity
-    bad_avail = [t for t in tails if t.available_to_min <= 0 or t.available_from_min >= t.available_to_min]
-    if bad_avail:
-        st.error(
-            f"TAIL AVAIL ISSUE → {[ (t.id, t.available_from_min, t.available_to_min) for t in bad_avail ]}"
-        )
-
-    # 4) For first few add-line legs, list compatible tails
-    adds = [f for f in flights if not f.current_tail_id]
-    for f in adds[:5]:
-        compatible = [
-            t.id for t in tails if _class_compatible(f.fleet_class, t.fleet_class)
+        # 3) Tail availability sanity
+        bad_avail = [
+            t
+            for t in tails
+            if t.available_to_min <= 0 or t.available_from_min >= t.available_to_min
         ]
-        tail_list = compatible[:10]
-        suffix = "..." if len(compatible) > 10 else ""
-        st.write(
-            f"ADD {f.id}: class={f.fleet_class} → compatible tails: {tail_list}{suffix}"
-        )
+        if bad_avail:
+            st.error(
+                f"TAIL AVAIL ISSUE → {[ (t.id, t.available_from_min, t.available_to_min) for t in bad_avail ]}"
+            )
 
-    # 5) Check per-flight caps (are scheduled legs allowed tiny moves?)
-    sched = [f for f in flights if f.current_tail_id]
-    caps = [(f.id, f.shift_minus_cap, f.shift_plus_cap) for f in sched[:10]]
-    st.write("sample scheduled caps (−/+):", caps)
+        # 4) For first few add-line legs, list compatible tails
+        adds = [f for f in flights if not f.current_tail_id]
+        for f in adds[:5]:
+            compatible = [
+                t.id for t in tails if _class_compatible(f.fleet_class, t.fleet_class)
+            ]
+            tail_list = compatible[:10]
+            suffix = "..." if len(compatible) > 10 else ""
+            st.write(
+                f"ADD {f.id}: class={f.fleet_class} → compatible tails: {tail_list}{suffix}"
+            )
 
-    # 6) Show policy numbers in use
-    st.write("turn_min:", policy.turn_min, " outsource_cost:", policy.outsource_cost)
+        # 5) Check per-flight caps (are scheduled legs allowed tiny moves?)
+        sched = [f for f in flights if f.current_tail_id]
+        caps = [(f.id, f.shift_minus_cap, f.shift_plus_cap) for f in sched[:10]]
+        st.write("sample scheduled caps (−/+):", caps)
+
+        # 6) Show policy numbers in use
+        st.write("turn_min:", policy.turn_min, " outsource_cost:", policy.outsource_cost)
 
     if st.button("Run Solver", type="primary"):
         solver_flights = legs
