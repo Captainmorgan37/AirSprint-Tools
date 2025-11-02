@@ -115,6 +115,7 @@ class LeverPolicy:
     pos_skip_cost: int = 5_000
     pax_skip_cost: int = 1_000_000
     allow_pos_skips: bool = True
+    change_penalty: int = 0
 
 
 class NegotiationScheduler:
@@ -238,6 +239,7 @@ class NegotiationScheduler:
         self.shift_minus: Dict[int, object] = {}
         self.start: Dict[int, object] = {}
         self.swap: Dict[int, object] = {}
+        self.chg: Dict[int, object] = {}
         self.intervals_per_tail: Dict[int, List[object]] = {k: [] for k in T}
         self.order: Dict[Tuple[int, int, int], object] = {}
 
@@ -248,6 +250,11 @@ class NegotiationScheduler:
 
         for i in F:
             flight = self.flights[i]
+            base_tail_idx = (
+                tail_index.get(flight.base_tail_id)
+                if flight.base_tail_id is not None
+                else None
+            )
             self.outsource[i] = m.NewBoolVar(f"outsource[{i}]")
             self.skip[i] = m.NewBoolVar(f"skip[{i}]")
             shift_plus_cap = min(self.policy.max_shift_plus_min, flight.shift_plus_cap)
@@ -255,6 +262,7 @@ class NegotiationScheduler:
             self.shift_plus[i] = m.NewIntVar(0, shift_plus_cap, f"shift_plus[{i}]")
             self.shift_minus[i] = m.NewIntVar(0, shift_minus_cap, f"shift_minus[{i}]")
             self.start[i] = m.NewIntVar(0, self.horizon, f"start[{i}]")
+            self.chg[i] = m.NewBoolVar(f"chg[{i}]")
 
             for k in T:
                 tail = self.tails[k]
@@ -262,22 +270,24 @@ class NegotiationScheduler:
                 self.first[(i, k)] = m.NewBoolVar(f"first[{i},{k}]")
                 if enforce_day_length:
                     self.last[(i, k)] = m.NewBoolVar(f"last[{i},{k}]")
-                if active_tail_ids and tail.id not in active_tail_ids and (
-                    flight.current_tail_id != tail.id
-                ):
-                    m.Add(self.assign[(i, k)] == 0)
-                    continue
-                if not _class_compatible(
+                inactive_tail = (
+                    active_tail_ids
+                    and tail.id not in active_tail_ids
+                    and flight.current_tail_id != tail.id
+                )
+                incompatible_tail = not _class_compatible(
                     flight.fleet_class, tail.fleet_class, flight.allow_any_tail
-                ):
-                    m.Add(self.assign[(i, k)] == 0)
-                    continue
-
-                duration_with_turn = flight.duration_min + self.policy.turn_min
+                )
+                if inactive_tail or incompatible_tail:
+                    if k != base_tail_idx:
+                        m.Add(self.assign[(i, k)] == 0)
+                        continue
+                    m.Add(self.assign[(i, k)] == 0).OnlyEnforceIf(self.chg[i])
+                interval_duration = flight.duration_min
                 interval = m.NewOptionalIntervalVar(
                     self.start[i],
-                    duration_with_turn,
-                    self.start[i] + duration_with_turn,
+                    interval_duration,
+                    self.start[i] + interval_duration,
                     self.assign[(i, k)],
                     f"flight[{i},{k}]",
                 )
@@ -287,10 +297,18 @@ class NegotiationScheduler:
             assigned_any = sum(self.assign[(i, k)] for k in T)
             m.Add(assigned_any + self.outsource[i] + self.skip[i] == 1)
             flight = self.flights[i]
-            m.Add(self.start[i] >= flight.earliest_etd_min - self.shift_minus[i])
-            m.Add(self.start[i] <= flight.latest_etd_min + self.shift_plus[i])
-            m.Add(self.start[i] - flight.preferred_etd_min <= self.shift_plus[i])
-            m.Add(flight.preferred_etd_min - self.start[i] <= self.shift_minus[i])
+            m.Add(self.start[i] >= flight.earliest_etd_min - self.shift_minus[i]).OnlyEnforceIf(
+                self.chg[i]
+            )
+            m.Add(self.start[i] <= flight.latest_etd_min + self.shift_plus[i]).OnlyEnforceIf(
+                self.chg[i]
+            )
+            m.Add(self.start[i] - flight.preferred_etd_min <= self.shift_plus[i]).OnlyEnforceIf(
+                self.chg[i]
+            )
+            m.Add(flight.preferred_etd_min - self.start[i] <= self.shift_minus[i]).OnlyEnforceIf(
+                self.chg[i]
+            )
 
             if not flight.allow_outsource:
                 m.Add(self.outsource[i] == 0)
@@ -300,6 +318,29 @@ class NegotiationScheduler:
 
             m.Add(self.shift_plus[i] == 0).OnlyEnforceIf(self.skip[i])
             m.Add(self.shift_minus[i] == 0).OnlyEnforceIf(self.skip[i])
+
+            base_tail_idx = (
+                tail_index.get(flight.base_tail_id)
+                if flight.base_tail_id is not None
+                else None
+            )
+            base_start = flight.base_start_min
+            if base_tail_idx is None or base_start is None:
+                m.Add(self.chg[i] == 1)
+            else:
+                m.Add(self.assign[(i, base_tail_idx)] == 1).OnlyEnforceIf(
+                    self.chg[i].Not()
+                )
+                for k in T:
+                    if k == base_tail_idx:
+                        continue
+                    m.Add(self.assign[(i, k)] == 0).OnlyEnforceIf(self.chg[i].Not())
+                m.Add(self.start[i] == base_start).OnlyEnforceIf(self.chg[i].Not())
+
+            m.Add(self.outsource[i] == 0).OnlyEnforceIf(self.chg[i].Not())
+            m.Add(self.skip[i] == 0).OnlyEnforceIf(self.chg[i].Not())
+            m.Add(self.shift_plus[i] == 0).OnlyEnforceIf(self.chg[i].Not())
+            m.Add(self.shift_minus[i] == 0).OnlyEnforceIf(self.chg[i].Not())
 
             if flight.current_tail_id:
                 k_cur = tail_index.get(flight.current_tail_id)
@@ -318,20 +359,29 @@ class NegotiationScheduler:
                     else:
                         if not flight.allow_tail_swap:
                             for k in T:
-                                m.Add(self.assign[(i, k)] == (1 if k == k_cur else 0))
+                                m.Add(self.assign[(i, k)] == (1 if k == k_cur else 0)).OnlyEnforceIf(
+                                    self.chg[i]
+                                )
                         else:
                             swap = m.NewBoolVar(f"swap[{i}]")
                             self.swap[i] = swap
 
                             # swap = 0 → stay on current tail
-                            m.Add(self.assign[(i, k_cur)] == 1).OnlyEnforceIf(swap.Not())
+                            m.Add(self.assign[(i, k_cur)] == 1).OnlyEnforceIf(
+                                [swap.Not(), self.chg[i]]
+                            )
                             for k in T:
                                 if k == k_cur:
                                     continue
-                                m.Add(self.assign[(i, k)] == 0).OnlyEnforceIf(swap.Not())
+                                m.Add(self.assign[(i, k)] == 0).OnlyEnforceIf(
+                                    [swap.Not(), self.chg[i]]
+                                )
 
                             # swap = 1 → move off current tail
-                            m.Add(self.assign[(i, k_cur)] == 0).OnlyEnforceIf(swap)
+                            m.Add(self.assign[(i, k_cur)] == 0).OnlyEnforceIf(
+                                [swap, self.chg[i]]
+                            )
+                            m.Add(swap == 0).OnlyEnforceIf(self.chg[i].Not())
 
         for k in T:
             tail = self.tails[k]
@@ -351,11 +401,13 @@ class NegotiationScheduler:
                     flight.fleet_class, tail.fleet_class, flight.allow_any_tail
                 ):
                     continue
-                m.Add(self.start[i] >= tail_ready_min).OnlyEnforceIf(self.assign[(i, k)])
+                m.Add(self.start[i] >= tail_ready_min).OnlyEnforceIf(
+                    [self.assign[(i, k)], self.chg[i]]
+                )
                 m.Add(
                     self.start[i] + flight.duration_min + self.policy.turn_min
                     <= tail.available_to_min
-                ).OnlyEnforceIf(self.assign[(i, k)])
+                ).OnlyEnforceIf([self.assign[(i, k)], self.chg[i]])
 
         o = self.order
         for k in T:
@@ -364,6 +416,41 @@ class NegotiationScheduler:
                     if i == j:
                         continue
                     o[(i, j, k)] = m.NewBoolVar(f"ord[{i},{j},{k}]")
+
+        self.chg_pair: Dict[Tuple[int, int], object] = {}
+        for i in F:
+            for j in F:
+                if i == j:
+                    continue
+                pair = m.NewBoolVar(f"chg_pair[{i},{j}]")
+                self.chg_pair[(i, j)] = pair
+                m.AddImplication(self.chg[i], pair)
+                m.AddImplication(self.chg[j], pair)
+                m.Add(pair <= self.chg[i] + self.chg[j])
+
+        for i in F:
+            flight_i = self.flights[i]
+            base_tail_i = (
+                tail_index.get(flight_i.base_tail_id)
+                if flight_i.base_tail_id is not None
+                else None
+            )
+            base_start_i = flight_i.base_start_min
+            if base_tail_i is None or base_start_i is None:
+                continue
+            for j in F:
+                if i == j:
+                    continue
+                flight_j = self.flights[j]
+                if (
+                    flight_j.base_tail_id != flight_i.base_tail_id
+                    or flight_j.base_start_min is None
+                ):
+                    continue
+                if base_start_i < flight_j.base_start_min:
+                    m.Add(self.order[(i, j, base_tail_i)] == 1).OnlyEnforceIf(
+                        [self.chg[i].Not(), self.chg[j].Not()]
+                    )
 
         if enforce_day_length:
             limit = int(self.policy.max_day_length_min)
@@ -419,7 +506,7 @@ class NegotiationScheduler:
                         + self.flights[i].duration_min
                         + self.policy.turn_min
                         + repo
-                    ).OnlyEnforceIf(o[(i, j, k)])
+                    ).OnlyEnforceIf([o[(i, j, k)], self.chg_pair[(i, j)]])
 
         for k in T:
             tail = self.tails[k]
@@ -443,7 +530,7 @@ class NegotiationScheduler:
                 if self.initial_reposition_min and self.initial_reposition_min[k][i] > 0:
                     repo = self.initial_reposition_min[k][i]
                     m.Add(self.start[i] >= tail_ready_min + repo).OnlyEnforceIf(
-                        [assign_var, first_var]
+                        [assign_var, first_var, self.chg[i]]
                     )
 
         objective_terms = []
@@ -457,6 +544,8 @@ class NegotiationScheduler:
             objective_terms.append(self.outsource[i] * self.policy.outsource_cost)
             objective_terms.append(self.shift_plus[i] * flight.shift_cost_per_min)
             objective_terms.append(self.shift_minus[i] * flight.shift_cost_per_min)
+            if self.policy.change_penalty:
+                objective_terms.append(self.chg[i] * self.policy.change_penalty)
             if i in self.swap:
                 objective_terms.append(self.swap[i] * self.policy.tail_swap_cost)
             for k in T:
