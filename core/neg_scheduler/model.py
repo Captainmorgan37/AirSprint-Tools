@@ -678,7 +678,9 @@ class NegotiationScheduler:
                     ready_min = max(tail.available_from_min, 0)
                     if tail.last_position_ready_min is not None:
                         ready_min = max(ready_min, tail.last_position_ready_min)
-                    repo_start = ready_min
+                    first_start = ordered[0][1]
+                    latest_start = first_start - self.policy.turn_min - repo
+                    repo_start = max(ready_min, latest_start)
                     reposition_rows.append(
                         {
                             "tail": tail_id,
@@ -696,11 +698,15 @@ class NegotiationScheduler:
                 if repo and repo > 0:
                     prev_flight = self.flights[prev_idx]
                     next_flight = self.flights[next_idx]
-                    repo_start = (
+                    prev_ready = (
                         prev_start
                         + prev_flight.duration_min
                         + self.policy.turn_min
                     )
+                    latest_start = (
+                        next_start - self.policy.turn_min - repo
+                    )
+                    repo_start = max(prev_ready, latest_start)
                     reposition_rows.append(
                         {
                             "tail": tail_id,
