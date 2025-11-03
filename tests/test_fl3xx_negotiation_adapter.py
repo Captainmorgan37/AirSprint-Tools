@@ -35,8 +35,8 @@ def test_tail_location_falls_back_to_first_departure_origin():
     assert len(tails) == 1
     tail = tails[0]
     assert tail.last_position_airport == "CYYZ"
-    assert tail.last_position_ready_min == 120
-    assert tail.available_from_min == 120
+    assert tail.last_position_ready_min is None
+    assert tail.available_from_min == 0
 
 
 def test_tail_location_prefers_recent_arrival_over_fallback():
