@@ -645,8 +645,18 @@ def _render_solution_summary(solution: dict[str, object]) -> None:
             pd.to_numeric(working_df["shift_minus_extra"], errors="coerce").fillna(0).astype(int)
         )
 
+        if "changed" in working_df.columns:
+            changed_mask = (
+                pd.to_numeric(working_df["changed"], errors="coerce")
+                .fillna(0)
+                .astype(int)
+                .astype(bool)
+            )
+        else:
+            changed_mask = pd.Series(True, index=working_df.index)
         time_shift_df = working_df[
-            (working_df["shift_plus"] > 0) | (working_df["shift_minus"] > 0)
+            changed_mask
+            & ((working_df["shift_plus"] > 0) | (working_df["shift_minus"] > 0))
         ]
         if not time_shift_df.empty:
             change_lines = []
