@@ -17,6 +17,7 @@ _NOTE_KEYS: Tuple[str, ...] = (
     "booking_note",
     "bookingnote",
     "booking",
+    "notes",
 )
 
 

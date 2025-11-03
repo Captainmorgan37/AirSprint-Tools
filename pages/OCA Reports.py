@@ -222,4 +222,4 @@ if submitted:
                         "days": int(day_count),
                     }
                 )
-                st.rerun()
+                st.experimental_rerun()

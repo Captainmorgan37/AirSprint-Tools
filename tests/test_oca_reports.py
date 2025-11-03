@@ -110,6 +110,19 @@ def test_skips_flights_below_threshold():
     assert alerts == []
 
 
+def test_extracts_leg_notes_field():
+    block_off = dt.datetime(2025, 10, 2, 1, 0, tzinfo=dt.timezone.utc)
+    block_on = block_off + dt.timedelta(hours=5)
+    flights = [_flight(block_off=block_off, block_on=block_on)]
+
+    payloads = {"Q1": {"notes": "Purpose of travel: Example"}}
+
+    alerts, _metadata, diagnostics = _run_report(flights, leg_payloads=payloads)
+
+    assert diagnostics["notes_found"] == 1
+    assert alerts[0].booking_note == "Purpose of travel: Example"
+
+
 def test_format_duration_label_handles_values():
     assert format_duration_label(125) == "2h 05m"
     assert format_duration_label(-30) == "-0h 30m"
