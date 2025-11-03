@@ -29,6 +29,8 @@ class Flight:
     allow_outsource: bool = True
     shift_plus_cap: int = 90
     shift_minus_cap: int = 30
+    original_shift_plus_cap: Optional[int] = None
+    original_shift_minus_cap: Optional[int] = None
     shift_cost_per_min: int = 2
     intent: str = "PAX"
     must_cover: bool | None = None
@@ -54,6 +56,10 @@ class Flight:
             raise ValueError("shift_minus_cap must be non-negative")
         if self.shift_cost_per_min < 0:
             raise ValueError("shift_cost_per_min must be non-negative")
+        if self.original_shift_plus_cap is not None and self.original_shift_plus_cap < 0:
+            raise ValueError("original_shift_plus_cap must be non-negative when provided")
+        if self.original_shift_minus_cap is not None and self.original_shift_minus_cap < 0:
+            raise ValueError("original_shift_minus_cap must be non-negative when provided")
 
         intent = (self.intent or "PAX").upper()
         if intent not in {"PAX", "POS"}:
