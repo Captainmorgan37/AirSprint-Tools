@@ -74,6 +74,7 @@ class MaxFlightTimeAlert:
 
     flight_id: Any
     quote_id: Any
+    flight_reference: Optional[str]
     booking_reference: Optional[str]
     aircraft_category: Optional[str]
     pax_count: Optional[int]
@@ -94,6 +95,7 @@ class MaxFlightTimeAlert:
         return {
             "flight_id": self.flight_id,
             "quote_id": self.quote_id,
+            "flight_reference": self.flight_reference,
             "booking_reference": self.booking_reference,
             "aircraft_category": self.aircraft_category,
             "pax_count": self.pax_count,
@@ -118,6 +120,7 @@ class ZfwFlightCheck:
 
     flight_id: Any
     quote_id: Any
+    flight_reference: Optional[str]
     booking_reference: Optional[str]
     aircraft_category: Optional[str]
     pax_count: Optional[int]
@@ -136,6 +139,7 @@ class ZfwFlightCheck:
         return {
             "flight_id": self.flight_id,
             "quote_id": self.quote_id,
+            "flight_reference": self.flight_reference,
             "booking_reference": self.booking_reference,
             "aircraft_category": self.aircraft_category,
             "pax_count": self.pax_count,
@@ -238,6 +242,24 @@ def _extract_booking_reference(row: Mapping[str, Any]) -> Optional[str]:
         if isinstance(value, str) and value.strip():
             return value.strip()
     return None
+
+
+def _extract_flight_reference(row: Mapping[str, Any]) -> Optional[str]:
+    for key in (
+        "flightReference",
+        "flight_reference",
+        "flightReferenceCode",
+        "flight_reference_code",
+        "flightreference",
+    ):
+        value = row.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    # Fallback to the booking reference when a dedicated flight reference is
+    # not present in the payload. This preserves backwards compatibility with
+    # historical data where the booking reference doubled as the reference code.
+    return _extract_booking_reference(row)
 
 
 def _extract_pax_count(row: Mapping[str, Any]) -> Optional[int]:
@@ -350,6 +372,7 @@ def evaluate_flights_for_max_time(
             alert = MaxFlightTimeAlert(
                 flight_id=row.get("flightId"),
                 quote_id=row.get("quoteId"),
+                flight_reference=_extract_flight_reference(row),
                 booking_reference=_extract_booking_reference(row),
                 aircraft_category=row.get("aircraftCategory"),
                 pax_count=pax_count,
@@ -472,6 +495,7 @@ def evaluate_flights_for_zfw_check(
             item = ZfwFlightCheck(
                 flight_id=row.get("flightId"),
                 quote_id=row.get("quoteId"),
+                flight_reference=_extract_flight_reference(row),
                 booking_reference=_extract_booking_reference(row),
                 aircraft_category=row.get("aircraftCategory"),
                 pax_count=pax_count,

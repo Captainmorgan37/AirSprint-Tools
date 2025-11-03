@@ -33,6 +33,7 @@ def _flight(
         "airportFrom": "CYUL",
         "airportTo": "CYYZ",
         "registrationNumber": "C-GFSD",
+        "flightReference": "REF-100",
         "bookingReference": "BK-100",
         "flightNumberCompany": "209-100",
     }
@@ -110,6 +111,7 @@ def test_identifies_over_max_time_flight():
     assert len(alerts) == 1
     alert = alerts[0]
     assert alert.overage_minutes == 10
+    assert alert.flight_reference == "REF-100"
     assert alert.booking_note_present is True
     assert alert.booking_note_confirms_fpl is True
     assert alert.booking_note == "FPL RUN BY OCA 2025-10-01"
@@ -191,6 +193,7 @@ def test_zfw_report_identifies_threshold_pax_and_confirms_note():
     assert len(items) == 1
     item = items[0]
     assert item.pax_threshold == 6
+    assert item.flight_reference == "REF-100"
     assert item.booking_note_present is True
     assert item.booking_note_confirms_zfw is True
     assert item.booking_note.startswith("ZFW")
