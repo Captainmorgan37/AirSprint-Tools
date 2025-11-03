@@ -157,7 +157,7 @@ class NegotiationScheduler:
         self.day_start: Dict[int, object] = {}
         self.day_end: Dict[int, object] = {}
         self.first: Dict[Tuple[int, int], object] = {}
-        self.first_changed: Dict[Tuple[int, int], object] = {}
+        self.first_reposition: Dict[Tuple[int, int], object] = {}
         self.last: Dict[Tuple[int, int], object] = {}
         self._build()
 
@@ -538,6 +538,8 @@ class NegotiationScheduler:
                     lhs = o[(i, j, k)] + o[(j, i, k)]
                     m.Add(lhs >= self.assign[(i, k)] + self.assign[(j, k)] - 1)
                     m.Add(lhs <= self.assign[(i, k)] + self.assign[(j, k)])
+                    m.Add(o[(i, j, k)] <= self.assign[(i, k)])
+                    m.Add(o[(i, j, k)] <= self.assign[(j, k)])
 
                     repo = self.reposition_min[i][j]
                     m.Add(
@@ -570,13 +572,9 @@ class NegotiationScheduler:
                 if self.initial_reposition_min and self.initial_reposition_min[k][i] > 0:
                     repo = self.initial_reposition_min[k][i]
                     m.Add(self.start[i] >= tail_ready_min + repo).OnlyEnforceIf(
-                        [assign_var, first_var, self.chg[i]]
+                        [assign_var, first_var]
                     )
-                    gate = m.NewBoolVar(f"first_changed[{i},{k}]")
-                    self.first_changed[(i, k)] = gate
-                    m.Add(gate <= first_var)
-                    m.Add(gate <= self.chg[i])
-                    m.Add(gate >= first_var + self.chg[i] - 1)
+                    self.first_reposition[(i, k)] = first_var
 
         objective_terms = []
         for i in F:
@@ -640,11 +638,11 @@ class NegotiationScheduler:
                 for i in F:
                     repo = self.initial_reposition_min[k][i]
                     if repo > 0:
-                        gate = self.first_changed.get((i, k))
-                        if gate is None:
+                        first_var = self.first_reposition.get((i, k))
+                        if first_var is None:
                             continue
                         objective_terms.append(
-                            gate * repo * self.policy.reposition_cost_per_min
+                            first_var * repo * self.policy.reposition_cost_per_min
                         )
 
         objective_expr = sum(objective_terms)
