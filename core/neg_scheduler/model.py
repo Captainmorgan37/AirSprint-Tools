@@ -446,8 +446,7 @@ class NegotiationScheduler:
                     continue
                 m.Add(self.start[i] >= tail_ready_min).OnlyEnforceIf(self.assign[(i, k)])
                 m.Add(
-                    self.start[i] + flight.duration_min + self.policy.turn_min
-                    <= tail.available_to_min
+                    self.start[i] + flight.duration_min <= tail.available_to_min
                 ).OnlyEnforceIf([self.assign[(i, k)], self.chg[i]])
 
         o = self.order
