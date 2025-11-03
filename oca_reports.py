@@ -61,6 +61,12 @@ _CATEGORY_ALIASES = {
     "E550": "E545",
 }
 
+_ZFW_PAX_THRESHOLDS: Dict[str, int] = {
+    "C25A": 5,
+    "C25B": 6,
+    "E545": 9,
+}
+
 
 @dataclass(frozen=True)
 class MaxFlightTimeAlert:
@@ -68,6 +74,7 @@ class MaxFlightTimeAlert:
 
     flight_id: Any
     quote_id: Any
+    flight_reference: Optional[str]
     booking_reference: Optional[str]
     aircraft_category: Optional[str]
     pax_count: Optional[int]
@@ -88,6 +95,7 @@ class MaxFlightTimeAlert:
         return {
             "flight_id": self.flight_id,
             "quote_id": self.quote_id,
+            "flight_reference": self.flight_reference,
             "booking_reference": self.booking_reference,
             "aircraft_category": self.aircraft_category,
             "pax_count": self.pax_count,
@@ -103,6 +111,48 @@ class MaxFlightTimeAlert:
             "booking_note": self.booking_note,
             "booking_note_present": self.booking_note_present,
             "booking_note_confirms_fpl": self.booking_note_confirms_fpl,
+        }
+
+
+@dataclass(frozen=True)
+class ZfwFlightCheck:
+    """Data describing flights that require a ZFW confirmation."""
+
+    flight_id: Any
+    quote_id: Any
+    flight_reference: Optional[str]
+    booking_reference: Optional[str]
+    aircraft_category: Optional[str]
+    pax_count: Optional[int]
+    pax_threshold: Optional[int]
+    departure_utc: Optional[str]
+    arrival_utc: Optional[str]
+    airport_from: Optional[str]
+    airport_to: Optional[str]
+    registration: Optional[str]
+    flight_number: Optional[str]
+    booking_note: Optional[str]
+    booking_note_present: bool
+    booking_note_confirms_zfw: bool
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {
+            "flight_id": self.flight_id,
+            "quote_id": self.quote_id,
+            "flight_reference": self.flight_reference,
+            "booking_reference": self.booking_reference,
+            "aircraft_category": self.aircraft_category,
+            "pax_count": self.pax_count,
+            "pax_threshold": self.pax_threshold,
+            "departure_utc": self.departure_utc,
+            "arrival_utc": self.arrival_utc,
+            "airport_from": self.airport_from,
+            "airport_to": self.airport_to,
+            "registration": self.registration,
+            "flight_number": self.flight_number,
+            "booking_note": self.booking_note,
+            "booking_note_present": self.booking_note_present,
+            "booking_note_confirms_zfw": self.booking_note_confirms_zfw,
         }
 
 
@@ -192,6 +242,24 @@ def _extract_booking_reference(row: Mapping[str, Any]) -> Optional[str]:
         if isinstance(value, str) and value.strip():
             return value.strip()
     return None
+
+
+def _extract_flight_reference(row: Mapping[str, Any]) -> Optional[str]:
+    for key in (
+        "flightReference",
+        "flight_reference",
+        "flightReferenceCode",
+        "flight_reference_code",
+        "flightreference",
+    ):
+        value = row.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    # Fallback to the booking reference when a dedicated flight reference is
+    # not present in the payload. This preserves backwards compatibility with
+    # historical data where the booking reference doubled as the reference code.
+    return _extract_booking_reference(row)
 
 
 def _extract_pax_count(row: Mapping[str, Any]) -> Optional[int]:
@@ -304,6 +372,7 @@ def evaluate_flights_for_max_time(
             alert = MaxFlightTimeAlert(
                 flight_id=row.get("flightId"),
                 quote_id=row.get("quoteId"),
+                flight_reference=_extract_flight_reference(row),
                 booking_reference=_extract_booking_reference(row),
                 aircraft_category=row.get("aircraftCategory"),
                 pax_count=pax_count,
@@ -367,8 +436,132 @@ def evaluate_flights_for_max_time(
     return alerts, metadata, diagnostics
 
 
+def evaluate_flights_for_zfw_check(
+    config: Fl3xxApiConfig,
+    *,
+    from_date: date,
+    to_date: date,
+    fetch_flights_fn=fetch_flights,
+    fetch_leg_details_fn=fetch_leg_details,
+) -> Tuple[List[ZfwFlightCheck], Dict[str, Any], Dict[str, Any]]:
+    """Return PAX flights that require a Zero Fuel Weight note review."""
+
+    if to_date <= from_date:
+        raise FlightDataError("The end date must be after the start date for the OCA report window.")
+
+    flights, metadata = fetch_flights_fn(config, from_date=from_date, to_date=to_date)
+
+    diagnostics: Dict[str, Any] = {
+        "total_flights": len(flights),
+        "pax_flights": 0,
+        "threshold_applicable": 0,
+        "flagged_flights": 0,
+        "missing_pax_count": 0,
+        "notes_requested": 0,
+        "notes_found": 0,
+        "zfw_confirmations": 0,
+        "note_errors": 0,
+        "note_error_messages": [],
+    }
+
+    items: List[ZfwFlightCheck] = []
+
+    session: Optional[requests.Session] = None
+
+    try:
+        for row in flights:
+            flight_type = str(row.get("flightType") or "").upper()
+            if flight_type != "PAX":
+                continue
+            diagnostics["pax_flights"] += 1
+
+            pax_count = _extract_pax_count(row)
+            if pax_count is None:
+                diagnostics["missing_pax_count"] += 1
+                continue
+
+            normalized_category = _normalise_category(row.get("aircraftCategory"))
+            if normalized_category is None:
+                continue
+
+            threshold = _ZFW_PAX_THRESHOLDS.get(normalized_category)
+            if threshold is None:
+                continue
+            diagnostics["threshold_applicable"] += 1
+
+            if pax_count < threshold:
+                continue
+
+            item = ZfwFlightCheck(
+                flight_id=row.get("flightId"),
+                quote_id=row.get("quoteId"),
+                flight_reference=_extract_flight_reference(row),
+                booking_reference=_extract_booking_reference(row),
+                aircraft_category=row.get("aircraftCategory"),
+                pax_count=pax_count,
+                pax_threshold=threshold,
+                departure_utc=_extract_datetime_text(
+                    row,
+                    ("blocksoffestimated", "blockOffEstUTC", "realDateOFF", "realDateOUT", "etd"),
+                ),
+                arrival_utc=_extract_datetime_text(
+                    row,
+                    ("blocksonestimated", "blockOnEstUTC", "realDateON", "realDateIN", "eta"),
+                ),
+                airport_from=row.get("airportFrom"),
+                airport_to=row.get("airportTo"),
+                registration=row.get("registrationNumber"),
+                flight_number=row.get("flightNumberCompany") or row.get("flightNumber"),
+                booking_note=None,
+                booking_note_present=False,
+                booking_note_confirms_zfw=False,
+            )
+
+            quote_id = item.quote_id
+            if quote_id:
+                if session is None:
+                    session = requests.Session()
+                try:
+                    payload = fetch_leg_details_fn(config, quote_id, session=session)
+                except Exception as exc:  # pragma: no cover - network/runtime issues
+                    diagnostics["note_errors"] += 1
+                    diagnostics["note_error_messages"].append(str(exc))
+                else:
+                    diagnostics["notes_requested"] += 1
+                    note = _extract_booking_note(payload)
+                    if note:
+                        diagnostics["notes_found"] += 1
+                        note_upper = note.upper()
+                        confirmation = "ZFW" in note_upper and "OK WITH CURRENT PAX/BAGGAGE" in note_upper
+                        if confirmation:
+                            diagnostics["zfw_confirmations"] += 1
+                        item = ZfwFlightCheck(
+                            **{
+                                **item.as_dict(),
+                                "booking_note": note,
+                                "booking_note_present": True,
+                                "booking_note_confirms_zfw": confirmation,
+                            }
+                        )
+
+            items.append(item)
+            diagnostics["flagged_flights"] += 1
+    finally:
+        if session is not None:
+            try:
+                session.close()
+            except AttributeError:  # pragma: no cover - defensive cleanup
+                pass
+
+    items.sort(key=lambda a: (a.departure_utc or "", a.flight_id or 0))
+
+    return items, metadata, diagnostics
+
+
 __all__ = [
     "MaxFlightTimeAlert",
+    "ZfwFlightCheck",
     "evaluate_flights_for_max_time",
+    "evaluate_flights_for_zfw_check",
     "format_duration_label",
 ]
