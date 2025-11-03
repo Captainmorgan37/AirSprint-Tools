@@ -249,15 +249,21 @@ def _initial_tail_snapshot(
     for tail_id, fleet_class in sorted(tail_classes.items()):
         last_airport: str | None = None
         ready_min: int | None = None
+        available_from = 0
 
         if tail_id in tail_positions:
             last_airport, ready_min = tail_positions[tail_id]
+            if ready_min is not None:
+                available_from = max(0, min(ready_min, 24 * 60))
         elif tail_id in fallback_positions:
-            last_airport, ready_min = fallback_positions[tail_id]
-
-        available_from = 0
-        if ready_min is not None:
-            available_from = max(0, min(ready_min, 24 * 60))
+            last_airport, _first_departure_min = fallback_positions[tail_id]
+            # When we only know about a tail because of future departures,
+            # assume it's staged at that origin and available for additional
+            # flying from the start of the window. The downstream solver will
+            # ensure we still honour the published departure when chaining
+            # missions onto the tail.
+            ready_min = None
+            available_from = 0
 
         tails.append(
             Tail(
