@@ -26,6 +26,8 @@ from integrations.fl3xx_adapter import NegotiationData, fetch_negotiation_data, 
 _FL3XX_SNAPSHOT_KEY = "negotiation_optimizer_fl3xx_snapshot"
 _OWNER_OPTIONS_KEY = "negotiation_optimizer_owner_options"
 _FLEX_PROTECTED_KEY = "negotiation_optimizer_flex_protected"
+_SOLVER_TIME_LIMIT_KEY = "negotiation_optimizer_solver_time_limit"
+_DEFAULT_SOLVER_TIME_LIMIT = 5
 
 
 def _store_fl3xx_snapshot(data: NegotiationData, day: date) -> None:
@@ -1057,6 +1059,20 @@ def render_page() -> None:
         # 6) Show policy numbers in use
         st.write("turn_min:", policy.turn_min, " outsource_cost:", policy.outsource_cost)
 
+    stored_time_limit = int(st.session_state.get(_SOLVER_TIME_LIMIT_KEY, _DEFAULT_SOLVER_TIME_LIMIT))
+    time_limit_s = int(
+        st.slider(
+            "Solver time limit (seconds)",
+            min_value=5,
+            max_value=120,
+            value=min(max(stored_time_limit, 5), 120),
+            step=5,
+            help="Controls how long the CP-SAT solver can spend searching for each solution.",
+        )
+    )
+    st.session_state[_SOLVER_TIME_LIMIT_KEY] = time_limit_s
+    st.caption(f"Each solver attempt will run for up to {time_limit_s} seconds.")
+
     if st.button("Run Solver", type="primary"):
         solver_flights = legs
         if selected_unscheduled_ids is not None:
@@ -1148,7 +1164,7 @@ def render_page() -> None:
                 reposition_min=repo_matrix,
                 initial_reposition_min=initial_repo_matrix,
             )
-            status, solutions = scheduler.solve(top_n=5)
+            status, solutions = scheduler.solve(time_limit_s=time_limit_s, top_n=5)
         except Exception as exc:  # pragma: no cover - surfaced in UI
             st.error(f"Solver error: {exc}")
             return
