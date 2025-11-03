@@ -728,7 +728,6 @@ def render_page() -> None:
     with st.sidebar:
         st.header("Inputs")
         dataset = st.selectbox("Data source", ("Demo", "FL3XX"), index=1)
-        schedule_day = st.date_input("Schedule day (08Z window)", date.today())
         turn_min = st.slider("Turn buffer (min)", 0, 120, 45, 5)
         max_plus = st.slider("Max shift + (min)", 0, 240, 30, 5)
         max_minus = st.slider("Max shift - (min)", 0, 180, 30, 5)
@@ -782,6 +781,10 @@ def render_page() -> None:
             help="Keep selected owners at standard ± limits when Flex PAX is on.",
         )
 
+    controls_col, action_col = st.columns([3, 1])
+    with controls_col:
+        schedule_day = st.date_input("Schedule day (08Z window)", date.today())
+    with action_col:
         if dataset == "FL3XX":
             fetch_requested = st.button("Fetch FL3XX data", use_container_width=True)
             snapshot_day = snapshot.get("day") if snapshot else None
