@@ -538,6 +538,8 @@ class NegotiationScheduler:
                     lhs = o[(i, j, k)] + o[(j, i, k)]
                     m.Add(lhs >= self.assign[(i, k)] + self.assign[(j, k)] - 1)
                     m.Add(lhs <= self.assign[(i, k)] + self.assign[(j, k)])
+                    m.Add(o[(i, j, k)] <= self.assign[(i, k)])
+                    m.Add(o[(i, j, k)] <= self.assign[(j, k)])
 
                     repo = self.reposition_min[i][j]
                     m.Add(

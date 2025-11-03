@@ -341,6 +341,62 @@ def test_reposition_time_enforced_in_schedule():
     assert solution["objective"] == pytest.approx(expected_cost)
 
 
+def test_first_assignment_cannot_ignore_initial_position_with_unassigned_legs():
+    flights = [
+        Flight(
+            id="F1",
+            origin="CYYC",
+            dest="CYVR",
+            duration_min=60,
+            earliest_etd_min=30,
+            latest_etd_min=30,
+            preferred_etd_min=30,
+            fleet_class="CJ",
+            owner_id="OWN1",
+        ),
+        Flight(
+            id="F2",
+            origin="CYVR",
+            dest="CYYC",
+            duration_min=60,
+            earliest_etd_min=12 * 60,
+            latest_etd_min=12 * 60,
+            preferred_etd_min=12 * 60,
+            fleet_class="LEG",
+            owner_id="OWN2",
+        ),
+    ]
+    tails = [
+        Tail(
+            id="C-GCJ1",
+            fleet_class="CJ",
+            available_from_min=0,
+            available_to_min=24 * 60,
+            last_position_airport="KDEN",
+            last_position_ready_min=0,
+        )
+    ]
+
+    policy = LeverPolicy(turn_min=30, pos_skip_cost=50_000)
+    scheduler = NegotiationScheduler(
+        flights,
+        tails,
+        policy,
+        reposition_min=[[0, 0], [0, 0]],
+        initial_reposition_min=[[120, 0]],
+    )
+    status, solutions = scheduler.solve()
+
+    cp = scheduler.cp_model
+    assert status in (cp.OPTIMAL, cp.FEASIBLE)
+    assert solutions
+    solution = solutions[0]
+
+    assert solution["assigned"].empty
+    assert not solution["outsourced"].empty
+    assert list(solution["outsourced"]["flight"]) == ["F1"]
+
+
 def test_scheduler_handles_ragged_reposition_matrix():
     flights, tails = _three_leg_single_tail_scenario()
     flights = flights[:2]
