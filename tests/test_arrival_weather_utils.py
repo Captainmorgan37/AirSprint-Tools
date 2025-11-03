@@ -6,7 +6,9 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 from arrival_weather_utils import (
     _combine_highlight_levels,
     _get_ceiling_highlight,
+    _get_visibility_highlight,
     _parse_ceiling_value,
+    _parse_visibility_value,
 )
 
 
@@ -24,3 +26,12 @@ def test_combine_highlight_levels_prioritises_highest_severity():
     assert _combine_highlight_levels([None, "yellow", None]) == "yellow"
     assert _combine_highlight_levels(["yellow", "red"]) == "red"
     assert _combine_highlight_levels([None, None]) is None
+
+
+def test_parse_visibility_handles_mixed_fractions():
+    assert _parse_visibility_value("2 1/2SM") == 2.5
+    assert _parse_visibility_value("1/2SM 2 1/2SM") == 2.5
+
+
+def test_visibility_highlight_uses_combined_value():
+    assert _get_visibility_highlight("2 1/2SM") == "yellow"

@@ -341,6 +341,16 @@ class MissingQualificationAlert:
 
 
 @dataclass(frozen=True)
+class PreflightConflictAlert:
+    """Details about a preflight conflict surfaced by FL3XX."""
+
+    seat: Optional[str]
+    category: str
+    status: str
+    description: str
+
+
+@dataclass(frozen=True)
 class PreflightCrewCheckin:
     """Normalised check-in information for a crew member."""
 
@@ -534,6 +544,64 @@ def extract_missing_qualifications_from_preflight(
                             qualification_name=cleaned_name,
                         )
                     )
+
+    return results
+
+
+def _extract_conflict_description(message: Mapping[str, Any]) -> str:
+    for key in ("name", "message", "description", "details"):
+        value = message.get(key)
+        if isinstance(value, str):
+            text = value.strip()
+            if text:
+                return text
+    return json.dumps(message, default=str)
+
+
+def extract_conflicts_from_preflight(preflight_payload: Any) -> List[PreflightConflictAlert]:
+    """Return any preflight conflicts surfaced in the crew assignment payload."""
+
+    results: List[PreflightConflictAlert] = []
+
+    if not isinstance(preflight_payload, Mapping):
+        return results
+
+    crew_assign = preflight_payload.get("crewAssign")
+    if not isinstance(crew_assign, Mapping):
+        return results
+
+    def _extract_from_messages(messages: Any, seat: Optional[str]) -> None:
+        if not isinstance(messages, list):
+            return
+        for message in messages:
+            if not isinstance(message, Mapping):
+                continue
+            msg_type = str(message.get("type") or "").strip().upper()
+            msg_status = str(message.get("status") or "").strip().upper()
+            if msg_type != "FLIGHT" or msg_status != "CONFLICT":
+                continue
+            description = _extract_conflict_description(message)
+            results.append(
+                PreflightConflictAlert(
+                    seat=seat,
+                    category=msg_type,
+                    status=msg_status,
+                    description=description,
+                )
+            )
+
+    general_warnings = crew_assign.get("warnings")
+    if isinstance(general_warnings, Mapping):
+        _extract_from_messages(general_warnings.get("messages"), None)
+
+    for seat_key, seat_label in (("commander", "PIC"), ("firstOfficer", "SIC")):
+        crew_block = crew_assign.get(seat_key)
+        if not isinstance(crew_block, Mapping):
+            continue
+        warnings_block = crew_block.get("warnings")
+        if not isinstance(warnings_block, Mapping):
+            continue
+        _extract_from_messages(warnings_block.get("messages"), seat_label)
 
     return results
 
@@ -1134,9 +1202,11 @@ __all__ = [
     "DutySnapshot",
     "DutySnapshotPilot",
     "MissingQualificationAlert",
+    "PreflightConflictAlert",
     "PreflightCrewCheckin",
     "PreflightChecklistStatus",
     "parse_postflight_payload",
     "parse_preflight_payload",
     "extract_missing_qualifications_from_preflight",
+    "extract_conflicts_from_preflight",
 ]
