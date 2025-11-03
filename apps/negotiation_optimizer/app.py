@@ -17,6 +17,7 @@ import streamlit as st
 from Home import configure_page, password_gate, render_sidebar
 from core.airports import load_airports
 from core.neg_scheduler import LeverPolicy, NegotiationScheduler
+from core.neg_scheduler.contracts import Flight, Tail
 from core.neg_scheduler.model import _class_compatible
 from core.reposition import build_initial_reposition_matrix, build_reposition_matrix
 from flight_leg_utils import FlightDataError
@@ -28,6 +29,148 @@ _OWNER_OPTIONS_KEY = "negotiation_optimizer_owner_options"
 _FLEX_PROTECTED_KEY = "negotiation_optimizer_flex_protected"
 _SOLVER_TIME_LIMIT_KEY = "negotiation_optimizer_solver_time_limit"
 _DEFAULT_SOLVER_TIME_LIMIT = 5
+
+
+def _solve_with_inputs(
+    flights: list[Flight],
+    tails: list[Tail],
+    policy: LeverPolicy,
+    reposition_min: list[list[int]] | None,
+    initial_reposition_min: list[list[int]] | None,
+    *,
+    time_limit_s: int | None,
+    top_n: int = 5,
+):
+    """Run the solver with the provided inputs and return the status/solutions."""
+
+    scheduler = NegotiationScheduler(
+        flights,
+        tails,
+        policy,
+        reposition_min=reposition_min,
+        initial_reposition_min=initial_reposition_min,
+    )
+    return scheduler.solve(time_limit_s=time_limit_s, top_n=top_n)
+
+
+def _diagnostic_time_limit(time_limit_s: int | None) -> int:
+    """Derive a short time limit for diagnostic runs."""
+
+    if time_limit_s is None or time_limit_s <= 0:
+        return min(10, _DEFAULT_SOLVER_TIME_LIMIT)
+    return max(3, min(int(time_limit_s), 10))
+
+
+def _diagnose_infeasibility(
+    flights: list[Flight],
+    tails: list[Tail],
+    policy: LeverPolicy,
+    reposition_min: list[list[int]] | None,
+    initial_reposition_min: list[list[int]] | None,
+    *,
+    time_limit_s: int | None,
+):
+    """Attempt targeted relaxations to explain infeasibility."""
+
+    results: list[str] = []
+    diagnostic_limit = _diagnostic_time_limit(time_limit_s)
+
+    def _run_variant(
+        variant_flights: list[Flight],
+        variant_tails: list[Tail],
+        variant_policy: LeverPolicy,
+    ) -> bool:
+        _, solutions = _solve_with_inputs(
+            variant_flights,
+            variant_tails,
+            variant_policy,
+            reposition_min,
+            initial_reposition_min,
+            time_limit_s=diagnostic_limit,
+            top_n=1,
+        )
+        return bool(solutions)
+
+    # Allow outsourcing for must-cover PAX as a feasibility fallback.
+    pax_outsource_adjusted: list[Flight] = []
+    changed = False
+    for flight in flights:
+        if flight.must_cover and not flight.allow_outsource:
+            pax_outsource_adjusted.append(replace(flight, allow_outsource=True))
+            changed = True
+        else:
+            pax_outsource_adjusted.append(flight)
+    if changed and _run_variant(pax_outsource_adjusted, tails, policy):
+        results.append(
+            "Allowing outsourcing for must-cover PAX unlocks a solution. "
+            "At least one passenger leg has no viable in-house assignment under the current constraints."
+        )
+
+    # Unlock grandfathered spacing by treating scheduled legs as movable.
+    unlocked: list[Flight] = []
+    changed = False
+    for flight in flights:
+        if (
+            flight.base_tail_id is not None
+            or flight.base_start_min is not None
+            or (flight.current_tail_id and not flight.allow_tail_swap)
+        ):
+            unlocked.append(
+                replace(
+                    flight,
+                    base_tail_id=None,
+                    base_start_min=None,
+                    allow_tail_swap=True,
+                )
+            )
+            changed = True
+        else:
+            unlocked.append(flight)
+    if changed and _run_variant(unlocked, tails, policy):
+        results.append(
+            "Treating scheduled legs as changeable restores feasibility. "
+            "Grandfathered neighbours are preventing a workable insertion."
+        )
+
+    # Reduce turn buffer to detect pure spacing conflicts.
+    if policy.turn_min > 10:
+        relaxed_turn = replace(policy, turn_min=10)
+        if _run_variant(flights, tails, relaxed_turn):
+            results.append(
+                "Reducing the turn buffer to 10 minutes makes the model feasible, indicating tight turn/reposition spacing."
+            )
+
+    # Disable duty-day enforcement if it is active.
+    if policy.max_day_length_min is not None:
+        relaxed_day = replace(policy, max_day_length_min=None)
+        if _run_variant(flights, tails, relaxed_day):
+            results.append(
+                "Removing the duty-day cap restores feasibility. Tail availability or duty span limits are binding."
+            )
+
+    # Extend tail availability to the full day to check for window constraints.
+    extended_tails: list[Tail] = []
+    changed = False
+    for tail in tails:
+        new_from = 0 if tail.available_from_min > 0 else tail.available_from_min
+        new_to = 24 * 60 if tail.available_to_min < 24 * 60 else tail.available_to_min
+        if new_from != tail.available_from_min or new_to != tail.available_to_min:
+            extended_tails.append(
+                replace(
+                    tail,
+                    available_from_min=new_from,
+                    available_to_min=new_to,
+                )
+            )
+            changed = True
+        else:
+            extended_tails.append(tail)
+    if changed and _run_variant(flights, extended_tails, policy):
+        results.append(
+            "Expanding tail availability windows unlocks a schedule. Tail readiness or end-of-day bounds are too restrictive."
+        )
+
+    return results
 
 
 def _store_fl3xx_snapshot(data: NegotiationData, day: date) -> None:
@@ -1157,20 +1300,38 @@ def render_page() -> None:
                 )
                 return
 
-            scheduler = NegotiationScheduler(
+            status, solutions = _solve_with_inputs(
                 solver_flights,
                 tails,
                 policy,
-                reposition_min=repo_matrix,
-                initial_reposition_min=initial_repo_matrix,
+                repo_matrix,
+                initial_repo_matrix,
+                time_limit_s=time_limit_s,
+                top_n=5,
             )
-            status, solutions = scheduler.solve(time_limit_s=time_limit_s, top_n=5)
         except Exception as exc:  # pragma: no cover - surfaced in UI
             st.error(f"Solver error: {exc}")
             return
 
         if not solutions:
             st.warning("No feasible schedules found by the solver.")
+            diagnostics = _diagnose_infeasibility(
+                solver_flights,
+                tails,
+                policy,
+                repo_matrix,
+                initial_repo_matrix,
+                time_limit_s=time_limit_s,
+            )
+            if diagnostics:
+                st.info(
+                    "Relaxing the following hard constraints yields a feasible plan:\n"
+                    + "\n".join(f"- {message}" for message in diagnostics)
+                )
+            else:
+                st.info(
+                    "Tried relaxing outsourcing, grandfathering, turn buffers, duty day, and tail windows; the model remains infeasible."
+                )
             return
 
         tab_labels = []
