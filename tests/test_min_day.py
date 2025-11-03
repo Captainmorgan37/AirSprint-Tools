@@ -535,6 +535,44 @@ def test_max_day_length_limit_outsources_when_exceeded():
     assert assigned_limited < len(flights)
 
 
+def test_tail_available_to_does_not_require_post_turn_buffer():
+    flights = [
+        Flight(
+            id="F1",
+            origin="CYYC",
+            dest="KDEN",
+            duration_min=90,
+            earliest_etd_min=19 * 60,
+            latest_etd_min=19 * 60,
+            preferred_etd_min=19 * 60,
+            fleet_class="CJ3",
+            owner_id="OWN1",
+            allow_outsource=False,
+        )
+    ]
+    tails = [
+        Tail(
+            id="CGFSJ",
+            fleet_class="CJ3",
+            available_from_min=0,
+            available_to_min=20 * 60,
+        )
+    ]
+
+    scheduler = NegotiationScheduler(flights, tails, LeverPolicy(turn_min=45))
+    status, solutions = scheduler.solve()
+
+    cp = scheduler.cp_model
+    assert status in (cp.OPTIMAL, cp.FEASIBLE)
+    assert solutions
+
+    assigned = solutions[0]["assigned"]
+    assert assigned.shape[0] == 1
+    row = assigned.iloc[0]
+    assert row["tail"] == "CGFSJ"
+    assert row["start_min"] == 19 * 60
+
+
 def test_scheduler_returns_multiple_solutions_and_reuses_model():
     flights = [
         Flight(
