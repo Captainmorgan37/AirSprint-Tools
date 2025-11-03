@@ -157,6 +157,7 @@ class NegotiationScheduler:
         self.day_start: Dict[int, object] = {}
         self.day_end: Dict[int, object] = {}
         self.first: Dict[Tuple[int, int], object] = {}
+        self.first_changed: Dict[Tuple[int, int], object] = {}
         self.last: Dict[Tuple[int, int], object] = {}
         self._build()
 
@@ -572,31 +573,11 @@ class NegotiationScheduler:
                     m.Add(self.start[i] >= tail_ready_min + repo).OnlyEnforceIf(
                         [assign_var, first_var, self.chg[i]]
                     )
-
-        for k in T:
-            tail = self.tails[k]
-            tail_ready_min = max(tail.available_from_min, 0)
-            if tail.last_position_ready_min is not None:
-                tail_ready_min = max(tail_ready_min, tail.last_position_ready_min)
-            first_vars = [self.first[(i, k)] for i in F]
-            if first_vars:
-                m.Add(sum(first_vars) <= 1)
-            for i in F:
-                assign_var = self.assign[(i, k)]
-                first_var = self.first[(i, k)]
-                m.Add(first_var <= assign_var)
-                predecessors = [o[(j, i, k)] for j in F if j != i]
-                if predecessors:
-                    m.Add(assign_var <= first_var + sum(predecessors))
-                    m.Add(first_var >= assign_var - sum(predecessors))
-                else:
-                    m.Add(first_var == assign_var)
-
-                if self.initial_reposition_min and self.initial_reposition_min[k][i] > 0:
-                    repo = self.initial_reposition_min[k][i]
-                    m.Add(self.start[i] >= tail_ready_min + repo).OnlyEnforceIf(
-                        [assign_var, first_var]
-                    )
+                    gate = m.NewBoolVar(f"first_changed[{i},{k}]")
+                    self.first_changed[(i, k)] = gate
+                    m.Add(gate <= first_var)
+                    m.Add(gate <= self.chg[i])
+                    m.Add(gate >= first_var + self.chg[i] - 1)
 
         objective_terms = []
         for i in F:
@@ -660,10 +641,11 @@ class NegotiationScheduler:
                 for i in F:
                     repo = self.initial_reposition_min[k][i]
                     if repo > 0:
+                        gate = self.first_changed.get((i, k))
+                        if gate is None:
+                            continue
                         objective_terms.append(
-                            self.first[(i, k)]
-                            * repo
-                            * self.policy.reposition_cost_per_min
+                            gate * repo * self.policy.reposition_cost_per_min
                         )
 
         objective_expr = sum(objective_terms)
@@ -688,6 +670,7 @@ class NegotiationScheduler:
                         "flight": flight.id,
                         "tail": tail_id,
                         "original_tail": flight.current_tail_id,
+                        "changed": solver_like.Value(self.chg[i]),
                         "tail_swapped": bool(
                             flight.current_tail_id and tail_id != flight.current_tail_id
                         ),
