@@ -541,6 +541,9 @@ def _build_flight(
         shift_plus_cap = max(90, shift_plus_cap or 0)
         shift_minus_cap = max(30, shift_minus_cap or 0)
 
+    baseline_shift_plus = shift_plus_cap
+    baseline_shift_minus = shift_minus_cap
+
     raw_intent = str(
         row.get("flightType")
         or row.get("flight_type")
@@ -548,6 +551,20 @@ def _build_flight(
         or ""
     ).strip().upper()
     intent = "PAX" if raw_intent in ("", "PAX") else "POS"
+
+    protected = {
+        str(owner_id)
+        for owner_id in getattr(policy, "flex_protected_owners", ())
+        if owner_id not in (None, "")
+    }
+    if (
+        fixed_tail
+        and policy.flex_pax_enabled
+        and intent == "PAX"
+        and str(owner) not in protected
+    ):
+        shift_plus_cap = max(shift_plus_cap, policy.flex_pax_plus_cap)
+        shift_minus_cap = max(shift_minus_cap, policy.flex_pax_minus_cap)
 
     return Flight(
         id=_flight_identifier(row),
@@ -569,6 +586,8 @@ def _build_flight(
         shift_cost_per_min=shift_cost,
         intent=intent,
         must_cover=(intent == "PAX"),
+        original_shift_plus_cap=baseline_shift_plus,
+        original_shift_minus_cap=baseline_shift_minus,
     )
 
 

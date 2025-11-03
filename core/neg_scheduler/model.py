@@ -116,6 +116,13 @@ class LeverPolicy:
     pax_skip_cost: int = 1_000_000
     allow_pos_skips: bool = True
     change_penalty: int = 0
+    flex_pax_enabled: bool = False
+    flex_pax_plus_cap: int = 120
+    flex_pax_minus_cap: int = 60
+    flex_pax_base_cap: int = 30
+    flex_pax_cost_base: int = 2
+    flex_pax_cost_extra: int = 12
+    flex_protected_owners: tuple[str, ...] = ()
 
 
 class NegotiationScheduler:
@@ -141,6 +148,11 @@ class NegotiationScheduler:
         )
         self.horizon = self._compute_horizon()
         self.model = self.cp_model.CpModel()
+        self.flex_protected_owner_ids = {
+            str(owner)
+            for owner in getattr(self.policy, "flex_protected_owners", ())
+            if owner not in (None, "")
+        }
         self.day_active: Dict[int, object] = {}
         self.day_start: Dict[int, object] = {}
         self.day_end: Dict[int, object] = {}
@@ -237,6 +249,11 @@ class NegotiationScheduler:
         self.skip: Dict[int, object] = {}
         self.shift_plus: Dict[int, object] = {}
         self.shift_minus: Dict[int, object] = {}
+        self.shift_plus_base: Dict[int, object] = {}
+        self.shift_minus_base: Dict[int, object] = {}
+        self.shift_plus_extra: Dict[int, object] = {}
+        self.shift_minus_extra: Dict[int, object] = {}
+        self.flex_piecewise: Dict[int, bool] = {}
         self.start: Dict[int, object] = {}
         self.swap: Dict[int, object] = {}
         self.chg: Dict[int, object] = {}
@@ -261,6 +278,31 @@ class NegotiationScheduler:
             shift_minus_cap = min(self.policy.max_shift_minus_min, flight.shift_minus_cap)
             self.shift_plus[i] = m.NewIntVar(0, shift_plus_cap, f"shift_plus[{i}]")
             self.shift_minus[i] = m.NewIntVar(0, shift_minus_cap, f"shift_minus[{i}]")
+            use_flex_piecewise = (
+                self.policy.flex_pax_enabled
+                and flight.intent == "PAX"
+                and flight.current_tail_id is not None
+                and str(flight.owner_id) not in self.flex_protected_owner_ids
+            )
+            if use_flex_piecewise and (shift_plus_cap > 0 or shift_minus_cap > 0):
+                base_cap = max(0, int(self.policy.flex_pax_base_cap))
+                base_plus_cap = min(base_cap, shift_plus_cap)
+                base_minus_cap = min(base_cap, shift_minus_cap)
+                extra_plus_cap = max(0, shift_plus_cap - base_plus_cap)
+                extra_minus_cap = max(0, shift_minus_cap - base_minus_cap)
+                plus_base = m.NewIntVar(0, base_plus_cap, f"shift_plus_base[{i}]")
+                minus_base = m.NewIntVar(0, base_minus_cap, f"shift_minus_base[{i}]")
+                plus_extra = m.NewIntVar(0, extra_plus_cap, f"shift_plus_extra[{i}]")
+                minus_extra = m.NewIntVar(0, extra_minus_cap, f"shift_minus_extra[{i}]")
+                self.shift_plus_base[i] = plus_base
+                self.shift_minus_base[i] = minus_base
+                self.shift_plus_extra[i] = plus_extra
+                self.shift_minus_extra[i] = minus_extra
+                self.flex_piecewise[i] = True
+                m.Add(self.shift_plus[i] == plus_base + plus_extra)
+                m.Add(self.shift_minus[i] == minus_base + minus_extra)
+            else:
+                self.flex_piecewise[i] = False
             self.start[i] = m.NewIntVar(0, self.horizon, f"start[{i}]")
             self.chg[i] = m.NewBoolVar(f"chg[{i}]")
 
@@ -565,8 +607,24 @@ class NegotiationScheduler:
             if skip_cost:
                 objective_terms.append(self.skip[i] * skip_cost)
             objective_terms.append(self.outsource[i] * self.policy.outsource_cost)
-            objective_terms.append(self.shift_plus[i] * flight.shift_cost_per_min)
-            objective_terms.append(self.shift_minus[i] * flight.shift_cost_per_min)
+            if self.flex_piecewise.get(i):
+                plus_base = self.shift_plus_base.get(i)
+                minus_base = self.shift_minus_base.get(i)
+                plus_extra = self.shift_plus_extra.get(i)
+                minus_extra = self.shift_minus_extra.get(i)
+                cost_base = max(0, int(self.policy.flex_pax_cost_base))
+                cost_extra = max(cost_base, int(self.policy.flex_pax_cost_extra))
+                if plus_base is not None:
+                    objective_terms.append(plus_base * cost_base)
+                if minus_base is not None:
+                    objective_terms.append(minus_base * cost_base)
+                if plus_extra is not None:
+                    objective_terms.append(plus_extra * cost_extra)
+                if minus_extra is not None:
+                    objective_terms.append(minus_extra * cost_extra)
+            else:
+                objective_terms.append(self.shift_plus[i] * flight.shift_cost_per_min)
+                objective_terms.append(self.shift_minus[i] * flight.shift_cost_per_min)
             if self.policy.change_penalty:
                 objective_terms.append(self.chg[i] * self.policy.change_penalty)
             if i in self.swap:
@@ -640,6 +698,16 @@ class NegotiationScheduler:
                         "duration_min": flight.duration_min,
                         "shift_plus": solver_like.Value(self.shift_plus[i]),
                         "shift_minus": solver_like.Value(self.shift_minus[i]),
+                        "shift_plus_extra": (
+                            solver_like.Value(self.shift_plus_extra[i])
+                            if i in self.shift_plus_extra
+                            else 0
+                        ),
+                        "shift_minus_extra": (
+                            solver_like.Value(self.shift_minus_extra[i])
+                            if i in self.shift_minus_extra
+                            else 0
+                        ),
                     }
                 )
                 tail_sequences.setdefault(tail_id, []).append((i, start_val))

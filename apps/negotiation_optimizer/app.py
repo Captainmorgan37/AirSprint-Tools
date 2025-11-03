@@ -24,6 +24,8 @@ from integrations.fl3xx_adapter import NegotiationData, fetch_negotiation_data, 
 
 
 _FL3XX_SNAPSHOT_KEY = "negotiation_optimizer_fl3xx_snapshot"
+_OWNER_OPTIONS_KEY = "negotiation_optimizer_owner_options"
+_FLEX_PROTECTED_KEY = "negotiation_optimizer_flex_protected"
 
 
 def _store_fl3xx_snapshot(data: NegotiationData, day: date) -> None:
@@ -42,15 +44,37 @@ def _get_fl3xx_snapshot() -> dict[str, object] | None:
 
 
 def _apply_policy_to_snapshot(data: NegotiationData, policy: LeverPolicy) -> NegotiationData:
-    adjusted_flights = [
-        replace(
-            flight,
-            shift_cost_per_min=(
-                policy.cost_per_min_shift + 1 if flight.current_tail_id else policy.cost_per_min_shift
-            ),
+    protected = {
+        str(owner)
+        for owner in getattr(policy, "flex_protected_owners", ())
+        if owner not in (None, "")
+    }
+
+    adjusted_flights = []
+    for flight in data.flights:
+        shift_cost = (
+            policy.cost_per_min_shift + 1 if flight.current_tail_id else policy.cost_per_min_shift
         )
-        for flight in data.flights
-    ]
+        base_plus = flight.original_shift_plus_cap
+        base_minus = flight.original_shift_minus_cap
+        shift_plus_cap = base_plus if base_plus is not None else flight.shift_plus_cap
+        shift_minus_cap = base_minus if base_minus is not None else flight.shift_minus_cap
+        if (
+            policy.flex_pax_enabled
+            and flight.current_tail_id
+            and flight.intent == "PAX"
+            and str(flight.owner_id) not in protected
+        ):
+            shift_plus_cap = max(shift_plus_cap, policy.flex_pax_plus_cap)
+            shift_minus_cap = max(shift_minus_cap, policy.flex_pax_minus_cap)
+        adjusted_flights.append(
+            replace(
+                flight,
+                shift_cost_per_min=shift_cost,
+                shift_plus_cap=shift_plus_cap,
+                shift_minus_cap=shift_minus_cap,
+            )
+        )
     return replace(data, flights=adjusted_flights)
 
 
@@ -191,6 +215,19 @@ def _render_solution_details(
     if assigned_df.empty:
         st.write("— No internal assignments —")
     else:
+        if policy.flex_pax_enabled and {
+            "shift_plus_extra",
+            "shift_minus_extra",
+        }.issubset(assigned_df.columns):
+            extra_minutes = (
+                assigned_df["shift_plus_extra"].fillna(0)
+                + assigned_df["shift_minus_extra"].fillna(0)
+            )
+            flex_count = int((extra_minutes > 0).sum())
+            flex_total = int(extra_minutes.sum())
+            st.caption(
+                f"PAX flex used: {flex_count} flights, total extra minutes {flex_total}"
+            )
         table_tab, gantt_tab = st.tabs(["Table", "Gantt"])
         with table_tab:
             st.dataframe(assigned_df, use_container_width=True)
@@ -592,7 +629,7 @@ def _render_solution_summary(solution: dict[str, object]) -> None:
             reassigned_lines = ["- None"]
         summary_sections.append("**Tail reassignments**\n" + "\n".join(reassigned_lines))
 
-        for col in ("shift_plus", "shift_minus"):
+        for col in ("shift_plus", "shift_minus", "shift_plus_extra", "shift_minus_extra"):
             if col not in working_df.columns:
                 working_df[col] = 0
         working_df["shift_plus"] = (
@@ -600,6 +637,12 @@ def _render_solution_summary(solution: dict[str, object]) -> None:
         )
         working_df["shift_minus"] = (
             pd.to_numeric(working_df["shift_minus"], errors="coerce").fillna(0).astype(int)
+        )
+        working_df["shift_plus_extra"] = (
+            pd.to_numeric(working_df["shift_plus_extra"], errors="coerce").fillna(0).astype(int)
+        )
+        working_df["shift_minus_extra"] = (
+            pd.to_numeric(working_df["shift_minus_extra"], errors="coerce").fillna(0).astype(int)
         )
 
         time_shift_df = working_df[
@@ -610,15 +653,18 @@ def _render_solution_summary(solution: dict[str, object]) -> None:
             for _, row in time_shift_df.iterrows():
                 if row["shift_plus"] > 0:
                     delta = f"+{int(row['shift_plus'])}"
+                    flex_extra = int(row.get("shift_plus_extra", 0) or 0)
                 else:
                     delta = f"-{int(row['shift_minus'])}"
+                    flex_extra = int(row.get("shift_minus_extra", 0) or 0)
+                flex_note = f" ({flex_extra} in flex band)" if flex_extra > 0 else ""
                 change_lines.append(
                     "- Flight {flight} on tail {tail} shifted {delta} min ({origin}→{dest})".format(
                         flight=row.get("flight", "?"),
                         tail=row.get("tail", "?"),
                         origin=row.get("origin", "?"),
                         dest=row.get("dest", "?"),
-                        delta=delta,
+                        delta=delta + flex_note,
                     )
                 )
         else:
@@ -677,6 +723,7 @@ def render_page() -> None:
 
     snapshot = _get_fl3xx_snapshot()
     fetch_requested = False
+    owner_options: list[str] = list(st.session_state.get(_OWNER_OPTIONS_KEY, []))
 
     with st.sidebar:
         st.header("Inputs")
@@ -705,6 +752,35 @@ def render_page() -> None:
             "Enforce max duty day length", value=False, help="Caps usable duty span to 765 minutes."
         )
         max_day_length_min = 765 if enforce_max_day else None
+
+        st.markdown("### Flex PAX (advanced)")
+        flex_on = st.checkbox(
+            "Allow extra movement for scheduled PAX", value=False, help="Enable extended shift caps with tiered pricing."
+        )
+        pax_shift_plus_max = st.slider(
+            "+ shift cap (min)", 15, 240, 90, 5, disabled=not flex_on
+        )
+        pax_shift_minus_max = st.slider(
+            "− shift cap (min)", 15, 240, 45, 5, disabled=not flex_on
+        )
+        flex_base_band = st.slider(
+            "Policy band (min)", 0, 120, 30, 5, disabled=not flex_on
+        )
+        flex_cost_base = st.slider(
+            "Cost/min inside band", 0, 20, cost_per_min, 1, disabled=not flex_on
+        )
+        flex_cost_extra = st.slider(
+            "Cost/min beyond band", 0, 60, max(cost_per_min + 5, 10), 1, disabled=not flex_on
+        )
+        flex_cost_extra = max(flex_cost_extra, flex_cost_base)
+        protected_owners = st.multiselect(
+            "Do not flex these owners",
+            options=owner_options,
+            default=st.session_state.get(_FLEX_PROTECTED_KEY, []),
+            disabled=not flex_on or not owner_options,
+            key=_FLEX_PROTECTED_KEY,
+            help="Keep selected owners at standard ± limits when Flex PAX is on.",
+        )
 
         if dataset == "FL3XX":
             fetch_requested = st.button("Fetch FL3XX data", use_container_width=True)
@@ -749,9 +825,15 @@ def render_page() -> None:
                 st.error("FL3XX API secrets must be provided as key/value pairs.")
                 return
 
+    effective_max_plus = max_plus
+    effective_max_minus = max_minus
+    if flex_on:
+        effective_max_plus = max(max_plus, pax_shift_plus_max)
+        effective_max_minus = max(max_minus, pax_shift_minus_max)
+
     policy = LeverPolicy(
-        max_shift_plus_min=max_plus,
-        max_shift_minus_min=max_minus,
+        max_shift_plus_min=effective_max_plus,
+        max_shift_minus_min=effective_max_minus,
         cost_per_min_shift=cost_per_min,
         outsource_cost=outsource_cost,
         turn_min=turn_min,
@@ -760,6 +842,13 @@ def render_page() -> None:
         pos_skip_cost=pos_skip_cost,
         pax_skip_cost=pax_skip_cost,
         allow_pos_skips=allow_pos_skips,
+        flex_pax_enabled=flex_on,
+        flex_pax_plus_cap=pax_shift_plus_max if flex_on else max_plus,
+        flex_pax_minus_cap=pax_shift_minus_max if flex_on else max_minus,
+        flex_pax_base_cap=flex_base_band,
+        flex_pax_cost_base=flex_cost_base,
+        flex_pax_cost_extra=flex_cost_extra,
+        flex_protected_owners=tuple(protected_owners),
     )
 
     legs: list = []
@@ -907,6 +996,11 @@ def render_page() -> None:
             st.info("No add-line legs found in the selected window.")
 
     flights = legs
+
+    if legs:
+        st.session_state[_OWNER_OPTIONS_KEY] = sorted(
+            {str(f.owner_id) for f in legs if getattr(f, "owner_id", None)}
+        )
 
     with st.expander("Diagnostics", expanded=False):
         st.markdown("### 60-second diagnostics")
