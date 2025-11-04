@@ -213,6 +213,49 @@ def test_fills_missing_reference_from_leg_payload():
     assert alert.booking_reference == "JUPIK"
 
 
+def test_max_time_reference_prefers_booking_identifier_on_flight_row():
+    block_off = dt.datetime(2025, 10, 5, 1, 0, tzinfo=dt.timezone.utc)
+    block_on = block_off + dt.timedelta(hours=5)
+    flights = [
+        _flight(
+            block_off=block_off,
+            block_on=block_on,
+            flight_reference="3565770",
+            booking_identifier="AXBAG",
+        )
+    ]
+
+    alerts, _metadata, _diagnostics = _run_report(flights, leg_payloads={})
+
+    assert len(alerts) == 1
+    alert = alerts[0]
+    assert alert.flight_reference == "AXBAG"
+    assert alert.booking_reference == "BK-100"
+
+
+def test_max_time_reference_overrides_with_leg_booking_identifier():
+    block_off = dt.datetime(2025, 10, 6, 1, 0, tzinfo=dt.timezone.utc)
+    block_on = block_off + dt.timedelta(hours=5)
+    flights = [
+        _flight(
+            block_off=block_off,
+            block_on=block_on,
+            quote_id="Q-OVERRIDE",
+            flight_reference="3570123",
+            booking_reference="BK-OVERRIDE",
+        )
+    ]
+
+    payloads = {"Q-OVERRIDE": {"bookingIdentifier": "EBVAO"}}
+
+    alerts, _metadata, _diagnostics = _run_report(flights, leg_payloads=payloads)
+
+    assert len(alerts) == 1
+    alert = alerts[0]
+    assert alert.flight_reference == "EBVAO"
+    assert alert.booking_reference == "BK-OVERRIDE"
+
+
 def test_format_duration_label_handles_values():
     assert format_duration_label(125) == "2h 05m"
     assert format_duration_label(-30) == "-0h 30m"
@@ -300,6 +343,31 @@ def test_zfw_reference_populates_from_leg_payload():
     item = items[0]
     assert item.flight_reference == "EBVAO"
     assert item.booking_reference == "EBVAO"
+
+
+def test_zfw_reference_overrides_with_leg_booking_identifier():
+    block_off = dt.datetime(2025, 4, 16, 15, 0, tzinfo=dt.timezone.utc)
+    block_on = block_off + dt.timedelta(hours=2)
+    flights = [
+        _flight(
+            aircraft_category="C25B",
+            pax=7,
+            block_off=block_off,
+            block_on=block_on,
+            quote_id="Q-LEG",
+            flight_reference="3570999",
+            booking_reference="BK-LEG",
+        )
+    ]
+
+    payloads = {"Q-LEG": {"bookingIdentifier": "ELVAG1"}}
+
+    items, _metadata, _diagnostics = _run_zfw_report(flights, leg_payloads=payloads)
+
+    assert len(items) == 1
+    item = items[0]
+    assert item.flight_reference == "ELVAG1"
+    assert item.booking_reference == "BK-LEG"
 
 
 def test_zfw_report_handles_alias_and_missing_notes():

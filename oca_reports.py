@@ -241,21 +241,35 @@ def _iter_mapping_candidates(payload: Any) -> Iterable[Mapping[str, Any]]:
             yield from _iter_mapping_candidates(item)
 
 
+def _extract_booking_identifier(payload: Any) -> Optional[str]:
+    for candidate in _iter_mapping_candidates(payload):
+        value = candidate.get("bookingIdentifier")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
 def _extract_booking_reference(payload: Any) -> Optional[str]:
     for candidate in _iter_mapping_candidates(payload):
         for key in (
             "bookingReference",
-            "bookingIdentifier",
             "booking_reference",
             "booking",
         ):
             value = candidate.get(key)
             if isinstance(value, str) and value.strip():
                 return value.strip()
+    identifier = _extract_booking_identifier(payload)
+    if identifier:
+        return identifier
     return None
 
 
 def _extract_flight_reference(payload: Any) -> Optional[str]:
+    identifier = _extract_booking_identifier(payload)
+    if identifier:
+        return identifier
+
     for candidate in _iter_mapping_candidates(payload):
         for key in (
             "flightReference",
@@ -411,7 +425,10 @@ def evaluate_flights_for_max_time(
                     diagnostics["notes_requested"] += 1
                     updates: Dict[str, Any] = {}
                     payload_reference = _extract_flight_reference(payload)
-                    if payload_reference and not alert.flight_reference:
+                    if (
+                        payload_reference
+                        and payload_reference != alert.flight_reference
+                    ):
                         updates["flight_reference"] = payload_reference
                     payload_booking_reference = _extract_booking_reference(payload)
                     if payload_booking_reference and not alert.booking_reference:
@@ -546,7 +563,10 @@ def evaluate_flights_for_zfw_check(
                     diagnostics["notes_requested"] += 1
                     updates: Dict[str, Any] = {}
                     payload_reference = _extract_flight_reference(payload)
-                    if payload_reference and not item.flight_reference:
+                    if (
+                        payload_reference
+                        and payload_reference != item.flight_reference
+                    ):
                         updates["flight_reference"] = payload_reference
                     payload_booking_reference = _extract_booking_reference(payload)
                     if payload_booking_reference and not item.booking_reference:
