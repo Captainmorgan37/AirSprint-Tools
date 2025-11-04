@@ -231,35 +231,47 @@ def _compute_duration_minutes(row: Mapping[str, Any]) -> Optional[int]:
     return int(delta.total_seconds() // 60)
 
 
-def _extract_booking_reference(row: Mapping[str, Any]) -> Optional[str]:
-    for key in (
-        "bookingReference",
-        "bookingIdentifier",
-        "booking_reference",
-        "booking",
-    ):
-        value = row.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
+def _iter_mapping_candidates(payload: Any) -> Iterable[Mapping[str, Any]]:
+    if isinstance(payload, Mapping):
+        yield payload
+        for value in payload.values():
+            yield from _iter_mapping_candidates(value)
+    elif isinstance(payload, Iterable) and not isinstance(payload, (str, bytes, bytearray)):
+        for item in payload:
+            yield from _iter_mapping_candidates(item)
+
+
+def _extract_booking_reference(payload: Any) -> Optional[str]:
+    for candidate in _iter_mapping_candidates(payload):
+        for key in (
+            "bookingReference",
+            "bookingIdentifier",
+            "booking_reference",
+            "booking",
+        ):
+            value = candidate.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
     return None
 
 
-def _extract_flight_reference(row: Mapping[str, Any]) -> Optional[str]:
-    for key in (
-        "flightReference",
-        "flight_reference",
-        "flightReferenceCode",
-        "flight_reference_code",
-        "flightreference",
-    ):
-        value = row.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
+def _extract_flight_reference(payload: Any) -> Optional[str]:
+    for candidate in _iter_mapping_candidates(payload):
+        for key in (
+            "flightReference",
+            "flight_reference",
+            "flightReferenceCode",
+            "flight_reference_code",
+            "flightreference",
+        ):
+            value = candidate.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
 
     # Fallback to the booking reference when a dedicated flight reference is
     # not present in the payload. This preserves backwards compatibility with
     # historical data where the booking reference doubled as the reference code.
-    return _extract_booking_reference(row)
+    return _extract_booking_reference(payload)
 
 
 def _extract_pax_count(row: Mapping[str, Any]) -> Optional[int]:
@@ -282,18 +294,8 @@ def _extract_pax_count(row: Mapping[str, Any]) -> Optional[int]:
     return None
 
 
-def _iter_note_candidates(payload: Any) -> Iterable[Mapping[str, Any]]:
-    if isinstance(payload, Mapping):
-        yield payload
-        for value in payload.values():
-            yield from _iter_note_candidates(value)
-    elif isinstance(payload, Iterable) and not isinstance(payload, (str, bytes, bytearray)):
-        for item in payload:
-            yield from _iter_note_candidates(item)
-
-
 def _extract_booking_note(payload: Any) -> Optional[str]:
-    for candidate in _iter_note_candidates(payload):
+    for candidate in _iter_mapping_candidates(payload):
         for key in _NOTE_KEYS:
             if key in candidate:
                 value = candidate[key]
@@ -407,6 +409,20 @@ def evaluate_flights_for_max_time(
                     diagnostics["note_error_messages"].append(str(exc))
                 else:
                     diagnostics["notes_requested"] += 1
+                    updates: Dict[str, Any] = {}
+                    payload_reference = _extract_flight_reference(payload)
+                    if payload_reference and not alert.flight_reference:
+                        updates["flight_reference"] = payload_reference
+                    payload_booking_reference = _extract_booking_reference(payload)
+                    if payload_booking_reference and not alert.booking_reference:
+                        updates["booking_reference"] = payload_booking_reference
+                    if updates:
+                        alert = MaxFlightTimeAlert(
+                            **{
+                                **alert.as_dict(),
+                                **updates,
+                            }
+                        )
                     note = _extract_booking_note(payload)
                     if note:
                         diagnostics["notes_found"] += 1
@@ -528,6 +544,20 @@ def evaluate_flights_for_zfw_check(
                     diagnostics["note_error_messages"].append(str(exc))
                 else:
                     diagnostics["notes_requested"] += 1
+                    updates: Dict[str, Any] = {}
+                    payload_reference = _extract_flight_reference(payload)
+                    if payload_reference and not item.flight_reference:
+                        updates["flight_reference"] = payload_reference
+                    payload_booking_reference = _extract_booking_reference(payload)
+                    if payload_booking_reference and not item.booking_reference:
+                        updates["booking_reference"] = payload_booking_reference
+                    if updates:
+                        item = ZfwFlightCheck(
+                            **{
+                                **item.as_dict(),
+                                **updates,
+                            }
+                        )
                     note = _extract_booking_note(payload)
                     if note:
                         diagnostics["notes_found"] += 1

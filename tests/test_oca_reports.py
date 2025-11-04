@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from fl3xx_api import Fl3xxApiConfig
 from oca_reports import (
@@ -21,8 +21,11 @@ def _flight(
     pax: int = 3,
     block_off: dt.datetime,
     block_on: dt.datetime,
+    flight_reference: Optional[str] = "REF-100",
+    booking_reference: Optional[str] = "BK-100",
+    booking_identifier: Optional[str] = None,
 ) -> Dict[str, Any]:
-    return {
+    row = {
         "flightId": flight_id,
         "quoteId": quote_id,
         "flightType": "PAX",
@@ -33,10 +36,17 @@ def _flight(
         "airportFrom": "CYUL",
         "airportTo": "CYYZ",
         "registrationNumber": "C-GFSD",
-        "flightReference": "REF-100",
-        "bookingReference": "BK-100",
         "flightNumberCompany": "209-100",
     }
+
+    if flight_reference is not None:
+        row["flightReference"] = flight_reference
+    if booking_reference is not None:
+        row["bookingReference"] = booking_reference
+    if booking_identifier is not None:
+        row["bookingIdentifier"] = booking_identifier
+
+    return row
 
 
 def _run_report(
@@ -159,6 +169,50 @@ def test_extracts_leg_notes_field():
     assert alerts[0].booking_note == "Purpose of travel: Example"
 
 
+def test_flight_reference_falls_back_to_booking_identifier():
+    block_off = dt.datetime(2025, 10, 3, 14, 0, tzinfo=dt.timezone.utc)
+    block_on = block_off + dt.timedelta(hours=5)
+    flights = [
+        _flight(
+            block_off=block_off,
+            block_on=block_on,
+            flight_reference=None,
+            booking_reference=None,
+            booking_identifier="ELVAG1",
+        )
+    ]
+
+    alerts, _metadata, _diagnostics = _run_report(flights, leg_payloads={"Q1": {}})
+
+    assert len(alerts) == 1
+    alert = alerts[0]
+    assert alert.flight_reference == "ELVAG1"
+    assert alert.booking_reference == "ELVAG1"
+
+
+def test_fills_missing_reference_from_leg_payload():
+    block_off = dt.datetime(2025, 10, 4, 9, 0, tzinfo=dt.timezone.utc)
+    block_on = block_off + dt.timedelta(hours=5, minutes=30)
+    flights = [
+        _flight(
+            quote_id="Q-MISS",
+            block_off=block_off,
+            block_on=block_on,
+            flight_reference=None,
+            booking_reference=None,
+        )
+    ]
+
+    payloads = {"Q-MISS": {"bookingIdentifier": "JUPIK"}}
+
+    alerts, _metadata, _diagnostics = _run_report(flights, leg_payloads=payloads)
+
+    assert len(alerts) == 1
+    alert = alerts[0]
+    assert alert.flight_reference == "JUPIK"
+    assert alert.booking_reference == "JUPIK"
+
+
 def test_format_duration_label_handles_values():
     assert format_duration_label(125) == "2h 05m"
     assert format_duration_label(-30) == "-0h 30m"
@@ -197,6 +251,55 @@ def test_zfw_report_identifies_threshold_pax_and_confirms_note():
     assert item.booking_note_present is True
     assert item.booking_note_confirms_zfw is True
     assert item.booking_note.startswith("ZFW")
+
+
+def test_zfw_reference_uses_booking_identifier_when_missing():
+    block_off = dt.datetime(2025, 4, 14, 15, 0, tzinfo=dt.timezone.utc)
+    block_on = block_off + dt.timedelta(hours=2)
+    flights = [
+        _flight(
+            aircraft_category="C25B",
+            pax=7,
+            block_off=block_off,
+            block_on=block_on,
+            quote_id="Q-REF",
+            flight_reference=None,
+            booking_reference=None,
+            booking_identifier="AXBAG",
+        )
+    ]
+
+    items, _metadata, _diagnostics = _run_zfw_report(flights, leg_payloads={"Q-REF": {}})
+
+    assert len(items) == 1
+    item = items[0]
+    assert item.flight_reference == "AXBAG"
+    assert item.booking_reference == "AXBAG"
+
+
+def test_zfw_reference_populates_from_leg_payload():
+    block_off = dt.datetime(2025, 4, 15, 15, 0, tzinfo=dt.timezone.utc)
+    block_on = block_off + dt.timedelta(hours=2)
+    flights = [
+        _flight(
+            aircraft_category="C25B",
+            pax=7,
+            block_off=block_off,
+            block_on=block_on,
+            quote_id="Q-PAYLOAD",
+            flight_reference=None,
+            booking_reference=None,
+        )
+    ]
+
+    payloads = {"Q-PAYLOAD": {"bookingIdentifier": "EBVAO"}}
+
+    items, _metadata, _diagnostics = _run_zfw_report(flights, leg_payloads=payloads)
+
+    assert len(items) == 1
+    item = items[0]
+    assert item.flight_reference == "EBVAO"
+    assert item.booking_reference == "EBVAO"
 
 
 def test_zfw_report_handles_alias_and_missing_notes():
