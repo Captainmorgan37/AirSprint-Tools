@@ -21,7 +21,12 @@ from core.neg_scheduler.contracts import Flight, Tail
 from core.neg_scheduler.model import _class_compatible
 from core.reposition import build_initial_reposition_matrix, build_reposition_matrix
 from flight_leg_utils import FlightDataError
-from integrations.fl3xx_adapter import NegotiationData, fetch_negotiation_data, get_demo_data
+from integrations.fl3xx_adapter import (
+    NegotiationData,
+    fetch_negotiation_data,
+    get_demo_data,
+    _flight_identifier,
+)
 
 
 _FL3XX_SNAPSHOT_KEY = "negotiation_optimizer_fl3xx_snapshot"
@@ -1017,6 +1022,8 @@ def render_page() -> None:
     window_start_utc: object | None = None
     window_end_utc: object | None = None
     selected_unscheduled_ids: set[str] | None = None
+    allow_global_tail_swaps: bool = False
+    unlocked_scheduled_ids: set[str] = set()
 
     if dataset == "Demo":
         legs, tails = get_demo_data()
@@ -1107,6 +1114,64 @@ def render_page() -> None:
                         window_start=window_start_utc,
                         title=_format_schedule_title("Current Schedule", schedule_day),
                     )
+
+            st.markdown("### Scheduled leg overrides")
+            allow_global_tail_swaps = st.checkbox(
+                "Allow tail swaps for all scheduled legs",
+                key="neg_allow_global_tail_swaps",
+                help=(
+                    "When enabled, every scheduled leg may move to another compatible tail if "
+                    "the solver finds that necessary."
+                ),
+            )
+
+            enable_targeted_unlocks = st.checkbox(
+                "Select specific scheduled legs the solver may move",
+                key="neg_enable_targeted_unlocks",
+                help=(
+                    "Use this control to unlock only a subset of scheduled legs while keeping the "
+                    "rest fixed to their imported tails."
+                ),
+            )
+
+            if enable_targeted_unlocks:
+                scheduled_selector_df = scheduled_df.copy()
+                scheduled_selector_df.index = [
+                    _flight_identifier(row) for row in schedule_rows
+                ]
+                scheduled_selector_df.index.name = "Flight"
+                previous_unlocked: set[str] = set(
+                    st.session_state.get("neg_unlocked_scheduled_ids", set())
+                )
+                scheduled_selector_df.insert(
+                    0,
+                    "Unlock?",
+                    [idx in previous_unlocked for idx in scheduled_selector_df.index],
+                )
+                unlock_editor = st.data_editor(
+                    scheduled_selector_df,
+                    hide_index=True,
+                    use_container_width=True,
+                    key="neg_scheduled_unlock_editor",
+                    column_config={
+                        "Unlock?": st.column_config.CheckboxColumn(
+                            "Unlock?",
+                            help="Checked flights may move off their current tail during solving.",
+                        )
+                    },
+                )
+                unlocked_scheduled_ids = {
+                    str(idx)
+                    for idx, include in unlock_editor["Unlock?"].items()
+                    if pd.notna(include) and bool(include)
+                }
+                st.session_state["neg_unlocked_scheduled_ids"] = unlocked_scheduled_ids
+                st.caption(
+                    f"{len(unlocked_scheduled_ids)} of {len(unlock_editor)} scheduled legs unlocked for solving."
+                )
+            else:
+                st.session_state.pop("neg_unlocked_scheduled_ids", None)
+                unlocked_scheduled_ids = set()
         else:
             st.info("No scheduled legs detected for the selected window.")
 
@@ -1152,6 +1217,23 @@ def render_page() -> None:
             )
         else:
             st.info("No add-line legs found in the selected window.")
+
+    if legs and (allow_global_tail_swaps or unlocked_scheduled_ids):
+        adjusted_legs: list[Flight] = []
+        for flight in legs:
+            if not flight.current_tail_id:
+                adjusted_legs.append(flight)
+                continue
+            if allow_global_tail_swaps or flight.id in unlocked_scheduled_ids:
+                adjusted_legs.append(
+                    replace(
+                        flight,
+                        allow_tail_swap=True,
+                    )
+                )
+            else:
+                adjusted_legs.append(flight)
+        legs = adjusted_legs
 
     flights = legs
 
