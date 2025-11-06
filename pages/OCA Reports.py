@@ -6,6 +6,7 @@ from typing import Any, Dict, Mapping, Optional
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 from Home import configure_page, get_secret, password_gate, render_sidebar
 from flight_leg_utils import FlightDataError, build_fl3xx_api_config
@@ -76,6 +77,127 @@ def _normalise_state(state: Mapping[str, Any]) -> Dict[str, Any]:
         return legacy
 
     return dict(state)
+
+
+def _enable_booking_reference_copy_support() -> None:
+    components.html(
+        """
+        <script>
+        const w = window.parent;
+        if (w.__bookingReferenceCopyBound) {
+            return;
+        }
+        w.__bookingReferenceCopyBound = true;
+
+        const doc = w.document;
+
+        if (!doc.getElementById("booking-reference-copy-style")) {
+            const style = doc.createElement("style");
+            style.id = "booking-reference-copy-style";
+            style.textContent = `
+                [data-booking-reference-copy] {
+                    cursor: copy;
+                    position: relative;
+                }
+
+                [data-booking-reference-copy]:focus {
+                    outline: 2px solid var(--primary-color, #2c8ef4);
+                    outline-offset: -2px;
+                }
+
+                [data-booking-reference-copy].booking-reference-copied::after {
+                    content: "Copied";
+                    position: absolute;
+                    top: 50%;
+                    right: 0.5rem;
+                    transform: translateY(-50%);
+                    font-size: 0.7rem;
+                    color: var(--text-color, #444);
+                    background: rgba(255, 255, 255, 0.85);
+                    padding: 0.1rem 0.3rem;
+                    border-radius: 0.25rem;
+                }
+            `;
+            doc.head.appendChild(style);
+        }
+
+        function selectCell(cell) {
+            const range = doc.createRange();
+            range.selectNodeContents(cell);
+            const selection = w.getSelection();
+            selection.removeAllRanges();
+            selection.addRange(range);
+        }
+
+        function flagCells(tableRoot) {
+            const headers = Array.from(tableRoot.querySelectorAll('[role="columnheader"]'));
+            const header = headers.find((node) => node.innerText.trim().toLowerCase() === "flight_reference");
+            if (!header) {
+                return;
+            }
+
+            const colIndex = header.getAttribute("aria-colindex");
+            if (!colIndex) {
+                return;
+            }
+
+            const cells = tableRoot.querySelectorAll(`[role="gridcell"][aria-colindex="${colIndex}"]`);
+            cells.forEach((cell) => {
+                if (cell.dataset.bookingReferenceCopy === "true") {
+                    return;
+                }
+                cell.dataset.bookingReferenceCopy = "true";
+                cell.setAttribute("data-booking-reference-copy", "");
+                cell.setAttribute("tabindex", "0");
+
+                cell.addEventListener("click", () => {
+                    selectCell(cell);
+                    const value = cell.innerText.trim();
+                    if (value && w.navigator?.clipboard) {
+                        w.navigator.clipboard.writeText(value).catch(() => {});
+                        cell.classList.add("booking-reference-copied");
+                        setTimeout(() => {
+                            cell.classList.remove("booking-reference-copied");
+                        }, 1200);
+                    }
+                });
+
+                cell.addEventListener("keydown", (event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        cell.click();
+                    }
+                });
+            });
+        }
+
+        function processExistingTables() {
+            const tables = doc.querySelectorAll('div[data-testid="stDataFrame"]');
+            tables.forEach(flagCells);
+        }
+
+        processExistingTables();
+
+        const observer = new MutationObserver((mutations) => {
+            mutations.forEach((mutation) => {
+                mutation.addedNodes.forEach((node) => {
+                    if (!node || node.nodeType !== 1) {
+                        return;
+                    }
+                    if (node.matches && node.matches('div[data-testid="stDataFrame"]')) {
+                        flagCells(node);
+                    }
+                    const nestedTables = node.querySelectorAll ? node.querySelectorAll('div[data-testid="stDataFrame"]') : [];
+                    nestedTables.forEach(flagCells);
+                });
+            });
+        });
+
+        observer.observe(doc.body, { childList: true, subtree: true });
+        </script>
+        """,
+        height=0,
+    )
 
 
 def _render_max_time_results(data: Mapping[str, Any], start_label: Optional[str], end_label: Optional[str]) -> None:
@@ -311,6 +433,7 @@ def _render_results(state: Dict[str, Any]) -> None:
 configure_page(page_title="OCA Reports")
 password_gate()
 render_sidebar()
+_enable_booking_reference_copy_support()
 
 st.title("🛫 OCA Reports")
 st.caption("Generate OCA-specific monitoring reports based on FL3XX data.")
