@@ -3,11 +3,12 @@ import re
 from collections.abc import Mapping
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Pattern, Sequence, Tuple
 
 import pandas as pd
 import pytz
 import streamlit as st
+import requests
 from zoneinfo_compat import ZoneInfo
 
 from customs_deadline_utils import (
@@ -34,7 +35,7 @@ from Home import configure_page, get_secret, password_gate, render_sidebar
 configure_page(page_title="Customs Dashboard")
 password_gate()
 render_sidebar()
-from fl3xx_api import fetch_flight_migration
+from fl3xx_api import fetch_flight_migration, fetch_leg_details
 
 
 MOUNTAIN_TIMEZONE = ZoneInfo("America/Edmonton")
@@ -85,6 +86,8 @@ CUSTOMS_RULES_PATH = Path(__file__).resolve().parent.parent / "customs_rules.csv
 
 _SESSION_STATE_KEY = "customs_dashboard_cached_data"
 
+_DEFAULT_FLAGGED_KEYWORDS: Tuple[str, ...] = ("dog", "dogs")
+
 
 st.title("🛃 Customs Dashboard")
 
@@ -107,6 +110,70 @@ def _to_local(dt: datetime, tz_name: Optional[str]) -> datetime:
 @st.cache_data(show_spinner=False)
 def _airport_lookup_cache() -> Dict[str, Dict[str, Optional[str]]]:
     return load_airport_metadata_lookup()
+
+
+def _parse_flag_keywords(raw_value: str) -> Tuple[str, ...]:
+    if not isinstance(raw_value, str):
+        return _DEFAULT_FLAGGED_KEYWORDS
+    parts = re.split(r"[\s,]+", raw_value.strip())
+    keywords: List[str] = []
+    seen: set[str] = set()
+    for part in parts:
+        normalized = part.strip().lower()
+        if not normalized:
+            continue
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        keywords.append(normalized)
+    if not keywords:
+        return _DEFAULT_FLAGGED_KEYWORDS
+    return tuple(keywords)
+
+
+def _build_keyword_pattern(keywords: Sequence[str]) -> Optional[Pattern[str]]:
+    terms = [re.escape(term) for term in keywords if isinstance(term, str) and term]
+    if not terms:
+        return None
+    pattern = r"\b(?:" + "|".join(terms) + r")\b"
+    return re.compile(pattern, re.IGNORECASE)
+
+
+def _find_keyword_matches(text: str, pattern: Optional[Pattern[str]]) -> List[str]:
+    if not pattern:
+        return []
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    matches = {match.group(0).lower() for match in pattern.finditer(normalized)}
+    return sorted(match.upper() for match in matches)
+
+
+def _extract_quote_identifier(row: Mapping[str, Any]) -> Optional[str]:
+    for key in ("quoteId", "quote_id", "quoteID", "quote", "quoteNumber"):
+        value = row.get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return None
+
+
+def _extract_leg_notes(payload: Any) -> Optional[str]:
+    if isinstance(payload, Mapping):
+        detail = payload
+    elif isinstance(payload, (list, tuple)):
+        detail = next((item for item in payload if isinstance(item, Mapping)), None)
+    else:
+        detail = None
+    if not isinstance(detail, Mapping):
+        return None
+    for key in ("notes", "planningNotes", "planningNote", "planning_notes"):
+        value = detail.get(key)
+        if isinstance(value, str):
+            text = value.strip()
+            if text:
+                return text
+    return None
 
 
 @st.cache_data(show_spinner=False)
@@ -718,9 +785,25 @@ if not customs_rules_df.empty:
         st.dataframe(us_rules[preview_cols])
 
 
+keyword_input = st.text_input(
+    "Keyword alerts (comma separated)",
+    value=", ".join(_DEFAULT_FLAGGED_KEYWORDS),
+    help=(
+        "Monitor customs leg planning notes for these keywords. "
+        "Matches trigger a visible alert in the table."
+    ),
+)
+flag_keywords = _parse_flag_keywords(keyword_input)
+keyword_pattern = _build_keyword_pattern(flag_keywords)
+
+
 fetch_button = st.button("Load customs legs", type="primary")
 
-current_params = {"start_date": start_date.isoformat(), "additional_days": additional_days}
+current_params = {
+    "start_date": start_date.isoformat(),
+    "additional_days": additional_days,
+    "flag_keywords": flag_keywords,
+}
 
 cached_state = st.session_state.get(_SESSION_STATE_KEY)
 
@@ -799,94 +882,137 @@ if fetch_button:
     customs_df = customs_df.sort_values("dep_time").reset_index(drop=True)
 
     migration_cache: Dict[Any, Optional[Dict[str, Any]]] = {}
+    detail_cache: Dict[str, Optional[Any]] = {}
+    detail_session = requests.Session() if keyword_pattern else None
+    missing_quote_warnings: set[str] = set()
     rows: List[Dict[str, Any]] = []
 
-    for _, leg in customs_df.iterrows():
-        row = leg.to_dict()
-        tail = str(row.get("tail") or "")
-        dep_airport = _detect_airport_value(row, DEPARTURE_AIRPORT_COLUMNS)
-        arr_airport = _detect_airport_value(row, ARRIVAL_AIRPORT_COLUMNS)
-        dep_utc, dep_local = _format_local_time(row)
+    try:
+        for _, leg in customs_df.iterrows():
+            row = leg.to_dict()
+            tail = str(row.get("tail") or "")
+            dep_airport = _detect_airport_value(row, DEPARTURE_AIRPORT_COLUMNS)
+            arr_airport = _detect_airport_value(row, ARRIVAL_AIRPORT_COLUMNS)
+            dep_utc, dep_local = _format_local_time(row)
 
-        rule = rules_lookup.get(arr_airport.upper()) if arr_airport else None
-        lead_time_arrival = ""
-        hours_summary = ""
-        after_hours = ""
-        contacts = ""
-        if isinstance(rule, Mapping):
-            lead_time_arrival = str(rule.get("lead_time_arrival_hours") or "").strip()
-            hours_summary = _format_hours_summary(rule)
-            after_hours_bool = _normalize_bool(rule.get("after_hours_available"))
-            if after_hours_bool is None and "after_hours_available" in rule:
-                after_hours = str(rule.get("after_hours_available") or "").strip()
-            elif after_hours_bool is not None:
-                after_hours = "Yes" if after_hours_bool else "No"
-            contacts = str(rule.get("contacts") or "").strip()
+            keyword_matches: List[str] = []
+            if keyword_pattern:
+                quote_id = _extract_quote_identifier(row)
+                if quote_id:
+                    if quote_id not in detail_cache:
+                        try:
+                            payload = fetch_leg_details(
+                                config, quote_id, session=detail_session
+                            )
+                        except Exception as exc:  # pragma: no cover - defensive
+                            errors.append(
+                                f"Quote {quote_id}: {exc} (unable to check leg notes for keywords)"
+                            )
+                            detail_cache[quote_id] = None
+                        else:
+                            detail_cache[quote_id] = payload
+                    payload = detail_cache.get(quote_id)
+                    note_text = _extract_leg_notes(payload)
+                    if isinstance(note_text, str) and note_text:
+                        keyword_matches = _find_keyword_matches(
+                            note_text, keyword_pattern
+                        )
+                else:
+                    identifier = f"{tail or 'Unknown tail'} departing {dep_utc or 'unknown time'}"
+                    if identifier not in missing_quote_warnings:
+                        missing_quote_warnings.add(identifier)
+                        errors.append(
+                            f"Missing quote identifier for {identifier}; unable to check leg notes keywords."
+                        )
 
-        flight_id = (
-            row.get("flightId")
-            or row.get("flight_id")
-            or row.get("flightID")
-            or row.get("id")
-            or row.get("flight")
-        )
+            rule = rules_lookup.get(arr_airport.upper()) if arr_airport else None
+            lead_time_arrival = ""
+            hours_summary = ""
+            after_hours = ""
+            contacts = ""
+            if isinstance(rule, Mapping):
+                lead_time_arrival = str(rule.get("lead_time_arrival_hours") or "").strip()
+                hours_summary = _format_hours_summary(rule)
+                after_hours_bool = _normalize_bool(rule.get("after_hours_available"))
+                if after_hours_bool is None and "after_hours_available" in rule:
+                    after_hours = str(rule.get("after_hours_available") or "").strip()
+                elif after_hours_bool is not None:
+                    after_hours = "Yes" if after_hours_bool else "No"
+                contacts = str(rule.get("contacts") or "").strip()
 
-        migration_payload: Optional[Dict[str, Any]] = None
-        if flight_id:
-            if flight_id not in migration_cache:
-                try:
-                    migration_cache[flight_id] = fetch_flight_migration(config, flight_id)
-                except Exception as exc:  # pragma: no cover - defensive
-                    errors.append(f"Flight {flight_id}: {exc}")
-                    migration_cache[flight_id] = None
-            migration_payload = migration_cache.get(flight_id)
-        else:
-            errors.append(f"Missing flight ID for tail {tail} departing {dep_utc}.")
+            flight_id = (
+                row.get("flightId")
+                or row.get("flight_id")
+                or row.get("flightID")
+                or row.get("id")
+                or row.get("flight")
+            )
 
-        arr_status, arr_by, arr_notes, _arr_docs, arr_doc_names = _extract_migration_fields(
-            migration_payload, "arrivalMigration"
-        )
-
-        clearance_note = ""
-        if clearance_requirements and arr_airport:
-            clearance_note = clearance_requirements.get(arr_airport.upper(), "")
-        if not clearance_note and isinstance(rule, Mapping):
-            clearance_note = str(rule.get("notes") or "").strip()
-        if clearance_note:
-            arr_notes = arr_notes.strip()
-            if arr_notes:
-                arr_notes = f"{arr_notes} | {clearance_note}"
+            migration_payload: Optional[Dict[str, Any]] = None
+            if flight_id:
+                if flight_id not in migration_cache:
+                    try:
+                        migration_cache[flight_id] = fetch_flight_migration(config, flight_id)
+                    except Exception as exc:  # pragma: no cover - defensive
+                        errors.append(f"Flight {flight_id}: {exc}")
+                        migration_cache[flight_id] = None
+                migration_payload = migration_cache.get(flight_id)
             else:
-                arr_notes = clearance_note
+                errors.append(f"Missing flight ID for tail {tail} departing {dep_utc}.")
 
-        clearance_start_dt, clearance_end_dt, clearance_goal, clearance_timing = _compute_clearance_window(
-            row, dep_airport, arr_airport, lookup, rule, arr_status
-        )
-        clearance_start_mt = _format_in_timezone(clearance_start_dt, MOUNTAIN_TIMEZONE)
-        clearance_end_mt = _format_in_timezone(clearance_end_dt, MOUNTAIN_TIMEZONE)
+            arr_status, arr_by, arr_notes, _arr_docs, arr_doc_names = _extract_migration_fields(
+                migration_payload, "arrivalMigration"
+            )
 
-        rows.append(
-            {
-                "Tail": tail,
-                "Departure": dep_airport,
-                "Arrival": arr_airport,
-                "Departure Local": dep_local,
-                "Arrival Status": arr_status,
-                "Arrival By": arr_by,
-                "Arrival Notes": arr_notes,
-                "Arrival Doc Names": arr_doc_names,
-                "Clearance Target Start (MT)": clearance_start_mt,
-                "Clearance Target End (MT)": clearance_end_mt,
-                "Clearance Goal": clearance_goal,
-                "Clearance Timing": clearance_timing,
-                "Rule Lead Time Arrival (hrs)": lead_time_arrival,
-                "Rule Operating Hours": hours_summary,
-                "Rule After Hours Available": after_hours,
-                "Rule Contacts": contacts,
-                "_clearance_start_dt": clearance_start_dt,
-                "_clearance_end_dt": clearance_end_dt,
-            }
-        )
+            clearance_note = ""
+            if clearance_requirements and arr_airport:
+                clearance_note = clearance_requirements.get(arr_airport.upper(), "")
+            if not clearance_note and isinstance(rule, Mapping):
+                clearance_note = str(rule.get("notes") or "").strip()
+            if clearance_note:
+                arr_notes = arr_notes.strip()
+                if arr_notes:
+                    arr_notes = f"{arr_notes} | {clearance_note}"
+                else:
+                    arr_notes = clearance_note
+
+            clearance_start_dt, clearance_end_dt, clearance_goal, clearance_timing = _compute_clearance_window(
+                row, dep_airport, arr_airport, lookup, rule, arr_status
+            )
+            clearance_start_mt = _format_in_timezone(clearance_start_dt, MOUNTAIN_TIMEZONE)
+            clearance_end_mt = _format_in_timezone(clearance_end_dt, MOUNTAIN_TIMEZONE)
+
+            keyword_alert = ""
+            if keyword_matches:
+                keyword_alert = f"⚠️ {' / '.join(keyword_matches)}"
+
+            rows.append(
+                {
+                    "Tail": tail,
+                    "Departure": dep_airport,
+                    "Arrival": arr_airport,
+                    "Departure Local": dep_local,
+                    "Arrival Status": arr_status,
+                    "Arrival By": arr_by,
+                    "Arrival Notes": arr_notes,
+                    "Arrival Doc Names": arr_doc_names,
+                    "Keyword Alerts": keyword_alert,
+                    "Clearance Target Start (MT)": clearance_start_mt,
+                    "Clearance Target End (MT)": clearance_end_mt,
+                    "Clearance Goal": clearance_goal,
+                    "Clearance Timing": clearance_timing,
+                    "Rule Lead Time Arrival (hrs)": lead_time_arrival,
+                    "Rule Operating Hours": hours_summary,
+                    "Rule After Hours Available": after_hours,
+                    "Rule Contacts": contacts,
+                    "_clearance_start_dt": clearance_start_dt,
+                    "_clearance_end_dt": clearance_end_dt,
+                    "_flagged_keywords": keyword_matches,
+                }
+            )
+    finally:
+        if detail_session is not None:
+            detail_session.close()
 
     result_df = pd.DataFrame(rows)
     st.session_state[_SESSION_STATE_KEY] = {
@@ -950,7 +1076,13 @@ if not result_df.empty:
         inplace=True,
     )
 
-col1, col2 = st.columns(2)
+    flagged_total = 0
+    if "_flagged_keywords" in result_df.columns:
+        flagged_total = int(
+            result_df["_flagged_keywords"].apply(lambda val: bool(val)).sum()
+        )
+
+col1, col2, col3 = st.columns(3)
 with col1:
     st.metric("Customs legs", result_df.shape[0])
 with col2:
@@ -958,6 +1090,8 @@ with col2:
         "Pending arrivals",
         int((result_df["Arrival Status"] != "OK").sum()),
     )
+with col3:
+    st.metric("Keyword alerts", flagged_total)
 
 base_drop_cols = [
     col
@@ -969,6 +1103,7 @@ base_drop_cols = [
         "_hours_until_clearance",
         "_urgency_category",
         "_urgency_priority",
+        "_flagged_keywords",
     )
     if col in result_df.columns
 ]
@@ -1011,25 +1146,38 @@ def _render_customs_table(
         style_lookup = (
             working_df["_urgency_category"].apply(lambda cat: URGENCY_STYLES.get(cat)).to_dict()
         )
+        flagged_lookup = {}
+        if "_flagged_keywords" in working_df.columns:
+            flagged_lookup = (
+                working_df["_flagged_keywords"].apply(lambda val: bool(val)).to_dict()
+            )
 
         def _style_row(row: pd.Series) -> List[str]:
-            styles = style_lookup.get(row.name)
-            if not isinstance(styles, Mapping):
-                return [""] * len(row)
             css_parts: List[str] = []
-            background = styles.get("background")
-            border = styles.get("border")
-            text = styles.get("text")
-            if background:
-                css_parts.append(f"background-color: {background}")
-            if border:
-                css_parts.append(f"border-left: 4px solid {border}")
+            text_color: Optional[str] = None
+            styles = style_lookup.get(row.name)
+            if isinstance(styles, Mapping):
+                background = styles.get("background")
+                border = styles.get("border")
+                text_value = styles.get("text")
+                if background:
+                    css_parts.append(f"background-color: {background}")
+                if border:
+                    css_parts.append(f"border-left: 4px solid {border}")
+                if isinstance(text_value, str) and text_value.strip():
+                    text_color = text_value.strip()
+
+            if flagged_lookup.get(row.name, False):
+                css_parts.append("box-shadow: inset 0 -4px 0 0 #6a1b9a")
+
             if not css_parts:
                 return [""] * len(row)
-            if text:
-                css_parts.append(f"color: {text}")
-            else:
+
+            if text_color:
+                css_parts.append(f"color: {text_color}")
+            elif not any(part.startswith("color:") for part in css_parts):
                 css_parts.append("color: inherit")
+
             css_parts.append("font-weight: 600")
             css = "; ".join(css_parts)
             return [css] * len(row)
