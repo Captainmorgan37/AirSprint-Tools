@@ -86,7 +86,7 @@ CUSTOMS_RULES_PATH = Path(__file__).resolve().parent.parent / "customs_rules.csv
 
 _SESSION_STATE_KEY = "customs_dashboard_cached_data"
 
-_DEFAULT_FLAGGED_KEYWORDS: Tuple[str, ...] = ("dog", "dogs")
+_DEFAULT_FLAGGED_KEYWORDS: Tuple[str, ...] = ("dog", "dogs", "cat", "cats", "gun", "guns", "rifle", "firearms", "waiver", "esta", "visa", "permit", "pet", "pets")
 
 
 st.title("🛃 Customs Dashboard")
