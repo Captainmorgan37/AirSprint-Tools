@@ -4,13 +4,21 @@ from datetime import datetime, timedelta, timezone, date
 from zoneinfo_compat import ZoneInfo
 
 from fl3xx_api import fetch_flights
-from flight_leg_utils import build_fl3xx_api_config, normalize_fl3xx_payload, filter_out_subcharter_rows
+from flight_leg_utils import (
+    FlightDataError,
+    build_fl3xx_api_config,
+    filter_out_subcharter_rows,
+    normalize_fl3xx_payload,
+)
+from Home import configure_page, get_secret, password_gate, render_sidebar
 from taf_utils import get_taf_reports
 
 # ============================================================
 # Page Configuration
 # ============================================================
-st.set_page_config(page_title="Hangar Recommendation", layout="wide")
+configure_page(page_title="Hangar Recommendation")
+password_gate()
+render_sidebar()
 MOUNTAIN_TZ = ZoneInfo("America/Edmonton")
 
 st.title("🏠 Hangar Recommendation Tool")
@@ -70,8 +78,16 @@ def _parse_weather_codes(taf_segments):
 # ============================================================
 
 start_date, end_date = _default_date_range()
-settings = st.secrets.get("fl3xx", {})
-config = build_fl3xx_api_config(settings)
+fl3xx_settings = get_secret("fl3xx_api")
+
+try:
+    config = build_fl3xx_api_config(fl3xx_settings)
+except FlightDataError as exc:
+    st.error(str(exc))
+    st.stop()
+except Exception as exc:  # pragma: no cover - defensive
+    st.error(f"Error loading FL3XX credentials: {exc}")
+    st.stop()
 
 with st.spinner("Fetching flight data..."):
     flights, meta = fetch_flights(config, from_date=start_date, to_date=end_date + timedelta(days=1))
