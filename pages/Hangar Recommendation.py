@@ -275,6 +275,7 @@ with st.spinner("Fetching latest METAR observations..."):
 # Display Results
 # ============================================================
 
+assessed_entries: list[dict] = []
 for entry in overnight_rows:
     tail = entry["tail"]
     airport = entry["arrival_airport"]
@@ -288,37 +289,86 @@ for entry in overnight_rows:
         aircraft_category=aircraft_category,
         client_departure=client_departure,
     )
-    triggers = list(assessment.get("triggers", []))
-    notes = list(assessment.get("notes", []))
-
-    st.markdown(f"### ✈️ {tail} – {airport}")
-    st.write(
-        "Arrives: "
-        f"{_format_local(entry['arr_utc'])}  →  "
-        f"Departs: {_format_local(entry['dep_utc'])}"
+    assessed_entries.append(
+        {
+            **entry,
+            "assessment": assessment,
+            "triggers": list(assessment.get("triggers", [])),
+            "notes": list(assessment.get("notes", [])),
+        }
     )
 
-    if bool(assessment.get("needs_hangar")):
-        st.markdown(
-            "<span style='color:#22c55e;font-weight:600'>✅ Hangar Recommended</span>",
-            unsafe_allow_html=True,
-        )
+main_col, summary_col = st.columns((3, 1.4), gap="large")
+
+with summary_col:
+    st.markdown("### 🛩️ Hangar Needs Overview")
+    hangar_required = [
+        item for item in assessed_entries if bool(item["assessment"].get("needs_hangar"))
+    ]
+
+    if not hangar_required:
+        st.info("No hangar requirements identified.")
     else:
-        st.markdown(
-            "<span style='color:#60a5fa;font-weight:600'>☀️ No Hangar Needed</span>",
-            unsafe_allow_html=True,
+        airport_counts: dict[str, int] = {}
+        airport_tails: dict[str, list[str]] = {}
+
+        for item in hangar_required:
+            airport = item["arrival_airport"]
+            airport_counts[airport] = airport_counts.get(airport, 0) + 1
+            airport_tails.setdefault(airport, []).append(item["tail"])
+
+        for airport in sorted(airport_counts, key=lambda code: (-airport_counts[code], code)):
+            count = airport_counts[airport]
+            tails = airport_tails[airport]
+            tail_list = ", ".join(tails)
+            tail_label = "tail" if count == 1 else "tails"
+            st.markdown(
+                """
+                <div style="background-color:#0f172a;border-radius:0.85rem;padding:1rem;margin-bottom:0.75rem;color:#f8fafc;">
+                    <div style="font-size:0.95rem;font-weight:600;letter-spacing:0.02em;">{airport}</div>
+                    <div style="font-size:2.25rem;font-weight:700;line-height:1;">{count}</div>
+                    <div style="font-size:0.85rem;opacity:0.85;">{count} {label}: {tails}</div>
+                </div>
+                """.format(airport=airport, count=count, label=tail_label, tails=html.escape(tail_list)),
+                unsafe_allow_html=True,
+            )
+
+with main_col:
+    for item in assessed_entries:
+        tail = item["tail"]
+        airport = item["arrival_airport"]
+        assessment = item["assessment"]
+        triggers = item["triggers"]
+        notes = item["notes"]
+
+        st.markdown(f"### ✈️ {tail} – {airport}")
+        st.write(
+            "Arrives: "
+            f"{_format_local(item['arr_utc'])}  →  "
+            f"Departs: {_format_local(item['dep_utc'])}"
         )
 
-    if triggers:
-        st.markdown("**Triggers:**")
-        for item in triggers:
-            _render_bullet(item, highlight=_should_highlight_icing(item))
+        if bool(assessment.get("needs_hangar")):
+            st.markdown(
+                "<span style='color:#22c55e;font-weight:600'>✅ Hangar Recommended</span>",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                "<span style='color:#60a5fa;font-weight:600'>☀️ No Hangar Needed</span>",
+                unsafe_allow_html=True,
+            )
 
-    if notes:
-        st.markdown("**Forecast Details:**")
-        for item in notes:
-            _render_bullet(item, highlight=_should_highlight_icing(item))
+        if triggers:
+            st.markdown("**Triggers:**")
+            for item_text in triggers:
+                _render_bullet(item_text, highlight=_should_highlight_icing(item_text))
 
-    st.markdown("<hr style='opacity:0.3'>", unsafe_allow_html=True)
+        if notes:
+            st.markdown("**Forecast Details:**")
+            for note in notes:
+                _render_bullet(note, highlight=_should_highlight_icing(note))
 
-st.success("Evaluation complete.")
+        st.markdown("<hr style='opacity:0.3'>", unsafe_allow_html=True)
+
+    st.success("Evaluation complete.")
