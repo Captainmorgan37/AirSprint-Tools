@@ -20,6 +20,55 @@ configure_page(page_title="Hangar Recommendation")
 password_gate()
 render_sidebar()
 MOUNTAIN_TZ = ZoneInfo("America/Edmonton")
+TAIL_DISPLAY_ORDER: tuple[str, ...] = (
+    "C-GASL",
+    "C-FASV",
+    "C-FLAS",
+    "C-FJAS",
+    "C-FASF",
+    "C-GASE",
+    "C-GASK",
+    "C-GXAS",
+    "C-GBAS",
+    "C-FSNY",
+    "C-FSYX",
+    "C-FSBR",
+    "C-FSRX",
+    "C-FSJR",
+    "C-FASQ",
+    "C-FSDO",
+    "C-FASP",
+    "C-FASR",
+    "C-FASW",
+    "C-FIAS",
+    "C-GASR",
+    "C-GZAS",
+    "C-FASY",
+    "C-GASW",
+    "C-GAAS",
+    "C-FNAS",
+    "C-GNAS",
+    "C-GFFS",
+    "C-FSFS",
+    "C-GFSX",
+    "C-FSFO",
+    "C-FSNP",
+    "C-FSQX",
+    "C-FSFP",
+    "C-FSEF",
+    "C-FSDN",
+    "C-GFSD",
+    "C-FSUP",
+    "C-FSRY",
+    "C-GFSJ",
+    "ADD EMB WEST",
+    "ADD EMB EAST",
+    "ADD CJ2+ WEST",
+    "ADD CJ2+ EAST",
+    "ADD CJ3+ WEST",
+    "ADD CJ3+ EAST",
+)
+TAIL_INDEX = {tail: idx for idx, tail in enumerate(TAIL_DISPLAY_ORDER)}
 
 st.title("🏠 Hangar Recommendation Tool")
 
@@ -137,6 +186,14 @@ depart_column = _pick_column(
         "departureTime",
     ),
 )
+airport_column = _pick_column(
+    df,
+    (
+        "arrival_airport",
+        "arrivalAirport",
+        "airportTo",
+    ),
+)
 
 missing_columns = [
     name
@@ -144,6 +201,7 @@ missing_columns = [
         ("tail registration", tail_column),
         ("arrival time", arrive_column),
         ("departure time", depart_column),
+        ("arrival airport", airport_column),
     )
     if column is None
 ]
@@ -159,6 +217,11 @@ if missing_columns:
 for column in (arrive_column, depart_column):
     df[column] = pd.to_datetime(df[column], utc=True, errors="coerce")
 
+df["arrival_local"] = df[arrive_column].dt.tz_convert(MOUNTAIN_TZ)
+df["departure_local"] = df[depart_column].dt.tz_convert(MOUNTAIN_TZ)
+df["arrival_local_date"] = df["arrival_local"].dt.date
+df["departure_local_date"] = df["departure_local"].dt.date
+
 # ============================================================
 # Identify Overnight Stays
 # ============================================================
@@ -169,21 +232,28 @@ for tail, group in df.groupby(tail_column):
     if not tail:
         continue
     group = group.sort_values(arrive_column)
-    today_arr = group[group[arrive_column].dt.date == start_date]
-    tomorrow_dep = group[group[depart_column].dt.date == end_date]
+    today_arr = group[group["arrival_local_date"] == start_date]
+    tomorrow_dep = group[group["departure_local_date"] == end_date]
     if not today_arr.empty and not tomorrow_dep.empty:
         last_arr = today_arr.tail(1).iloc[0]
         first_dep = tomorrow_dep.head(1).iloc[0]
         overnight_rows.append({
             "tail": tail,
-            "arrival_airport": last_arr["arrival_airport"],
+            "arrival_airport": last_arr[airport_column],
             "arr_utc": _ensure_utc(last_arr[arrive_column]),
-            "dep_utc": _ensure_utc(first_dep[depart_column])
+            "dep_utc": _ensure_utc(first_dep[depart_column]),
+            "arr_local": last_arr["arrival_local"],
+            "dep_local": first_dep["departure_local"],
         })
 
 if not overnight_rows:
     st.info("No overnight pairs found between today and tomorrow.")
     st.stop()
+
+def _tail_sort_key(tail: str) -> tuple[int, str]:
+    return (TAIL_INDEX.get(tail, len(TAIL_INDEX)), tail)
+
+overnight_rows.sort(key=lambda row: _tail_sort_key(row["tail"]))
 
 icao_list = tuple({row["arrival_airport"] for row in overnight_rows})
 with st.spinner("Loading TAF forecasts..."):
@@ -193,30 +263,52 @@ with st.spinner("Loading TAF forecasts..."):
 # Hangar Logic
 # ============================================================
 
-def evaluate_hangar_need(taf_data: list[dict]) -> list[str]:
-    reasons = []
+def evaluate_hangar_need(taf_data: list[dict]) -> dict[str, list[str] | bool | None]:
+    assessment: dict[str, list[str] | bool | None] = {
+        "needs_hangar": False,
+        "triggers": [],
+        "notes": [],
+        "min_temp": None,
+    }
+
     if not taf_data:
-        return ["No TAF data available"]
+        assessment["notes"] = [
+            "No TAF data available — unable to evaluate local weather risks.",
+        ]
+        return assessment
 
     segments = taf_data[0].get("forecast", [])
     temp_min = _parse_temp_from_taf(segments)
     wx_codes = _parse_weather_codes(segments)
+    assessment["min_temp"] = temp_min
 
-    # Frost risk logic
-    if temp_min is not None and temp_min < 0:
-        reasons.append("Temperature below freezing — frost risk")
-    if temp_min is not None and temp_min <= -20:
-        reasons.append("Below -20°C — hangar required")
+    if temp_min is None:
+        assessment["notes"].append("Forecast minimum temperature unavailable in TAF.")
+    else:
+        assessment["notes"].append(f"Forecast minimum temperature: {temp_min:.0f}°C")
+        if temp_min <= -20:
+            assessment["triggers"].append("Temperature at or below -20°C — hangar required")
+        elif temp_min < 0:
+            assessment["triggers"].append("Temperature below freezing — frost risk")
 
-    # Freezing precipitation
+    if wx_codes:
+        assessment["notes"].append(
+            "Weather codes in primary forecast window: " + ", ".join(sorted(set(wx_codes)))
+        )
+    else:
+        assessment["notes"].append("No significant weather codes in the primary TAF segment.")
+
     if any(code.startswith("FZ") for code in wx_codes):
-        reasons.append("Freezing precipitation in forecast")
+        assessment["triggers"].append("Freezing precipitation expected (FZ prefix codes present)")
 
-    # Hail or severe storm risk indicators
     if any(code in wx_codes for code in ["TS", "GR", "GS"]):
-        reasons.append("Thunderstorms or hail risk")
+        assessment["triggers"].append("Thunderstorm or hail risk indicated in TAF")
 
-    return reasons
+    assessment["needs_hangar"] = bool(assessment["triggers"])
+    if not assessment["triggers"]:
+        assessment["notes"].append("No hangar-triggering conditions detected in current forecast.")
+
+    return assessment
 
 
 # ============================================================
@@ -227,18 +319,37 @@ for entry in overnight_rows:
     tail = entry["tail"]
     airport = entry["arrival_airport"]
     taf_data = taf_reports.get(airport, [])
-    reasons = evaluate_hangar_need(taf_data)
+    assessment = evaluate_hangar_need(taf_data)
+    triggers = list(assessment.get("triggers", []))
+    notes = list(assessment.get("notes", []))
 
     st.markdown(f"### ✈️ {tail} – {airport}")
-    st.write(f"Arrives: {_format_local(entry['arr_utc'])}  →  Departs: {_format_local(entry['dep_utc'])}")
+    st.write(
+        "Arrives: "
+        f"{_format_local(entry['arr_utc'])}  →  "
+        f"Departs: {_format_local(entry['dep_utc'])}"
+    )
 
-    if any(r for r in reasons if "required" in r or "freezing" in r or "risk" in r):
-        st.markdown("<span style='color:#22c55e;font-weight:600'>✅ Hangar Recommended</span>", unsafe_allow_html=True)
+    if bool(assessment.get("needs_hangar")):
+        st.markdown(
+            "<span style='color:#22c55e;font-weight:600'>✅ Hangar Recommended</span>",
+            unsafe_allow_html=True,
+        )
     else:
-        st.markdown("<span style='color:#60a5fa;font-weight:600'>☀️ No Hangar Needed</span>", unsafe_allow_html=True)
+        st.markdown(
+            "<span style='color:#60a5fa;font-weight:600'>☀️ No Hangar Needed</span>",
+            unsafe_allow_html=True,
+        )
 
-    for r in reasons:
-        st.markdown(f"• {r}")
+    if triggers:
+        st.markdown("**Triggers:**")
+        for item in triggers:
+            st.markdown(f"• {item}")
+
+    if notes:
+        st.markdown("**Forecast Details:**")
+        for item in notes:
+            st.markdown(f"• {item}")
 
     st.markdown("<hr style='opacity:0.3'>", unsafe_allow_html=True)
 
