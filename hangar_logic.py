@@ -230,11 +230,7 @@ def evaluate_hangar_need(
         wx_codes = parse_weather_codes(segments)
         assessment["min_temp"] = temp_min
 
-        if temp_min is None:
-            assessment["notes"].append(
-                "Forecast minimum temperature unavailable in TAF."
-            )
-        else:
+        if temp_min is not None:
             assessment["notes"].append(
                 f"Forecast minimum temperature: {temp_min:.0f}°C"
             )
