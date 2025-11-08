@@ -12,8 +12,10 @@ from Home import configure_page, get_secret, password_gate, render_sidebar
 from flight_leg_utils import FlightDataError, build_fl3xx_api_config
 from oca_reports import (
     MaxFlightTimeAlert,
+    RunwayLengthCheck,
     ZfwFlightCheck,
     evaluate_flights_for_max_time,
+    evaluate_flights_for_runway_length,
     evaluate_flights_for_zfw_check,
     format_duration_label,
 )
@@ -38,8 +40,20 @@ def _default_start_date() -> date:
     return date.today()
 
 
+def _parse_iso_date(value: Any) -> Optional[date]:
+    if isinstance(value, str):
+        try:
+            return date.fromisoformat(value)
+        except ValueError:
+            return None
+    return None
+
+
 def _store_state(state: Dict[str, Any]) -> None:
-    st.session_state[_STATE_KEY] = state
+    existing = _load_state()
+    merged = dict(existing)
+    merged.update(state)
+    st.session_state[_STATE_KEY] = merged
 
 
 def _load_state() -> Dict[str, Any]:
@@ -406,7 +420,7 @@ def _render_zfw_results(data: Mapping[str, Any], start_label: Optional[str], end
         st.json(diagnostics)
 
 
-def _render_results(state: Dict[str, Any]) -> None:
+def _render_primary_results(state: Dict[str, Any]) -> None:
     normalised = _normalise_state(state)
 
     error = normalised.get("error")
@@ -430,6 +444,126 @@ def _render_results(state: Dict[str, Any]) -> None:
         _render_zfw_results(zfw_data, start_label, end_label)
 
 
+def _render_runway_results(state: Mapping[str, Any]) -> None:
+    runway_state = state.get("runway") if isinstance(state, Mapping) else None
+    start_label = state.get("runway_start_date") if isinstance(state, Mapping) else None
+    end_label = state.get("runway_end_date") if isinstance(state, Mapping) else None
+
+    if not runway_state and not start_label and not end_label:
+        return
+
+    st.subheader("🛬 Short Runway Report")
+
+    if not isinstance(runway_state, Mapping):
+        return
+
+    error = runway_state.get("error")
+    if error:
+        st.error(error)
+        return
+
+    items = runway_state.get("items", [])
+    metadata = runway_state.get("metadata", {})
+    diagnostics = runway_state.get("diagnostics", {})
+    threshold_ft = runway_state.get("threshold_ft")
+    try:
+        threshold_value = int(threshold_ft)
+    except (TypeError, ValueError):
+        threshold_value = 5000
+
+    if start_label and end_label:
+        start_display = str(start_label)
+        end_display = str(end_label)
+        if items:
+            st.warning(
+                f"Identified {len(items)} flight(s) operating from airports below the {threshold_value:,} ft threshold "
+                f"between {start_display} and {end_display}."
+            )
+        else:
+            st.info(
+                f"No airports below the {threshold_value:,} ft threshold were found between {start_display} and {end_display}."
+            )
+
+    if items:
+        summary_cols = st.columns(3)
+        summary_cols[0].metric("Flights flagged", diagnostics.get("flagged_flights", len(items)))
+        summary_cols[1].metric("Total flights evaluated", diagnostics.get("total_flights", 0))
+        summary_cols[2].metric("Missing runway data", diagnostics.get("missing_departure_length", 0) + diagnostics.get("missing_arrival_length", 0))
+
+    df = pd.DataFrame(items)
+    if not df.empty:
+        df = df.copy()
+
+        def _format_length(value: Any) -> str:
+            if value is None or value == "":
+                return "—"
+            try:
+                return f"{int(value):,}"
+            except (TypeError, ValueError):
+                return str(value)
+
+        df["Departure runway (ft)"] = df["departure_runway_length_ft"].map(_format_length)
+        df["Departure status"] = df["departure_below_threshold"].map(
+            lambda flag: "⚠️ Below threshold" if flag else ""
+        )
+        df["Arrival runway (ft)"] = df["arrival_runway_length_ft"].map(_format_length)
+        df["Arrival status"] = df["arrival_below_threshold"].map(
+            lambda flag: "⚠️ Below threshold" if flag else ""
+        )
+
+        columns = [
+            "departure_utc",
+            "arrival_utc",
+            "registration",
+            "airport_from",
+            "Departure runway (ft)",
+            "Departure status",
+            "airport_to",
+            "Arrival runway (ft)",
+            "Arrival status",
+            "flight_reference",
+            "booking_reference",
+            "flight_number",
+        ]
+        display_columns = [col for col in columns if col in df.columns]
+        display_df = df[display_columns]
+
+        st.dataframe(display_df, use_container_width=True)
+
+        csv_buffer = StringIO()
+        export_columns = [
+            "flight_id",
+            "quote_id",
+            "flight_reference",
+            "booking_reference",
+            "departure_utc",
+            "arrival_utc",
+            "airport_from",
+            "departure_runway_length_ft",
+            "departure_below_threshold",
+            "airport_to",
+            "arrival_runway_length_ft",
+            "arrival_below_threshold",
+            "registration",
+            "flight_number",
+            "runway_threshold_ft",
+        ]
+        export_df = df[[col for col in export_columns if col in df.columns]]
+        export_df.to_csv(csv_buffer, index=False)
+        st.download_button(
+            f"Download short runway flights (< {threshold_value:,} ft)",
+            csv_buffer.getvalue(),
+            file_name="oca_short_runway_flights.csv",
+            mime="text/csv",
+        )
+
+    with st.expander("FL3XX request metadata", expanded=False):
+        st.json(metadata)
+
+    with st.expander("Diagnostics", expanded=False):
+        st.json(diagnostics)
+
+
 configure_page(page_title="OCA Reports")
 password_gate()
 render_sidebar()
@@ -438,97 +572,186 @@ _enable_booking_reference_copy_support()
 st.title("🛫 OCA Reports")
 st.caption("Generate OCA-specific monitoring reports based on FL3XX data.")
 
-state = _load_state()
-_render_results(state)
+raw_state = _load_state()
+state = _normalise_state(raw_state)
 
 api_settings_raw = get_secret("fl3xx_api", {})
 api_settings = _normalise_settings(api_settings_raw)
 
-with st.form("oca_reports_form"):
-    start_date = st.date_input(
-        "Report start date",
-        value=_default_start_date(),
-        help="The monitoring window begins on this date in America/Edmonton.",
-    )
-    day_count = st.number_input(
-        "Days to monitor",
-        min_value=1,
-        max_value=7,
-        value=3,
-        help="Include this many calendar days in the flight scan.",
-    )
-    submitted = st.form_submit_button("Run OCA Reports")
+primary_tab, runway_tab = st.tabs(["Max Flight Time & ZFW", "Short Runway Report"])
 
-if submitted:
-    if api_settings is None:
-        st.error(
-            "FL3XX API credentials are missing. Configure the `fl3xx_api` section in `.streamlit/secrets.toml`."
+with primary_tab:
+    _render_primary_results(state)
+
+    default_start = _parse_iso_date(state.get("start_date")) or _default_start_date()
+    default_days_raw = state.get("days")
+    try:
+        default_days = int(default_days_raw)
+    except (TypeError, ValueError):
+        default_days = 3
+
+    with st.form("oca_reports_form"):
+        start_date = st.date_input(
+            "Report start date",
+            value=default_start,
+            help="The monitoring window begins on this date in America/Edmonton.",
         )
-    else:
-        try:
-            config = build_fl3xx_api_config(dict(api_settings))
-        except FlightDataError as exc:
-            st.error(str(exc))
-        else:
-            to_date_exclusive = start_date + timedelta(days=int(day_count))
-            inclusive_end = to_date_exclusive - timedelta(days=1)
+        day_count = st.number_input(
+            "Days to monitor",
+            min_value=1,
+            max_value=7,
+            value=default_days,
+            step=1,
+            help="Include this many calendar days in the flight scan.",
+        )
+        submitted = st.form_submit_button("Run OCA Reports")
 
-            max_time_state: Dict[str, Any] = {}
-            zfw_state: Dict[str, Any] = {}
-
-            try:
-                with st.spinner("Evaluating max flight time limits..."):
-                    alerts, metadata, diagnostics = evaluate_flights_for_max_time(
-                        config,
-                        from_date=start_date,
-                        to_date=to_date_exclusive,
-                    )
-            except FlightDataError as exc:
-                max_time_state["error"] = str(exc)
-                st.error(str(exc))
-            except Exception as exc:  # pragma: no cover - defensive UI path
-                max_time_state["error"] = str(exc)
-                st.error(str(exc))
-            else:
-                max_time_state = {
-                    "alerts": [
-                        alert.as_dict() if isinstance(alert, MaxFlightTimeAlert) else dict(alert)
-                        for alert in alerts
-                    ],
-                    "metadata": metadata,
-                    "diagnostics": diagnostics,
-                }
-
-            try:
-                with st.spinner("Evaluating ZFW review thresholds..."):
-                    zfw_items, zfw_metadata, zfw_diagnostics = evaluate_flights_for_zfw_check(
-                        config,
-                        from_date=start_date,
-                        to_date=to_date_exclusive,
-                    )
-            except FlightDataError as exc:
-                zfw_state["error"] = str(exc)
-                st.error(str(exc))
-            except Exception as exc:  # pragma: no cover - defensive UI path
-                zfw_state["error"] = str(exc)
-                st.error(str(exc))
-            else:
-                zfw_state = {
-                    "items": [
-                        item.as_dict() if isinstance(item, ZfwFlightCheck) else dict(item)
-                        for item in zfw_items
-                    ],
-                    "metadata": zfw_metadata,
-                    "diagnostics": zfw_diagnostics,
-                }
-
-            _store_state(
-                {
-                    "start_date": start_date.isoformat(),
-                    "end_date": inclusive_end.isoformat(),
-                    "days": int(day_count),
-                    "max_time": max_time_state,
-                    "zfw": zfw_state,
-                }
+    if submitted:
+        if api_settings is None:
+            st.error(
+                "FL3XX API credentials are missing. Configure the `fl3xx_api` section in `.streamlit/secrets.toml`."
             )
-            st.rerun()
+        else:
+            try:
+                config = build_fl3xx_api_config(dict(api_settings))
+            except FlightDataError as exc:
+                st.error(str(exc))
+            else:
+                to_date_exclusive = start_date + timedelta(days=int(day_count))
+                inclusive_end = to_date_exclusive - timedelta(days=1)
+
+                max_time_state: Dict[str, Any] = {}
+                zfw_state: Dict[str, Any] = {}
+
+                try:
+                    with st.spinner("Evaluating max flight time limits..."):
+                        alerts, metadata, diagnostics = evaluate_flights_for_max_time(
+                            config,
+                            from_date=start_date,
+                            to_date=to_date_exclusive,
+                        )
+                except FlightDataError as exc:
+                    max_time_state["error"] = str(exc)
+                    st.error(str(exc))
+                except Exception as exc:  # pragma: no cover - defensive UI path
+                    max_time_state["error"] = str(exc)
+                    st.error(str(exc))
+                else:
+                    max_time_state = {
+                        "alerts": [
+                            alert.as_dict() if isinstance(alert, MaxFlightTimeAlert) else dict(alert)
+                            for alert in alerts
+                        ],
+                        "metadata": metadata,
+                        "diagnostics": diagnostics,
+                    }
+
+                try:
+                    with st.spinner("Evaluating ZFW review thresholds..."):
+                        zfw_items, zfw_metadata, zfw_diagnostics = evaluate_flights_for_zfw_check(
+                            config,
+                            from_date=start_date,
+                            to_date=to_date_exclusive,
+                        )
+                except FlightDataError as exc:
+                    zfw_state["error"] = str(exc)
+                    st.error(str(exc))
+                except Exception as exc:  # pragma: no cover - defensive UI path
+                    zfw_state["error"] = str(exc)
+                    st.error(str(exc))
+                else:
+                    zfw_state = {
+                        "items": [
+                            item.as_dict() if isinstance(item, ZfwFlightCheck) else dict(item)
+                            for item in zfw_items
+                        ],
+                        "metadata": zfw_metadata,
+                        "diagnostics": zfw_diagnostics,
+                    }
+
+                _store_state(
+                    {
+                        "start_date": start_date.isoformat(),
+                        "end_date": inclusive_end.isoformat(),
+                        "days": int(day_count),
+                        "max_time": max_time_state,
+                        "zfw": zfw_state,
+                    }
+                )
+                st.rerun()
+
+with runway_tab:
+    _render_runway_results(state)
+
+    default_runway_start = _parse_iso_date(state.get("runway_start_date")) or _default_start_date()
+    default_runway_days_raw = state.get("runway_days")
+    try:
+        default_runway_days = int(default_runway_days_raw)
+    except (TypeError, ValueError):
+        default_runway_days = 2
+
+    with st.form("oca_runway_form"):
+        runway_start_date = st.date_input(
+            "Runway report start date",
+            value=default_runway_start,
+            help="The short runway scan begins on this date in America/Edmonton.",
+        )
+        runway_day_count = st.number_input(
+            "Days to scan",
+            min_value=1,
+            max_value=7,
+            value=default_runway_days,
+            step=1,
+            help="Include this many calendar days in the short runway scan.",
+        )
+        runway_submitted = st.form_submit_button("Run Short Runway Report")
+
+    if runway_submitted:
+        if api_settings is None:
+            st.error(
+                "FL3XX API credentials are missing. Configure the `fl3xx_api` section in `.streamlit/secrets.toml`."
+            )
+        else:
+            try:
+                config = build_fl3xx_api_config(dict(api_settings))
+            except FlightDataError as exc:
+                st.error(str(exc))
+            else:
+                runway_to_date = runway_start_date + timedelta(days=int(runway_day_count))
+                runway_inclusive_end = runway_to_date - timedelta(days=1)
+
+                runway_state: Dict[str, Any] = {}
+
+                try:
+                    with st.spinner("Evaluating runway lengths..."):
+                        runway_items, runway_metadata, runway_diagnostics = evaluate_flights_for_runway_length(
+                            config,
+                            from_date=runway_start_date,
+                            to_date=runway_to_date,
+                        )
+                except FlightDataError as exc:
+                    runway_state["error"] = str(exc)
+                    st.error(str(exc))
+                except Exception as exc:  # pragma: no cover - defensive UI path
+                    runway_state["error"] = str(exc)
+                    st.error(str(exc))
+                else:
+                    runway_state = {
+                        "items": [
+                            item.as_dict() if isinstance(item, RunwayLengthCheck) else dict(item)
+                            for item in runway_items
+                        ],
+                        "metadata": runway_metadata,
+                        "diagnostics": runway_diagnostics,
+                        "threshold_ft": 5000,
+                    }
+
+                _store_state(
+                    {
+                        "runway_start_date": runway_start_date.isoformat(),
+                        "runway_end_date": runway_inclusive_end.isoformat(),
+                        "runway_days": int(runway_day_count),
+                        "runway": runway_state,
+                    }
+                )
+                st.rerun()
