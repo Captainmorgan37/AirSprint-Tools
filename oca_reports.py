@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import csv
 from dataclasses import dataclass
 from datetime import date, datetime
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Tuple
 
 import requests
 
 from fl3xx_api import Fl3xxApiConfig, fetch_flights, fetch_leg_details
 from flight_leg_utils import FlightDataError, format_utc, safe_parse_dt
+
+_RUNWAY_DATA_PATH = Path(__file__).with_name("runways.csv")
+_RUNWAY_LENGTH_CACHE: Optional[Dict[str, int]] = None
 
 _NOTE_KEYS: Tuple[str, ...] = (
     "bookingNote",
@@ -66,6 +71,65 @@ _ZFW_PAX_THRESHOLDS: Dict[str, int] = {
     "C25B": 6,
     "E545": 9,
 }
+
+
+def _normalise_airport_ident(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip().upper()
+    if not text:
+        return None
+    return text
+
+
+def _load_runway_length_cache() -> Dict[str, int]:
+    global _RUNWAY_LENGTH_CACHE
+    if _RUNWAY_LENGTH_CACHE is not None:
+        return _RUNWAY_LENGTH_CACHE
+
+    cache: Dict[str, int] = {}
+    try:
+        with _RUNWAY_DATA_PATH.open(newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            for row in reader:
+                ident = _normalise_airport_ident(row.get("airport_ident"))
+                if not ident:
+                    continue
+
+                length_text = row.get("length_ft")
+                if length_text is None:
+                    continue
+                try:
+                    length_value = int(float(str(length_text).strip()))
+                except (TypeError, ValueError):
+                    continue
+                if length_value <= 0:
+                    continue
+
+                current = cache.get(ident)
+                if current is None or length_value > current:
+                    cache[ident] = length_value
+
+                if len(ident) == 4 and ident[0] in {"C", "K"}:
+                    alias = ident[1:]
+                    if len(alias) >= 3:
+                        alias_current = cache.get(alias)
+                        if alias_current is None or length_value > alias_current:
+                            cache[alias] = length_value
+    except FileNotFoundError:
+        cache = {}
+
+    _RUNWAY_LENGTH_CACHE = cache
+    return cache
+
+
+def _lookup_max_runway_length(airport: Optional[str]) -> Optional[int]:
+    ident = _normalise_airport_ident(airport)
+    if not ident:
+        return None
+    cache = _load_runway_length_cache()
+    length = cache.get(ident)
+    return int(length) if length is not None else None
 
 
 @dataclass(frozen=True)
@@ -153,6 +217,46 @@ class ZfwFlightCheck:
             "booking_note": self.booking_note,
             "booking_note_present": self.booking_note_present,
             "booking_note_confirms_zfw": self.booking_note_confirms_zfw,
+        }
+
+
+@dataclass(frozen=True)
+class RunwayLengthCheck:
+    """Data describing flights operating from airports below a runway threshold."""
+
+    flight_id: Any
+    quote_id: Any
+    flight_reference: Optional[str]
+    booking_reference: Optional[str]
+    departure_utc: Optional[str]
+    arrival_utc: Optional[str]
+    airport_from: Optional[str]
+    airport_to: Optional[str]
+    registration: Optional[str]
+    flight_number: Optional[str]
+    departure_runway_length_ft: Optional[int]
+    arrival_runway_length_ft: Optional[int]
+    departure_below_threshold: bool
+    arrival_below_threshold: bool
+    runway_threshold_ft: int
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {
+            "flight_id": self.flight_id,
+            "quote_id": self.quote_id,
+            "flight_reference": self.flight_reference,
+            "booking_reference": self.booking_reference,
+            "departure_utc": self.departure_utc,
+            "arrival_utc": self.arrival_utc,
+            "airport_from": self.airport_from,
+            "airport_to": self.airport_to,
+            "registration": self.registration,
+            "flight_number": self.flight_number,
+            "departure_runway_length_ft": self.departure_runway_length_ft,
+            "arrival_runway_length_ft": self.arrival_runway_length_ft,
+            "departure_below_threshold": self.departure_below_threshold,
+            "arrival_below_threshold": self.arrival_below_threshold,
+            "runway_threshold_ft": self.runway_threshold_ft,
         }
 
 
@@ -608,10 +712,89 @@ def evaluate_flights_for_zfw_check(
     return items, metadata, diagnostics
 
 
+def evaluate_flights_for_runway_length(
+    config: Fl3xxApiConfig,
+    *,
+    from_date: date,
+    to_date: date,
+    runway_threshold_ft: int = 5000,
+    fetch_flights_fn=fetch_flights,
+) -> Tuple[List[RunwayLengthCheck], Dict[str, Any], Dict[str, Any]]:
+    """Return flights departing or arriving at airports below a runway length threshold."""
+
+    if to_date <= from_date:
+        raise FlightDataError("The end date must be after the start date for the OCA report window.")
+    if runway_threshold_ft <= 0:
+        raise FlightDataError("The runway length threshold must be a positive value.")
+
+    flights, metadata = fetch_flights_fn(config, from_date=from_date, to_date=to_date)
+
+    diagnostics: Dict[str, Any] = {
+        "total_flights": len(flights),
+        "flagged_flights": 0,
+        "missing_departure_length": 0,
+        "missing_arrival_length": 0,
+    }
+
+    items: List[RunwayLengthCheck] = []
+
+    for row in flights:
+        departure_airport = row.get("airportFrom")
+        arrival_airport = row.get("airportTo")
+
+        departure_length = _lookup_max_runway_length(departure_airport)
+        arrival_length = _lookup_max_runway_length(arrival_airport)
+
+        if departure_length is None:
+            diagnostics["missing_departure_length"] += 1
+        if arrival_length is None:
+            diagnostics["missing_arrival_length"] += 1
+
+        departure_short = departure_length is not None and departure_length < runway_threshold_ft
+        arrival_short = arrival_length is not None and arrival_length < runway_threshold_ft
+
+        if not (departure_short or arrival_short):
+            continue
+
+        item = RunwayLengthCheck(
+            flight_id=row.get("flightId"),
+            quote_id=row.get("quoteId"),
+            flight_reference=_extract_flight_reference(row),
+            booking_reference=_extract_booking_reference(row),
+            departure_utc=_extract_datetime_text(
+                row,
+                ("blocksoffestimated", "blockOffEstUTC", "realDateOFF", "realDateOUT", "etd"),
+            ),
+            arrival_utc=_extract_datetime_text(
+                row,
+                ("blocksonestimated", "blockOnEstUTC", "realDateON", "realDateIN", "eta"),
+            ),
+            airport_from=departure_airport,
+            airport_to=arrival_airport,
+            registration=row.get("registrationNumber"),
+            flight_number=row.get("flightNumberCompany") or row.get("flightNumber"),
+            departure_runway_length_ft=departure_length,
+            arrival_runway_length_ft=arrival_length,
+            departure_below_threshold=departure_short,
+            arrival_below_threshold=arrival_short,
+            runway_threshold_ft=int(runway_threshold_ft),
+        )
+
+        items.append(item)
+        diagnostics["flagged_flights"] += 1
+
+    items.sort(key=lambda a: (a.departure_utc or "", a.flight_id or 0))
+
+    return items, metadata, diagnostics
+
+
 __all__ = [
     "MaxFlightTimeAlert",
     "ZfwFlightCheck",
+    "RunwayLengthCheck",
     "evaluate_flights_for_max_time",
     "evaluate_flights_for_zfw_check",
+    "evaluate_flights_for_runway_length",
     "format_duration_label",
 ]
+
