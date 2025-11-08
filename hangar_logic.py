@@ -9,6 +9,55 @@ from __future__ import annotations
 from typing import Any, Iterable, Mapping, MutableSequence
 
 
+EMBRAER_TAILS = {
+    "CGASL",
+    "CFASV",
+    "CFLAS",
+    "CFJAS",
+    "CFASF",
+    "CGASE",
+    "CGASK",
+    "CGXAS",
+    "CGBAS",
+    "CFSNY",
+    "CFSYX",
+    "CFSBR",
+    "CFSRX",
+    "CFSJR",
+    "CFASQ",
+    "CFSDO",
+}
+"""Tail numbers (without hyphen) that correspond to Embraer aircraft."""
+
+CJ_TAILS = {
+    "CFASP",
+    "CFASR",
+    "CFASW",
+    "CFIAS",
+    "CGASR",
+    "CGZAS",
+    "CFASY",
+    "CGASW",
+    "CGAAS",
+    "CFNAS",
+    "CGNAS",
+    "CGFFS",
+    "CFSFS",
+    "CGFSX",
+    "CFSFO",
+    "CFSNP",
+    "CFSQX",
+    "CFSFP",
+    "CFSEF",
+    "CFSDN",
+    "CGFSD",
+    "CFSUP",
+    "CFSRY",
+    "CGFSJ",
+}
+"""Tail numbers (without hyphen) that correspond to CJ aircraft."""
+
+
 def _normalize_text(value: Any) -> str | None:
     """Return an upper-cased string or ``None`` when the value is empty."""
 
@@ -65,8 +114,9 @@ def identify_aircraft_category(row: Mapping[str, Any] | None) -> str | None:
     tail = row.get("tail")
     tail_normalized = _normalize_text(tail)
     if tail_normalized:
-        if tail_normalized.startswith("C-FS") or tail_normalized.startswith("C-GFS"):
-            return "CJ"
+        tail_compact = tail_normalized.replace("-", "")
+        if tail_compact in EMBRAER_TAILS:
+            return "LEGACY"
         if tail_normalized.startswith("C-GA") or tail_normalized.startswith("C-FNA"):
             # Legacy and Praetor tails share the C-GA/C-FNA prefix family.
             # Fall back to checking for distinguishing keywords when available.
@@ -75,6 +125,10 @@ def identify_aircraft_category(row: Mapping[str, Any] | None) -> str | None:
                     return "PRAETOR"
                 if "LEGACY" in text:
                     return "LEGACY"
+        if tail_compact in CJ_TAILS:
+            return "CJ"
+        if tail_normalized.startswith("C-FS") or tail_normalized.startswith("C-GFS"):
+            return "CJ"
 
     return None
 
