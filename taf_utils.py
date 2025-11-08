@@ -47,6 +47,20 @@ def _coerce_float(value: Any) -> Optional[float]:
         return None
 
 
+def _first_present(mapping: MutableMapping[str, Any], *keys: str) -> Any:
+    """Return the first present (non-empty) value for the given keys."""
+
+    for key in keys:
+        if key in mapping:
+            value = mapping.get(key)
+            if value is None:
+                continue
+            if isinstance(value, str) and not value.strip():
+                continue
+            return value
+    return None
+
+
 def _guess_datetime_from_tokens(
     day: int, hour: int, minute: int = 0, *, reference: Optional[datetime] = None
 ) -> Optional[datetime]:
@@ -1430,29 +1444,41 @@ def get_metar_reports(icao_codes: Sequence[str]) -> Dict[str, List[Dict[str, Any
         )
 
         temperature = _coerce_float(
-            props.get("temperature")
-            or props.get("temp")
-            or props.get("tempC")
-            or props.get("temperatureC")
+            _first_present(
+                props,
+                "temperature",
+                "temp",
+                "tempC",
+                "temperatureC",
+            )
         )
         dewpoint = _coerce_float(
-            props.get("dewpoint")
-            or props.get("dewpt")
-            or props.get("dewpointC")
-            or props.get("dewpoint_c")
-            or props.get("dewpointTemperature")
+            _first_present(
+                props,
+                "dewpoint",
+                "dewpt",
+                "dewpointC",
+                "dewpoint_c",
+                "dewpointTemperature",
+            )
         )
         wind_speed = _coerce_float(
-            props.get("windSpeed")
-            or props.get("wind_speed")
-            or props.get("windSpd")
-            or props.get("windSpeedKt")
+            _first_present(
+                props,
+                "windSpeed",
+                "wind_speed",
+                "windSpd",
+                "windSpeedKt",
+            )
         )
         visibility = _coerce_float(
-            props.get("visibility")
-            or props.get("visibilitySM")
-            or props.get("visibility_sm")
-            or props.get("visibility_mi")
+            _first_present(
+                props,
+                "visibility",
+                "visibilitySM",
+                "visibility_sm",
+                "visibility_mi",
+            )
         )
 
         report_entry: Dict[str, Any] = {

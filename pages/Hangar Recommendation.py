@@ -1,3 +1,5 @@
+import html
+
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta, timezone, date
@@ -102,6 +104,25 @@ def _format_local(dt: datetime | None) -> str:
     if not dt:
         return "—"
     return dt.astimezone(MOUNTAIN_TZ).strftime("%a %b %d · %H:%M MT")
+
+
+ICE_HIGHLIGHT_KEYWORDS: tuple[str, ...] = ("FROST", "FREEZ", "FZ", "ICING")
+
+
+def _should_highlight_icing(text: str) -> bool:
+    upper = text.upper()
+    return any(keyword in upper for keyword in ICE_HIGHLIGHT_KEYWORDS)
+
+
+def _render_bullet(text: str, *, highlight: bool = False) -> None:
+    safe_text = html.escape(text)
+    if highlight:
+        st.markdown(
+            f"<div style='color:#f97316;font-weight:600;'>• {safe_text}</div>",
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(f"<div>• {safe_text}</div>", unsafe_allow_html=True)
 
 
 # ============================================================
@@ -291,12 +312,12 @@ for entry in overnight_rows:
     if triggers:
         st.markdown("**Triggers:**")
         for item in triggers:
-            st.markdown(f"• {item}")
+            _render_bullet(item, highlight=_should_highlight_icing(item))
 
     if notes:
         st.markdown("**Forecast Details:**")
         for item in notes:
-            st.markdown(f"• {item}")
+            _render_bullet(item, highlight=_should_highlight_icing(item))
 
     st.markdown("<hr style='opacity:0.3'>", unsafe_allow_html=True)
 
