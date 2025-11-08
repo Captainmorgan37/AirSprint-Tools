@@ -93,29 +93,92 @@ with st.spinner("Fetching flight data..."):
     flights, meta = fetch_flights(config, from_date=start_date, to_date=end_date + timedelta(days=1))
     normalized, _ = normalize_fl3xx_payload({"items": flights})
     filtered, _ = filter_out_subcharter_rows(normalized)
-    df = pd.DataFrame(filtered)
+df = pd.DataFrame(filtered)
 
 if df.empty:
     st.warning("No flights found for today or tomorrow.")
     st.stop()
+
+
+def _pick_column(dataframe: pd.DataFrame, candidates: tuple[str, ...]) -> str | None:
+    for column in candidates:
+        if column in dataframe.columns:
+            return column
+    return None
+
+
+tail_column = _pick_column(
+    df,
+    (
+        "tail",
+        "aircraftRegistration",
+        "aircraft",
+        "registrationNumber",
+        "registration",
+    ),
+)
+arrive_column = _pick_column(
+    df,
+    (
+        "arrival_time_utc",
+        "arrivalTimeUtc",
+        "arrivalUtc",
+        "arrival_time",
+        "arrivalTime",
+    ),
+)
+depart_column = _pick_column(
+    df,
+    (
+        "departure_time_utc",
+        "departureTimeUtc",
+        "blockOffTimeUtc",
+        "dep_time",
+        "departureTime",
+    ),
+)
+
+missing_columns = [
+    name
+    for name, column in (
+        ("tail registration", tail_column),
+        ("arrival time", arrive_column),
+        ("departure time", depart_column),
+    )
+    if column is None
+]
+
+if missing_columns:
+    st.error(
+        "Unable to determine required flight details: "
+        + ", ".join(missing_columns)
+        + "."
+    )
+    st.stop()
+
+for column in (arrive_column, depart_column):
+    df[column] = pd.to_datetime(df[column], utc=True, errors="coerce")
 
 # ============================================================
 # Identify Overnight Stays
 # ============================================================
 
 overnight_rows = []
-for tail, group in df.groupby("aircraftRegistration"):
-    group = group.sort_values("arrival_time_utc")
-    today_arr = group[group["arrival_time_utc"].dt.date == start_date]
-    tomorrow_dep = group[group["departure_time_utc"].dt.date == end_date]
+for tail, group in df.groupby(tail_column):
+    tail = str(tail or "").strip()
+    if not tail:
+        continue
+    group = group.sort_values(arrive_column)
+    today_arr = group[group[arrive_column].dt.date == start_date]
+    tomorrow_dep = group[group[depart_column].dt.date == end_date]
     if not today_arr.empty and not tomorrow_dep.empty:
         last_arr = today_arr.tail(1).iloc[0]
         first_dep = tomorrow_dep.head(1).iloc[0]
         overnight_rows.append({
             "tail": tail,
             "arrival_airport": last_arr["arrival_airport"],
-            "arr_utc": _ensure_utc(last_arr["arrival_time_utc"]),
-            "dep_utc": _ensure_utc(first_dep["departure_time_utc"])
+            "arr_utc": _ensure_utc(last_arr[arrive_column]),
+            "dep_utc": _ensure_utc(first_dep[depart_column])
         })
 
 if not overnight_rows:
