@@ -10,6 +10,11 @@ from flight_leg_utils import (
     filter_out_subcharter_rows,
     normalize_fl3xx_payload,
 )
+from hangar_logic import (
+    evaluate_hangar_need,
+    identify_aircraft_category,
+    is_client_departure,
+)
 from Home import configure_page, get_secret, password_gate, render_sidebar
 from taf_utils import get_metar_reports, get_taf_reports
 
@@ -97,43 +102,6 @@ def _format_local(dt: datetime | None) -> str:
     if not dt:
         return "—"
     return dt.astimezone(MOUNTAIN_TZ).strftime("%a %b %d · %H:%M MT")
-
-
-def _parse_temp_from_taf(taf_segments):
-    temps = []
-    for seg in taf_segments:
-        details = seg.get("details", [])
-        for label, val in details:
-            if "Temp" in label or label.startswith("Temperature"):
-                try:
-                    temps.append(float(val))
-                except Exception:
-                    continue
-    return min(temps) if temps else None
-
-
-def _parse_weather_codes(taf_segments):
-    wx_codes = []
-    for seg in taf_segments:
-        details = seg.get("details", [])
-        for label, val in details:
-            if label == "Weather":
-                wx_codes.extend(val.split(", "))
-    return wx_codes
-
-
-def _extract_metar_value(metar_data: list[dict], key: str) -> float | None:
-    if not metar_data:
-        return None
-    for report in metar_data:
-        value = report.get(key)
-        if value is None:
-            continue
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            continue
-    return None
 
 
 # ============================================================
@@ -258,6 +226,8 @@ for tail, group in df.groupby(tail_column):
             "dep_utc": _ensure_utc(first_dep[depart_column]),
             "arr_local": last_arr["arrival_local"],
             "dep_local": first_dep["departure_local"],
+            "aircraft_category": identify_aircraft_category(first_dep.to_dict()),
+            "client_departure": is_client_departure(first_dep.to_dict()),
         })
 
 if not overnight_rows:
@@ -280,123 +250,6 @@ with st.spinner("Fetching latest METAR observations..."):
 # Hangar Logic
 # ============================================================
 
-def evaluate_hangar_need(
-    taf_data: list[dict], metar_data: list[dict]
-) -> dict[str, list[str] | bool | None | float]:
-    assessment: dict[str, list[str] | bool | None | float] = {
-        "needs_hangar": False,
-        "triggers": [],
-        "notes": [],
-        "min_temp": None,
-        "metar_temp": None,
-        "metar_dewpoint": None,
-    }
-
-    metar_temp = _extract_metar_value(metar_data, "temperature")
-    metar_dewpoint = _extract_metar_value(metar_data, "dewpoint")
-    metar_wind = _extract_metar_value(metar_data, "wind_speed")
-    assessment["metar_temp"] = metar_temp
-    assessment["metar_dewpoint"] = metar_dewpoint
-
-    if not metar_data:
-        assessment["notes"].append("No recent METAR observation retrieved.")
-
-    if metar_temp is not None:
-        assessment["notes"].append(f"Current METAR temperature: {metar_temp:.0f}°C")
-    if metar_dewpoint is not None:
-        if metar_temp is not None:
-            spread = metar_temp - metar_dewpoint
-            assessment["notes"].append(
-                f"Current dewpoint: {metar_dewpoint:.0f}°C (spread {spread:.0f}°C)"
-            )
-        else:
-            assessment["notes"].append(
-                f"Current dewpoint from METAR: {metar_dewpoint:.0f}°C"
-            )
-
-    temp_min: float | None = None
-    temp_for_thresholds: float | None = None
-    wx_codes: list[str] = []
-
-    if not taf_data:
-        assessment["notes"].append(
-            "No TAF data available — unable to evaluate local weather risks."
-        )
-    else:
-        segments = taf_data[0].get("forecast", [])
-        temp_min = _parse_temp_from_taf(segments)
-        wx_codes = _parse_weather_codes(segments)
-        assessment["min_temp"] = temp_min
-
-        if temp_min is None:
-            assessment["notes"].append(
-                "Forecast minimum temperature unavailable in TAF."
-            )
-        else:
-            assessment["notes"].append(
-                f"Forecast minimum temperature: {temp_min:.0f}°C"
-            )
-            temp_for_thresholds = temp_min
-
-    if temp_min is None and metar_temp is not None:
-        estimated_min = metar_temp - 3
-        temp_for_thresholds = estimated_min
-        assessment["notes"].append(
-            f"Estimating overnight low near {estimated_min:.0f}°C based on current METAR trend."
-        )
-
-    if temp_for_thresholds is not None:
-        if temp_for_thresholds <= -20:
-            assessment["triggers"].append(
-                "Temperature at or below -20°C — hangar required"
-            )
-        elif temp_for_thresholds < 0:
-            assessment["triggers"].append("Temperature below freezing — frost risk")
-
-    if metar_temp is not None and metar_dewpoint is not None:
-        spread = metar_temp - metar_dewpoint
-        if spread <= 2 and metar_temp <= 1:
-            if metar_wind is not None and metar_wind <= 5:
-                assessment["triggers"].append(
-                    "METAR shows calm winds with temp/dewpoint spread ≤2°C — frost formation likely"
-                )
-            else:
-                assessment["notes"].append(
-                    "Temp/dewpoint spread ≤2°C — monitor for potential frost formation."
-                )
-
-    if wx_codes:
-        assessment["notes"].append(
-            "Weather codes in primary forecast window: "
-            + ", ".join(sorted(set(wx_codes)))
-        )
-    elif taf_data:
-        assessment["notes"].append(
-            "No significant weather codes in the primary TAF segment."
-        )
-
-    if any(code.startswith("FZ") for code in wx_codes):
-        assessment["triggers"].append(
-            "Freezing precipitation expected (FZ prefix codes present)"
-        )
-
-    if any(code in wx_codes for code in ["TS", "GR", "GS"]):
-        assessment["triggers"].append("Thunderstorm or hail risk indicated in TAF")
-
-    if metar_wind is not None and metar_wind <= 5:
-        assessment["notes"].append(
-            f"Current surface winds {metar_wind:.0f} kt — conducive to radiational cooling."
-        )
-
-    if not assessment["triggers"]:
-        assessment["notes"].append(
-            "No hangar-triggering conditions detected in current forecast."
-        )
-
-    assessment["needs_hangar"] = bool(assessment["triggers"])
-    return assessment
-
-
 # ============================================================
 # Display Results
 # ============================================================
@@ -406,7 +259,14 @@ for entry in overnight_rows:
     airport = entry["arrival_airport"]
     taf_data = taf_reports.get(airport, [])
     metar_data = metar_reports.get(airport, [])
-    assessment = evaluate_hangar_need(taf_data, metar_data)
+    aircraft_category = entry.get("aircraft_category")
+    client_departure = bool(entry.get("client_departure"))
+    assessment = evaluate_hangar_need(
+        taf_data,
+        metar_data,
+        aircraft_category=aircraft_category,
+        client_departure=client_departure,
+    )
     triggers = list(assessment.get("triggers", []))
     notes = list(assessment.get("notes", []))
 
