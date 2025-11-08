@@ -23,6 +23,24 @@ _AIRPORT_COORDS: Dict[str, Tuple[float, float]] = {}
 
 
 def _coerce_float(value: Any) -> Optional[float]:
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+
+        sign = 1.0
+        upper = stripped.upper()
+        if upper.startswith("M") and len(stripped) > 1 and stripped[1:].replace(".", "", 1).isdigit():
+            sign = -1.0
+            stripped = stripped[1:]
+        elif upper.startswith("P") and len(stripped) > 1 and stripped[1:].replace(".", "", 1).isdigit():
+            stripped = stripped[1:]
+
+        try:
+            return sign * float(stripped)
+        except ValueError:
+            return None
+
     try:
         return float(value)
     except (TypeError, ValueError):
@@ -1329,4 +1347,149 @@ def get_taf_reports(icao_codes: Sequence[str]) -> Dict[str, List[Dict[str, Any]]
     return results
 
 
-__all__ = ["TAF_FORECAST_FIELDS", "build_detail_list", "format_iso_timestamp", "get_taf_reports"]
+def get_metar_reports(icao_codes: Sequence[str]) -> Dict[str, List[Dict[str, Any]]]:
+    clean_codes: List[str] = []
+    for code in icao_codes:
+        if not code:
+            continue
+        up = code.strip().upper()
+        if up and up not in clean_codes:
+            clean_codes.append(up)
+
+    if not clean_codes:
+        return {}
+
+    params = {
+        "ids": ",".join(sorted(clean_codes)),
+        "format": "json",
+        "mostRecent": "true",
+        "mostRecentForEachStation": "true",
+        "hours": 3,
+    }
+
+    url = "https://aviationweather.gov/api/data/metar"
+
+    try:
+        response = requests.get(url, params=params, timeout=10)
+        if response.status_code == 204 or not response.content.strip():
+            return {}
+        response.raise_for_status()
+    except requests.HTTPError as exc:
+        status_code = getattr(exc.response, "status_code", None)
+        if status_code == 400:
+            fallback_params = {
+                "ids": params["ids"],
+                "format": "json",
+                "hours": 3,
+            }
+            response = requests.get(url, params=fallback_params, timeout=10)
+            if response.status_code == 204 or not response.content.strip():
+                return {}
+            response.raise_for_status()
+        else:
+            raise
+
+    try:
+        data = response.json()
+    except ValueError:
+        return {}
+
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+
+    for props in _normalize_aviationweather_features(data):
+        if not isinstance(props, MutableMapping):
+            continue
+
+        station = (
+            props.get("station")
+            or props.get("stationId")
+            or props.get("icaoId")
+            or props.get("icao_id")
+            or ""
+        )
+
+        station = str(station or "").strip().upper()
+        if not station:
+            continue
+
+        issue_display, issue_dt = format_iso_timestamp(
+            props.get("issueTime")
+            or props.get("issue_time")
+            or props.get("obsTime")
+            or props.get("obs_time")
+            or props.get("reportTime")
+        )
+
+        raw_text = (
+            props.get("rawMETAR")
+            or props.get("rawOb")
+            or props.get("rawText")
+            or props.get("raw_text")
+            or props.get("raw")
+            or ""
+        )
+
+        temperature = _coerce_float(
+            props.get("temperature")
+            or props.get("temp")
+            or props.get("tempC")
+            or props.get("temperatureC")
+        )
+        dewpoint = _coerce_float(
+            props.get("dewpoint")
+            or props.get("dewpt")
+            or props.get("dewpointC")
+            or props.get("dewpoint_c")
+            or props.get("dewpointTemperature")
+        )
+        wind_speed = _coerce_float(
+            props.get("windSpeed")
+            or props.get("wind_speed")
+            or props.get("windSpd")
+            or props.get("windSpeedKt")
+        )
+        visibility = _coerce_float(
+            props.get("visibility")
+            or props.get("visibilitySM")
+            or props.get("visibility_sm")
+            or props.get("visibility_mi")
+        )
+
+        report_entry: Dict[str, Any] = {
+            "station": station,
+            "raw": raw_text,
+            "issue_time_display": issue_display,
+            "issue_time": issue_dt,
+            "temperature": temperature,
+            "dewpoint": dewpoint,
+            "wind_speed": wind_speed,
+            "visibility": visibility,
+            "metar_data": dict(props),
+        }
+
+        existing_entries = grouped.get(station)
+        if not existing_entries:
+            grouped[station] = [report_entry]
+        else:
+            existing = existing_entries[0]
+            existing_dt = existing.get("issue_time") or datetime.min.replace(tzinfo=timezone.utc)
+            new_dt = report_entry.get("issue_time") or datetime.min.replace(tzinfo=timezone.utc)
+            if new_dt >= existing_dt:
+                grouped[station] = [report_entry]
+
+    results: Dict[str, List[Dict[str, Any]]] = {code: [] for code in clean_codes}
+
+    for code in clean_codes:
+        if code in grouped:
+            results[code] = grouped[code]
+
+    return results
+
+
+__all__ = [
+    "TAF_FORECAST_FIELDS",
+    "build_detail_list",
+    "format_iso_timestamp",
+    "get_metar_reports",
+    "get_taf_reports",
+]
