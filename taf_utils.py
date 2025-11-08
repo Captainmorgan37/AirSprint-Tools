@@ -23,6 +23,24 @@ _AIRPORT_COORDS: Dict[str, Tuple[float, float]] = {}
 
 
 def _coerce_float(value: Any) -> Optional[float]:
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+
+        sign = 1.0
+        upper = stripped.upper()
+        if upper.startswith("M") and len(stripped) > 1 and stripped[1:].replace(".", "", 1).isdigit():
+            sign = -1.0
+            stripped = stripped[1:]
+        elif upper.startswith("P") and len(stripped) > 1 and stripped[1:].replace(".", "", 1).isdigit():
+            stripped = stripped[1:]
+
+        try:
+            return sign * float(stripped)
+        except ValueError:
+            return None
+
     try:
         return float(value)
     except (TypeError, ValueError):
