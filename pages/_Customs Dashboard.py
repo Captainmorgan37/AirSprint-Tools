@@ -88,6 +88,19 @@ _SESSION_STATE_KEY = "customs_dashboard_cached_data"
 
 _DEFAULT_FLAGGED_KEYWORDS: Tuple[str, ...] = ("dog", "dogs", "cat", "cats", "gun", "guns", "rifle", "firearms", "waiver", "esta", "visa", "permit", "pet", "pets")
 
+CANADIAN_CUSTOMS_AIRPORTS = {
+    "CYHU": {
+        "label": "Canada 🇨🇦",
+        "category": "CA_SPECIAL",
+        "weekend_only": True,
+    },
+    "CZBM": {
+        "label": "Canada 🇨🇦",
+        "category": "CA_SPECIAL",
+        "weekend_only": False,
+    },
+}
+
 
 st.title("🛃 Customs Dashboard")
 
@@ -353,6 +366,26 @@ def _parse_lead_time_hours(value: Any) -> Optional[float]:
     return None
 
 
+def _extract_arrival_dt(row: Mapping[str, Any]) -> Optional[datetime]:
+    arrival_keys = (
+        "arrivalTime",
+        "arrival_time",
+        "arr_time",
+        "eta",
+        "sta",
+        "scheduledArrival",
+    )
+    for key in arrival_keys:
+        raw_value = row.get(key)
+        if not raw_value:
+            continue
+        try:
+            return safe_parse_dt(str(raw_value))
+        except Exception:
+            continue
+    return None
+
+
 def _extract_departure_dt(row: Mapping[str, Any]) -> Optional[datetime]:
     departure_keys = (
         "departureTime",
@@ -370,6 +403,48 @@ def _extract_departure_dt(row: Mapping[str, Any]) -> Optional[datetime]:
         except Exception:
             continue
     return None
+
+
+def _classify_arrival_country(
+    row: Mapping[str, Any],
+    dep_airport: str,
+    arr_airport: str,
+    lookup: Mapping[str, Mapping[str, Any]],
+) -> Tuple[bool, str, str]:
+    country = _arrival_country_from_row(row, lookup)
+    if country == "US":
+        return True, "United States 🇺🇸", "US"
+
+    airport_code = arr_airport.strip().upper() if isinstance(arr_airport, str) else ""
+    special_rule = CANADIAN_CUSTOMS_AIRPORTS.get(airport_code)
+    if not special_rule:
+        return False, "", ""
+
+    include_leg = True
+    if special_rule.get("weekend_only"):
+        arrival_dt = _extract_arrival_dt(row)
+        if isinstance(arrival_dt, datetime):
+            tz_name = (
+                _extract_airport_timezone(airport_code, lookup)
+                or _candidate_timezone_from_row(row)
+            )
+            if not tz_name and dep_airport:
+                tz_name = _extract_airport_timezone(dep_airport, lookup)
+            if tz_name:
+                try:
+                    arrival_local = arrival_dt.astimezone(ZoneInfo(tz_name))
+                except Exception:
+                    arrival_local = arrival_dt
+            else:
+                arrival_local = arrival_dt
+            include_leg = arrival_local.weekday() >= 5
+
+    if include_leg:
+        label = special_rule.get("label") or "Canada"
+        category = special_rule.get("category") or "CA"
+        return True, label, category
+
+    return False, "", ""
 
 
 def _find_operating_window_before(
@@ -867,17 +942,6 @@ if fetch_button:
     customs_mask = legs_df.apply(lambda r: _is_customs_row(r.to_dict()), axis=1)
     customs_df = legs_df.loc[customs_mask].copy()
 
-    def _is_us_arrival(row: Mapping[str, Any]) -> bool:
-        country = _arrival_country_from_row(row, lookup)
-        return country == "US"
-
-    us_arrival_mask = customs_df.apply(lambda r: _is_us_arrival(r.to_dict()), axis=1)
-    customs_df = customs_df.loc[us_arrival_mask].copy()
-
-    if customs_df.empty:
-        st.success("No US customs arrivals found in the selected window.")
-        st.stop()
-
     customs_df["dep_time"] = customs_df["dep_time"].astype(str)
     customs_df = customs_df.sort_values("dep_time").reset_index(drop=True)
 
@@ -893,6 +957,14 @@ if fetch_button:
             tail = str(row.get("tail") or "")
             dep_airport = _detect_airport_value(row, DEPARTURE_AIRPORT_COLUMNS)
             arr_airport = _detect_airport_value(row, ARRIVAL_AIRPORT_COLUMNS)
+            include_leg, arrival_country_label, arrival_country_category = _classify_arrival_country(
+                row,
+                dep_airport,
+                arr_airport,
+                lookup,
+            )
+            if not include_leg:
+                continue
             dep_utc, dep_local = _format_local_time(row)
 
             keyword_matches: List[str] = []
@@ -991,6 +1063,7 @@ if fetch_button:
                     "Tail": tail,
                     "Departure": dep_airport,
                     "Arrival": arr_airport,
+                    "Arrival Country": arrival_country_label,
                     "Departure Local": dep_local,
                     "Arrival Status": arr_status,
                     "Arrival By": arr_by,
@@ -1008,11 +1081,16 @@ if fetch_button:
                     "_clearance_start_dt": clearance_start_dt,
                     "_clearance_end_dt": clearance_end_dt,
                     "_flagged_keywords": keyword_matches,
+                    "_arrival_country_category": arrival_country_category,
                 }
             )
     finally:
         if detail_session is not None:
             detail_session.close()
+
+    if not rows:
+        st.success("No customs arrivals found in the selected window.")
+        st.stop()
 
     result_df = pd.DataFrame(rows)
     st.session_state[_SESSION_STATE_KEY] = {
@@ -1104,6 +1182,7 @@ base_drop_cols = [
         "_urgency_category",
         "_urgency_priority",
         "_flagged_keywords",
+        "_arrival_country_category",
     )
     if col in result_df.columns
 ]
@@ -1151,6 +1230,9 @@ def _render_customs_table(
             flagged_lookup = (
                 working_df["_flagged_keywords"].apply(lambda val: bool(val)).to_dict()
             )
+        country_lookup = {}
+        if "_arrival_country_category" in working_df.columns:
+            country_lookup = working_df["_arrival_country_category"].to_dict()
 
         def _style_row(row: pd.Series) -> List[str]:
             css_parts: List[str] = []
@@ -1167,8 +1249,14 @@ def _render_customs_table(
                 if isinstance(text_value, str) and text_value.strip():
                     text_color = text_value.strip()
 
+            box_shadows: List[str] = []
             if flagged_lookup.get(row.name, False):
-                css_parts.append("box-shadow: inset 0 -4px 0 0 #6a1b9a")
+                box_shadows.append("inset 0 -4px 0 0 #6a1b9a")
+            country_category = country_lookup.get(row.name)
+            if country_category == "CA_SPECIAL":
+                box_shadows.append("inset 0 0 0 2px #0d47a1")
+            if box_shadows:
+                css_parts.append("box-shadow: " + ", ".join(box_shadows))
 
             if not css_parts:
                 return [""] * len(row)

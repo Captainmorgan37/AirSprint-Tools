@@ -95,7 +95,10 @@ def test_legacy_threshold():
     [
         ({"assignedAircraftType": "Praetor 500"}, "PRAETOR"),
         ({"ownerClass": "Legacy Owner"}, "LEGACY"),
-        ({"tail": "C-FSNY"}, "CJ"),
+        ({"tail": "C-GASL"}, "LEGACY"),
+        ({"tail": "CFSDO"}, "LEGACY"),
+        ({"tail": "C-FSNY"}, "LEGACY"),
+        ({"tail": "C-FASP"}, "CJ"),
         (
             {
                 "tail": "C-GASW",
