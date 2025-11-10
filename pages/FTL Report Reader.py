@@ -5,6 +5,8 @@ import numpy as np
 import re
 from datetime import timedelta
 
+st.set_page_config(page_title="FTL Audit: Duty, Rest & 7d/30d Policy", layout="wide")
+st.title("FTL Audit: Duty, Rest & 7d/30d Policy")
 
 REST_AFTER_ACT_PATTERNS = [
     r"\bRest\s*After\s*(FDP|Duty)\b.*\(act\)",
@@ -39,8 +41,6 @@ REST_BEFORE_MIN_PATTERNS = [
     r"\bTurn\s*Time\s*Before\b.*\bmin\b",
 ]
 
-st.set_page_config(page_title="FTL Audit: Duty, Rest & 7d/30d Policy", layout="wide")
-st.title("FTL Audit: Duty, Rest & 7d/30d Policy")
 
 st.markdown(
     "Upload the relevant CSV exports and the app will run three checks:"
