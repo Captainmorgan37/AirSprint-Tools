@@ -7,6 +7,8 @@ from datetime import timedelta
 
 st.set_page_config(page_title="FTL Audit: Duty, Rest & 7d/30d Policy", layout="wide")
 st.title("FTL Audit: Duty, Rest & 7d/30d Policy")
+password_gate()
+render_sidebar()
 
 REST_AFTER_ACT_PATTERNS = [
     r"\bRest\s*After\s*(FDP|Duty)\b.*\(act\)",
