@@ -1,17 +1,15 @@
-import requests
-import pandas as pd
-import time
+from __future__ import annotations
 
-from fl3xx_api import (
-    Fl3xxApiConfig,
-    fetch_preflight,
-    parse_preflight_payload,
-)
-from flight_leg_utils import (
-    FlightDataError,
-    build_fl3xx_api_config,
-    get_todays_sorted_legs_by_tail,
-)
+import time
+from collections.abc import Mapping
+from typing import Any, Optional
+
+import pandas as pd
+import requests
+import streamlit as st
+
+from fl3xx_client import Fl3xxApiConfig
+from flight_leg_utils import FlightDataError, build_fl3xx_api_config
 from Home import configure_page, password_gate, render_sidebar
 
 
@@ -29,7 +27,7 @@ def _load_fl3xx_settings() -> Optional[dict[str, Any]]:
         return None
 
     if isinstance(section, Mapping):
-        return dict(section)
+        return {str(key): section[key] for key in section}
 
     if isinstance(section, dict):  # pragma: no cover - defensive fallback
         return dict(section)
@@ -38,6 +36,84 @@ def _load_fl3xx_settings() -> Optional[dict[str, Any]]:
     if callable(items_getter):  # pragma: no cover - defensive fallback
         return dict(items_getter())
 
+    return None
+
+
+def _build_base_url(config: Fl3xxApiConfig) -> str:
+    """Return the FL3XX base URL suitable for auxiliary endpoints."""
+
+    base = config.base_url.rstrip("/")
+    for suffix in ("/flight/flights", "/flight"):
+        if base.lower().endswith(suffix):
+            base = base[: -len(suffix)]
+            break
+    return base.rstrip("/")
+
+
+def _get_airport_id(
+    session: requests.Session,
+    base_url: str,
+    headers: dict[str, str],
+    code: str,
+    *,
+    timeout: int,
+    verify_ssl: bool,
+) -> Optional[int]:
+    """Try searching FL3XX airports for a code (ICAO/IATA/FAA)."""
+
+    response = session.get(
+        f"{base_url}/airports/search",
+        params={"query": code},
+        headers=headers,
+        timeout=timeout,
+        verify=verify_ssl,
+    )
+    response.raise_for_status()
+    data = response.json()
+    if isinstance(data, list) and data:
+        airport = data[0]
+        if isinstance(airport, Mapping):
+            airport_id = airport.get("id")
+            if isinstance(airport_id, int):
+                return airport_id
+            if isinstance(airport_id, str) and airport_id.isdigit():
+                return int(airport_id)
+    return None
+
+
+def _fetch_default_fbo(
+    session: requests.Session,
+    base_url: str,
+    headers: dict[str, str],
+    airport_id: int,
+    *,
+    timeout: int,
+    verify_ssl: bool,
+) -> Optional[dict[str, Any]]:
+    response = session.get(
+        f"{base_url}/airports/{airport_id}/services",
+        headers=headers,
+        timeout=timeout,
+        verify=verify_ssl,
+    )
+    response.raise_for_status()
+    services = response.json()
+    if not isinstance(services, list):
+        return None
+    for service in services:
+        if not isinstance(service, Mapping):
+            continue
+        service_type = service.get("type")
+        if isinstance(service_type, Mapping) and service_type.get("name") == "FBO":
+            if service.get("mainContact") is True:
+                return {
+                    "Default FBO": service.get("company"),
+                    "Default FBO Email": service.get("email"),
+                    "Default FBO Phone": service.get("phone"),
+                    "Default FBO Homepage": service.get("homepage"),
+                    "Default FBO Radio": service.get("radio"),
+                    "Default FBO Address": service.get("address"),
+                }
     return None
 
 
@@ -61,93 +137,82 @@ except FlightDataError as exc:
     st.error(str(exc))
     st.stop()
 
-
-
-
-API_KEY = "YOUR_API_KEY"
-BASE_URL = "https://app.fl3xx.us/api/external"
-HEADERS = {"Authorization": f"Bearer {API_KEY}"}
+headers = config.build_headers()
+base_url = _build_base_url(config)
+timeout = config.timeout
+verify_ssl = config.verify_ssl
 
 # Load your Canadian airports list
 df = pd.read_csv("Canada Airports.csv")
 
-results = []
-
-def get_airport_id(code):
-    """Try searching FL3XX airports for a code (ICAO/IATA/FAA)"""
-    try:
-        r = requests.get(f"{BASE_URL}/airports/search?query={code}", headers=HEADERS, timeout=10)
-        r.raise_for_status()
-        data = r.json()
-        if data:
-            return data[0].get("id")
-    except Exception:
-        return None
+session = requests.Session()
+results: list[dict[str, Any]] = []
 
 for _, row in df.iterrows():
-    airport_code = None
-    airport_id = None
+    record: dict[str, Any] = {
+        "ICAO": row.get("ICAO"),
+        "IATA": row.get("IATA"),
+        "FAA": row.get("FAA"),
+    }
 
-    for key in ["ICAO", "IATA", "FAA"]:
-        if pd.notna(row.get(key)):
-            airport_code = str(row[key]).strip()
-            airport_id = get_airport_id(airport_code)
-            if airport_id:
-                break
+    airport_id: Optional[int] = None
+    search_error: Optional[str] = None
+
+    for key in ("ICAO", "IATA", "FAA"):
+        value = row.get(key)
+        if pd.isna(value):
+            continue
+        code = str(value).strip()
+        if not code:
+            continue
+        try:
+            airport_id = _get_airport_id(
+                session,
+                base_url,
+                headers,
+                code,
+                timeout=timeout,
+                verify_ssl=verify_ssl,
+            )
+        except requests.RequestException as exc:
+            search_error = f"Error searching airport {code}: {exc}"
+            break
+
+        if airport_id:
+            break
+
+    if search_error:
+        record["Default FBO"] = search_error
+        results.append(record)
+        continue
 
     if not airport_id:
-        results.append({
-            "ICAO": row.get("ICAO"),
-            "IATA": row.get("IATA"),
-            "FAA": row.get("FAA"),
-            "Default FBO": "Airport Not Found in FL3XX"
-        })
+        record["Default FBO"] = "Airport Not Found in FL3XX"
+        results.append(record)
         continue
 
     try:
-        r = requests.get(f"{BASE_URL}/airports/{airport_id}/services", headers=HEADERS, timeout=10)
-        r.raise_for_status()
-        services = r.json()
-        found_fbo = None
+        fbo_details = _fetch_default_fbo(
+            session,
+            base_url,
+            headers,
+            airport_id,
+            timeout=timeout,
+            verify_ssl=verify_ssl,
+        )
+    except requests.RequestException as exc:
+        record["Default FBO"] = f"Error retrieving services: {exc}"
+        results.append(record)
+        continue
 
-        for s in services:
-            if s.get("type", {}).get("name") == "FBO" and s.get("mainContact") == True:
-                found_fbo = {
-                    "Company": s.get("company"),
-                    "Email": s.get("email"),
-                    "Phone": s.get("phone"),
-                    "Homepage": s.get("homepage"),
-                    "Radio": s.get("radio"),
-                    "Address": s.get("address"),
-                }
-                break
+    if fbo_details:
+        record.update(fbo_details)
+    else:
+        record["Default FBO"] = "No Default Selected"
 
-        if found_fbo:
-            results.append({
-                "ICAO": row.get("ICAO"),
-                "IATA": row.get("IATA"),
-                "FAA": row.get("FAA"),
-                **found_fbo
-            })
-        else:
-            results.append({
-                "ICAO": row.get("ICAO"),
-                "IATA": row.get("IATA"),
-                "FAA": row.get("FAA"),
-                "Company": "No Default Selected"
-            })
-
-    except Exception as e:
-        results.append({
-            "ICAO": row.get("ICAO"),
-            "IATA": row.get("IATA"),
-            "FAA": row.get("FAA"),
-            "Company": f"Error: {e}"
-        })
-
+    results.append(record)
     time.sleep(0.25)  # gentle delay to avoid rate limiting
 
-# Save results
 out_df = pd.DataFrame(results)
 out_df.to_csv("default_fbos.csv", index=False)
-print("✅ Done! Saved to default_fbos.csv")
+st.success("✅ Done! Saved to default_fbos.csv")
