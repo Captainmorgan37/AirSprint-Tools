@@ -1,187 +1,125 @@
-
-from __future__ import annotations
-
-from collections.abc import Mapping
-from datetime import datetime, timedelta, date
-from typing import Any, Optional
-
+import requests
+import pandas as pd
+import time
 import streamlit as st
-from zoneinfo_compat import ZoneInfo
 
-from duty_clearance import _get_report_time_local
-from fl3xx_api import (
-    Fl3xxApiConfig,
-    fetch_preflight,
-    parse_preflight_payload,
-)
-from flight_leg_utils import (
-    FlightDataError,
-    build_fl3xx_api_config,
-    get_todays_sorted_legs_by_tail,
-)
-from Home import configure_page, password_gate, render_sidebar
+# =========================
+# Load credentials from Streamlit secrets
+# =========================
+API_TOKEN = st.secrets["fl3xx_api"]["api_token"]
+AUTH_HEADER_NAME = st.secrets["fl3xx_api"].get("auth_header_name", "Authorization")
+BASE_URL = "https://app.fl3xx.us/api/external"
 
+HEADERS = {AUTH_HEADER_NAME: API_TOKEN}
 
-def _load_fl3xx_settings() -> Optional[dict[str, Any]]:
-    """Return FL3XX API credentials from Streamlit secrets when available."""
+# =========================
+# File input (upload or internal)
+# =========================
+st.title("Default FBO Finder")
+st.write("Uploads your airport list and automatically fetches default FBOs via FL3XX API.")
 
+uploaded_file = st.file_uploader("Upload your airport CSV", type=["csv"])
+if not uploaded_file:
+    st.stop()
+
+df = pd.read_csv(uploaded_file)
+
+# =========================
+# Helper to find airport ID
+# =========================
+def get_airport_id(code):
+    """Try searching FL3XX airports for ICAO, IATA, or FAA codes"""
     try:
-        secrets = st.secrets  # type: ignore[attr-defined]
+        r = requests.get(f"{BASE_URL}/airports/search?query={code}", headers=HEADERS, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+        if data:
+            return data[0].get("id")
     except Exception:
         return None
 
+# =========================
+# Process airports
+# =========================
+st.info(f"Found {len(df)} airports in uploaded file. Starting scan...")
+
+results = []
+progress_bar = st.progress(0)
+
+for i, (_, row) in enumerate(df.iterrows()):
+    airport_id = None
+
+    # Try ICAO → IATA → FAA
+    for key in ["ICAO", "IATA", "FAA"]:
+        val = row.get(key)
+        if pd.notna(val):
+            code = str(val).strip()
+            airport_id = get_airport_id(code)
+            if airport_id:
+                break
+
+    if not airport_id:
+        results.append({
+            "ICAO": row.get("ICAO"),
+            "IATA": row.get("IATA"),
+            "FAA": row.get("FAA"),
+            "Default FBO Company": "Airport Not Found in FL3XX"
+        })
+        progress_bar.progress((i + 1) / len(df))
+        continue
+
     try:
-        section = secrets["fl3xx_api"]
-    except Exception:
-        return None
+        r = requests.get(f"{BASE_URL}/airports/{airport_id}/services", headers=HEADERS, timeout=10)
+        r.raise_for_status()
+        services = r.json()
 
-    if isinstance(section, Mapping):
-        return dict(section)
+        found_fbo = None
+        for s in services:
+            if s.get("type", {}).get("name") == "FBO" and s.get("mainContact") == True:
+                found_fbo = {
+                    "Default FBO Company": s.get("company"),
+                    "FBO Email": s.get("email"),
+                    "FBO Phone": s.get("phone"),
+                    "FBO Homepage": s.get("homepage"),
+                    "FBO Address": s.get("address"),
+                    "FBO Radio": s.get("radio"),
+                }
+                break
 
-    if isinstance(section, dict):  # pragma: no cover - defensive fallback
-        return dict(section)
-
-    items_getter = getattr(section, "items", None)
-    if callable(items_getter):  # pragma: no cover - defensive fallback
-        return dict(items_getter())
-
-    return None
-
-
-# --- Page setup ---
-configure_page(page_title="DEBUG PREFLIGHT / CHECKINS")
-password_gate()
-render_sidebar()
-st.title("DEBUG: Preflight / Checkins / Legs by Tail")
-
-fl3xx_settings = _load_fl3xx_settings()
-if not fl3xx_settings:
-    st.error(
-        "FL3XX API credentials are missing. Add them to `.streamlit/secrets.toml` under the "
-        "`fl3xx_api` section and reload the app."
-    )
-    st.stop()
-
-try:
-    config: Fl3xxApiConfig = build_fl3xx_api_config(fl3xx_settings)
-except FlightDataError as exc:
-    st.error(str(exc))
-    st.stop()
-
-# --- Pick a target date (default = tomorrow in America/Edmonton) ---
-MOUNTAIN_TZ = ZoneInfo("America/Edmonton")
-now_mt = datetime.now(tz=MOUNTAIN_TZ)
-default_target_date = (now_mt.date() + timedelta(days=1))
-
-target_date = st.date_input(
-    "Target duty date to inspect",
-    value=default_target_date,
-    help="Usually tomorrow. This is the date whose crews should appear on the clearance dashboard.",
-)
-
-st.write("Selected target_date:", target_date)
-
-# --- 1) Show LEGS BY TAIL so we can see what flights we're even considering ---
-st.header("Step 1: Legs by Tail")
-legs_by_tail = get_todays_sorted_legs_by_tail(config, target_date)
-
-if not legs_by_tail:
-    st.warning(
-        "get_todays_sorted_legs_by_tail() returned no legs. "
-        "That means: either no flights, or no tails assigned, or parsing filtered them all out."
-    )
-else:
-    for tail, legs in legs_by_tail.items():
-        st.subheader(f"Tail {tail}")
-        # just show first 2 legs for brevity
-        st.write(legs[:2])
-
-# --- Get a flightId to debug ---
-st.markdown("---")
-st.header("Step 2: Pick a flight to inspect preflight data")
-
-# try to auto-suggest a flight ID from the first tail
-some_flight_id = None
-for _tail, _legs in legs_by_tail.items():
-    if _legs:
-        # _legs entries should have "flightId"
-        fid = _legs[0].get("flightId")
-        if fid:
-            some_flight_id = fid
-            break
-
-flight_id_to_debug = st.text_input(
-    "Flight ID to debug",
-    value=str(some_flight_id) if some_flight_id else "",
-    help="This should be a FL3XX flightId for one of the flights on the selected date.",
-)
-
-do_run = st.button("Fetch & Inspect Preflight for this Flight ID")
-
-if do_run:
-    if not flight_id_to_debug.strip().isdigit():
-        st.error("Please enter a numeric flightId.")
-    else:
-        flight_id_int = int(flight_id_to_debug.strip())
-
-        # --- 2) Pull raw preflight payload from FL3XX ---
-        st.subheader("Raw preflight payload")
-        preflight_payload = fetch_preflight(config, flight_id_int)
-        st.write(preflight_payload)
-
-        # --- 3) Parse it using our existing parser ---
-        st.subheader("Parsed preflight status object")
-        parsed_status = parse_preflight_payload(preflight_payload)
-        st.write(parsed_status)
-
-        # --- 4) Dump the crew_checkins that parsed_status thinks it found ---
-        st.subheader("Crew checkins from parsed_status")
-        if not parsed_status.crew_checkins:
-            st.warning(
-                "No crew_checkins parsed. "
-                "If the raw preflight payload clearly has checkin times / user IDs, "
-                "then our parse_preflight_payload() isn't looking in the right place."
-            )
+        if found_fbo:
+            results.append({
+                "ICAO": row.get("ICAO"),
+                "IATA": row.get("IATA"),
+                "FAA": row.get("FAA"),
+                **found_fbo
+            })
         else:
-            for check in parsed_status.crew_checkins:
-                st.write({
-                    "user_id": check.user_id,
-                    "pilot_role": check.pilot_role,
-                    "checkin": check.checkin,
-                    "checkin_actual": check.checkin_actual,
-                    "checkin_default": check.checkin_default,
-                })
+            results.append({
+                "ICAO": row.get("ICAO"),
+                "IATA": row.get("IATA"),
+                "FAA": row.get("FAA"),
+                "Default FBO Company": "No Default Selected"
+            })
 
-        # --- 5) Try to compute report_local from parsed_status
-        st.subheader("Derived report_local using _get_report_time_local()")
-        # We need a timezone. We'll guess from the first leg of this tail+date if available;
-        # fallback to Mountain.
-        duty_tz = MOUNTAIN_TZ
-        # try to infer dep_tz that matches this exact flight_id
-        for _tail, _legs in legs_by_tail.items():
-            for leg in _legs:
-                if leg.get("flightId") == flight_id_int:
-                    # get dep_tz if present
-                    dep_tz_name = leg.get("dep_tz")
-                    if dep_tz_name:
-                        try:
-                            duty_tz = ZoneInfo(dep_tz_name)
-                        except Exception:
-                            duty_tz = MOUNTAIN_TZ
-                    break
+    except Exception as e:
+        results.append({
+            "ICAO": row.get("ICAO"),
+            "IATA": row.get("IATA"),
+            "FAA": row.get("FAA"),
+            "Default FBO Company": f"Error: {e}"
+        })
 
-        report_local = _get_report_time_local(parsed_status, duty_tz)
-        st.write("duty_tz:", duty_tz)
-        st.write("report_local:", report_local)
+    progress_bar.progress((i + 1) / len(df))
+    time.sleep(0.25)  # small delay for API courtesy
 
-        if report_local is None:
-            st.error(
-                "report_local came back None.\n"
-                "That means _get_report_time_local() could not find usable epoch timestamps.\n"
-                "We'll need to adjust parse_preflight_payload() or timestamp conversion."
-            )
-        else:
-            st.success(
-                "We successfully derived a report_local, which means the dashboard "
-                "should NOT have filtered this crew out once we wire in this value."
-            )
+# =========================
+# Merge & Display
+# =========================
+results_df = pd.DataFrame(results)
+merged = df.merge(results_df, on=["ICAO", "IATA", "FAA"], how="left")
+
+st.success("✅ FBO lookup complete!")
+st.dataframe(merged)
+
+csv = merged.to_csv(index=False).encode("utf-8")
+st.download_button("Download Updated CSV", csv, "Canada Airports with FBOs.csv", "text/csv")
