@@ -51,6 +51,28 @@ def _build_base_url(config: Fl3xxApiConfig) -> str:
     return base.rstrip("/")
 
 
+def _extract_airport_id(payload: Any) -> Optional[int]:
+    """Return an airport ID from a FL3XX airport search payload."""
+
+    def _normalise_candidates(obj: Any) -> list[Mapping[str, Any]]:
+        if isinstance(obj, list):
+            return [item for item in obj if isinstance(item, Mapping)]
+        if isinstance(obj, Mapping):
+            items = obj.get("items")
+            if isinstance(items, list):
+                return [item for item in items if isinstance(item, Mapping)]
+            return [obj]
+        return []
+
+    for candidate in _normalise_candidates(payload):
+        airport_id = candidate.get("id")
+        if isinstance(airport_id, int):
+            return airport_id
+        if isinstance(airport_id, str) and airport_id.isdigit():
+            return int(airport_id)
+    return None
+
+
 def _get_airport_id(
     session: requests.Session,
     base_url: str,
@@ -62,23 +84,38 @@ def _get_airport_id(
 ) -> Optional[int]:
     """Try searching FL3XX airports for a code (ICAO/IATA/FAA)."""
 
-    response = session.get(
-        f"{base_url}/airports/search",
-        params={"query": code},
-        headers=headers,
-        timeout=timeout,
-        verify=verify_ssl,
-    )
-    response.raise_for_status()
-    data = response.json()
-    if isinstance(data, list) and data:
-        airport = data[0]
-        if isinstance(airport, Mapping):
-            airport_id = airport.get("id")
-            if isinstance(airport_id, int):
-                return airport_id
-            if isinstance(airport_id, str) and airport_id.isdigit():
-                return int(airport_id)
+    attempts: list[tuple[str, dict[str, str]]] = [
+        (f"{base_url}/airports/search", {"query": code}),
+        (f"{base_url}/airports/search", {"searchQuery": code}),
+        (f"{base_url}/airports", {"searchQuery": code}),
+        (f"{base_url}/airports", {"query": code}),
+    ]
+
+    last_http_error: Optional[requests.HTTPError] = None
+    successful_request = False
+
+    for url, params in attempts:
+        try:
+            response = session.get(
+                url,
+                params=params,
+                headers=headers,
+                timeout=timeout,
+                verify=verify_ssl,
+            )
+            response.raise_for_status()
+        except requests.HTTPError as exc:
+            last_http_error = exc
+            continue
+
+        successful_request = True
+        airport_id = _extract_airport_id(response.json())
+        if airport_id is not None:
+            return airport_id
+
+    if not successful_request and last_http_error is not None:
+        raise last_http_error
+
     return None
 
 
