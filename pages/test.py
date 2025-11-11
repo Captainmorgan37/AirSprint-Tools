@@ -109,4 +109,17 @@ for i, (_, row) in enumerate(df.iterrows()):
             "Default FBO Company": f"Error: {e}"
         })
 
-    progress_bar.progress((i + 1) / len(df_
+    progress_bar.progress((i + 1) / len(df))
+    time.sleep(0.25)  # small delay for API courtesy
+
+# =========================
+# Merge & Display
+# =========================
+results_df = pd.DataFrame(results)
+merged = df.merge(results_df, on=["ICAO", "IATA", "FAA"], how="left")
+
+st.success("✅ FBO lookup complete!")
+st.dataframe(merged)
+
+csv = merged.to_csv(index=False).encode("utf-8")
+st.download_button("Download Updated CSV", csv, "Canada Airports with FBOs.csv", "text/csv")
