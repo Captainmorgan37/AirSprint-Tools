@@ -143,20 +143,43 @@ base_url = _build_base_url(config)
 timeout = config.timeout
 verify_ssl = config.verify_ssl
 
+uploaded_file = st.file_uploader(
+    "Upload airport CSV",
+    type=["csv"],
+    help=(
+        "The file should include `ICAO`, `IATA`, and/or `FAA` columns. "
+        "Rows without any of those identifiers will be skipped."
+    ),
+)
+
 data_file = Path(__file__).resolve().parents[1] / "data" / "canada_airports.csv"
 
-try:
-    df = pd.read_csv(data_file)
-except FileNotFoundError:
+if uploaded_file is not None:
     try:
-        display_path = data_file.relative_to(Path.cwd())
-    except ValueError:
-        display_path = data_file
-    st.error(
-        "The airport list could not be found. Expected it at "
-        f"`{display_path}`."
-    )
-    st.stop()
+        df = pd.read_csv(uploaded_file)
+    except Exception as exc:  # pragma: no cover - user input handling
+        st.error(f"Unable to read the uploaded CSV: {exc}")
+        st.stop()
+    source_description = f"uploaded file `{uploaded_file.name}`"
+else:
+    try:
+        df = pd.read_csv(data_file)
+    except FileNotFoundError:
+        try:
+            display_path = data_file.relative_to(Path.cwd())
+        except ValueError:
+            display_path = data_file
+        st.error(
+            "The airport list could not be found. Expected it at "
+            f"`{display_path}` or upload your own CSV above."
+        )
+        st.stop()
+    except Exception as exc:  # pragma: no cover - defensive fallback
+        st.error(f"Unable to read the bundled airport list: {exc}")
+        st.stop()
+    source_description = "bundled sample `canada_airports.csv`"
+
+st.caption(f"Processing airport list from the {source_description}.")
 
 session = requests.Session()
 results: list[dict[str, Any]] = []
@@ -227,5 +250,13 @@ for _, row in df.iterrows():
     time.sleep(0.25)  # gentle delay to avoid rate limiting
 
 out_df = pd.DataFrame(results)
-out_df.to_csv("default_fbos.csv", index=False)
-st.success("✅ Done! Saved to default_fbos.csv")
+st.dataframe(out_df)
+
+csv_bytes = out_df.to_csv(index=False).encode("utf-8")
+st.download_button(
+    "Download results as CSV",
+    data=csv_bytes,
+    file_name="default_fbos.csv",
+    mime="text/csv",
+)
+st.success("✅ Done! Use the download button above to save your results.")
