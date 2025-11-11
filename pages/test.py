@@ -6,20 +6,11 @@ import streamlit as st
 # =========================
 # Load credentials from Streamlit secrets
 # =========================
-fl3xx_cfg: Dict[str, Any] = {}
-cfg = get_secret("fl3xx_api", {})
-if isinstance(cfg, Mapping):
-    fl3xx_cfg = {str(k): cfg[k] for k in cfg}
-elif isinstance(cfg, dict):
-    fl3xx_cfg = dict(cfg)
+API_TOKEN = st.secrets["fl3xx_api"]["api_token"]
+AUTH_HEADER_NAME = st.secrets["fl3xx_api"].get("auth_header_name", "Authorization")
+BASE_URL = "https://app.fl3xx.us/api/external"
 
-has_live_credentials = bool(fl3xx_cfg.get("api_token") or fl3xx_cfg.get("auth_header"))
-if has_live_credentials:
-    st.sidebar.success("Using FL3XX credentials from Streamlit secrets.")
-else:
-    st.sidebar.info(
-        "Add your FL3XX credentials to `.streamlit/secrets.toml` under `[fl3xx_api]` to enable live fetching."
-    )
+HEADERS = {AUTH_HEADER_NAME: API_TOKEN}
 
 # =========================
 # File input (upload or internal)
