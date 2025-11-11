@@ -1,0 +1,11 @@
+ICAO,IATA,FAA,Name,Served City,Country,Latitude,Longitude,Category,Rescue and Firefighting Category,ARR Slot,DEP Slot,PPR
+CYYC,YYC,,Calgary International Airport,Calgary,Canada,51.122,-114.014,AirSprint Inc.: A,Yes,No,No,No
+CYVR,YVR,,Vancouver International Airport,Vancouver,Canada,49.194,-123.184,AirSprint Inc.: A,Yes,No,No,No
+CYYZ,YYZ,,Toronto Pearson International Airport,Toronto,Canada,43.677,-79.63,AirSprint Inc.: A,Yes,No,No,No
+CYUL,YUL,,Montréal–Trudeau International Airport,Montreal,Canada,45.468,-73.741,AirSprint Inc.: A,Yes,No,No,No
+CYHZ,YHZ,,Halifax Stanfield International Airport,Halifax,Canada,44.88,-63.509,AirSprint Inc.: A,Yes,No,No,No
+CYQB,YQB,,Québec City Jean Lesage International Airport,Quebec City,Canada,46.791,-71.393,AirSprint Inc.: B,Yes,No,No,No
+CYOW,YOW,,Ottawa Macdonald–Cartier International Airport,Ottawa,Canada,45.322,-75.669,AirSprint Inc.: A,Yes,No,No,No
+CYXE,YXE,,Saskatoon John G. Diefenbaker International Airport,Saskatoon,Canada,52.17,-106.69,AirSprint Inc.: B,Yes,No,No,No
+CYEG,YEG,,Edmonton International Airport,Edmonton,Canada,53.309,-113.58,AirSprint Inc.: A,Yes,No,No,No
+CYWG,YWG,,Winnipeg James Armstrong Richardson International Airport,Winnipeg,Canada,49.91,-97.239,AirSprint Inc.: B,Yes,No,No,No

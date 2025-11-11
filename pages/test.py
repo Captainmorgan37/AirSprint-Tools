@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any, Optional
 
 import pandas as pd
@@ -142,8 +143,20 @@ base_url = _build_base_url(config)
 timeout = config.timeout
 verify_ssl = config.verify_ssl
 
-# Load your Canadian airports list
-df = pd.read_csv("Canada Airports.csv")
+data_file = Path(__file__).resolve().parents[1] / "data" / "canada_airports.csv"
+
+try:
+    df = pd.read_csv(data_file)
+except FileNotFoundError:
+    try:
+        display_path = data_file.relative_to(Path.cwd())
+    except ValueError:
+        display_path = data_file
+    st.error(
+        "The airport list could not be found. Expected it at "
+        f"`{display_path}`."
+    )
+    st.stop()
 
 session = requests.Session()
 results: list[dict[str, Any]] = []
