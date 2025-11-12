@@ -132,10 +132,11 @@ else:
                 pax_weights.append(w)
     if total_pax > 0:
         total_declared_weight = sum(pax_weights)
-        additive_weight = 18 * total_pax
+        additive_per_pax = 18 if season == "Summer" else 24
+        additive_weight = additive_per_pax * total_pax
         pax_weight = total_declared_weight + additive_weight
         st.info(
-            f"Regulatory additive applied: 18 lb × {total_pax} pax (total {additive_weight} lb) has been automatically added to the provided weights."
+            f"Regulatory additive applied: {additive_per_pax} lb × {total_pax} pax (total {additive_weight} lb) has been automatically added to the provided weights."
         )
     else:
         pax_weight = 0
@@ -186,7 +187,7 @@ with lcol:
         st.write(f"Passengers (override): {total_pax}")
         if additive_weight > 0:
             st.caption(
-                f"Includes mandatory 18 lb additive per passenger (total added: {additive_weight} lb)."
+                f"Includes mandatory {additive_weight / total_pax:.0f} lb additive per passenger (total added: {additive_weight} lb)."
             )
     else:
         st.write(f"Passengers (std {season}): {total_pax}")
