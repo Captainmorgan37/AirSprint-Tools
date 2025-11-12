@@ -1,125 +1,197 @@
-import requests
-import pandas as pd
-import time
 import streamlit as st
+import pandas as pd
+import requests
+import time
+from datetime import date
 
 # =========================
-# Load credentials from Streamlit secrets
+# Shared FL3XX API Setup
 # =========================
 API_TOKEN = st.secrets["fl3xx_api"]["api_token"]
-AUTH_HEADER_NAME = st.secrets["fl3xx_api"].get("auth_header_name", "Authorization")
 BASE_URL = "https://app.fl3xx.us/api/external"
+HEADERS = {"X-Auth-Token": API_TOKEN}
 
-HEADERS = {AUTH_HEADER_NAME: API_TOKEN}
-
-# =========================
-# File input (upload or internal)
-# =========================
-st.title("Default FBO Finder")
-st.write("Uploads your airport list and automatically fetches default FBOs via FL3XX API.")
-
-uploaded_file = st.file_uploader("Upload your airport CSV", type=["csv"])
-if not uploaded_file:
-    st.stop()
-
-df = pd.read_csv(uploaded_file)
+st.set_page_config(page_title="AirSprint Airport Tools", layout="wide")
 
 # =========================
-# Helper to find airport ID
+# Tabs Setup
 # =========================
-def get_airport_id(code):
-    """Try searching FL3XX airports for ICAO, IATA, or FAA codes"""
-    try:
-        r = requests.get(f"{BASE_URL}/airports/search?query={code}", headers=HEADERS, timeout=10)
-        r.raise_for_status()
-        data = r.json()
-        if data:
-            return data[0].get("id")
-    except Exception:
-        return None
+tab1, tab2 = st.tabs(["🏢 Default FBO Finder", "🧊 Deice Availability Checker"])
 
-# =========================
-# Process airports
-# =========================
-st.info(f"Found {len(df)} airports in uploaded file. Starting scan...")
+# ======================================================
+# 🏢 TAB 1 – Default FBO Finder
+# ======================================================
+with tab1:
+    st.header("Default FBO Finder (Direct ICAO/IATA/FAA Method)")
+    st.write(
+        """
+        Upload your list of airports — the app will directly query the FL3XX API at  
+        `/airports/<CODE>/services` for each ICAO, IATA, or FAA code to identify  
+        the **default (mainContact)** FBO.
+        """
+    )
 
-results = []
-progress_bar = st.progress(0)
+    fbo_file = st.file_uploader("📂 Upload your airport CSV for FBO Lookup", type=["csv"], key="fbo_file")
 
-for i, (_, row) in enumerate(df.iterrows()):
-    airport_id = None
+    if fbo_file:
+        df_fbo = pd.read_csv(fbo_file)
+        st.info(f"Loaded {len(df_fbo)} airports from your file.")
 
-    # Try ICAO → IATA → FAA
-    for key in ["ICAO", "IATA", "FAA"]:
-        val = row.get(key)
-        if pd.notna(val):
-            code = str(val).strip()
-            airport_id = get_airport_id(code)
-            if airport_id:
-                break
+        def get_fbo_for_airport(code):
+            """Fetch default FBO for a given airport code (ICAO/IATA/FAA)."""
+            code = str(code).strip().upper()
+            try:
+                url = f"{BASE_URL}/airports/{code}/services"
+                r = requests.get(url, headers=HEADERS, timeout=10)
+                if r.status_code == 404:
+                    return {"Default FBO Company": "Airport Not Found in FL3XX"}
+                r.raise_for_status()
 
-    if not airport_id:
-        results.append({
-            "ICAO": row.get("ICAO"),
-            "IATA": row.get("IATA"),
-            "FAA": row.get("FAA"),
-            "Default FBO Company": "Airport Not Found in FL3XX"
-        })
-        progress_bar.progress((i + 1) / len(df))
-        continue
+                data = r.json()
+                if not data:
+                    return {"Default FBO Company": "No Services Found"}
 
-    try:
-        r = requests.get(f"{BASE_URL}/airports/{airport_id}/services", headers=HEADERS, timeout=10)
-        r.raise_for_status()
-        services = r.json()
+                for s in data:
+                    if s.get("type", {}).get("name") == "FBO" and s.get("mainContact"):
+                        return {
+                            "Default FBO Company": s.get("company"),
+                            "FBO Email": s.get("email"),
+                            "FBO Phone": s.get("phone"),
+                            "FBO Homepage": s.get("homepage"),
+                            "FBO Address": s.get("address"),
+                            "FBO Radio": s.get("radio"),
+                        }
+                return {"Default FBO Company": "No Default Selected"}
 
-        found_fbo = None
-        for s in services:
-            if s.get("type", {}).get("name") == "FBO" and s.get("mainContact") == True:
-                found_fbo = {
-                    "Default FBO Company": s.get("company"),
-                    "FBO Email": s.get("email"),
-                    "FBO Phone": s.get("phone"),
-                    "FBO Homepage": s.get("homepage"),
-                    "FBO Address": s.get("address"),
-                    "FBO Radio": s.get("radio"),
+            except Exception as e:
+                return {"Default FBO Company": f"Error: {e}"}
+
+        results = []
+        progress = st.progress(0)
+        status_text = st.empty()
+
+        for i, (_, row) in enumerate(df_fbo.iterrows()):
+            code = next((str(row[k]).strip() for k in ["ICAO", "IATA", "FAA"] if pd.notna(row.get(k))), None)
+            if not code:
+                results.append({
+                    "ICAO": row.get("ICAO"),
+                    "IATA": row.get("IATA"),
+                    "FAA": row.get("FAA"),
+                    "Default FBO Company": "No Code Provided"
+                })
+                progress.progress((i + 1) / len(df_fbo))
+                continue
+
+            status_text.text(f"Processing {code} ({i+1}/{len(df_fbo)}) …")
+            fbo_data = get_fbo_for_airport(code)
+            fbo_data.update({
+                "ICAO": row.get("ICAO"),
+                "IATA": row.get("IATA"),
+                "FAA": row.get("FAA"),
+            })
+            results.append(fbo_data)
+            progress.progress((i + 1) / len(df_fbo))
+            time.sleep(0.2)
+
+        results_df = pd.DataFrame(results)
+        merged = df_fbo.merge(results_df, on=["ICAO", "IATA", "FAA"], how="left")
+
+        st.success("✅ FBO lookup complete!")
+        st.dataframe(merged, use_container_width=True)
+
+        csv = merged.to_csv(index=False).encode("utf-8")
+        st.download_button("💾 Download Updated CSV", csv, "Airports_with_Default_FBOs.csv", "text/csv")
+
+# ======================================================
+# 🧊 TAB 2 – Deice / Anti-Ice Availability Checker
+# ======================================================
+with tab2:
+    st.header("Airport Deice / Anti-Ice Availability Checker")
+    st.write(
+        """
+        Upload your airport list — the app will query each airport’s  
+        **operational notes** endpoint for DEICE/ANTI-ICE information and flag  
+        airports where deicing is **not available**.
+        """
+    )
+
+    deice_file = st.file_uploader("📂 Upload your airport CSV for Deice Check", type=["csv"], key="deice_file")
+    query_date = st.date_input("📅 Date for query range", value=date.today())
+    date_str = query_date.strftime("%Y-%m-%d")
+
+    if deice_file:
+        df_deice = pd.read_csv(deice_file)
+        st.info(f"Loaded {len(df_deice)} airports from your file.")
+
+        def get_deice_info(code):
+            """Fetch deice/anti-ice operational notes for an airport."""
+            code = str(code).strip().upper()
+            try:
+                url = f"{BASE_URL}/airports/{code}/operationalNotes?from={date_str}&to={date_str}"
+                r = requests.get(url, headers=HEADERS, timeout=10)
+                if r.status_code == 404:
+                    return {"Deice Info": "Airport Not Found in FL3XX"}
+
+                r.raise_for_status()
+                data = r.json()
+                if not data:
+                    return {"Deice Info": "No Notes Found"}
+
+                deice_notes = []
+                deice_unavailable = False
+
+                for note in data:
+                    note_text = note.get("note", "")
+                    if "DEICE" in note_text.upper() or "ANTI-ICE" in note_text.upper():
+                        deice_notes.append(note_text.strip())
+                        if "NOT AVAILABLE" in note_text.upper() or "UNAVAILABLE" in note_text.upper():
+                            deice_unavailable = True
+
+                if not deice_notes:
+                    return {"Deice Info": "No Deice Mentions Found"}
+
+                return {
+                    "Deice Info": "\n\n---\n\n".join(deice_notes),
+                    "Deice Not Available": "Yes" if deice_unavailable else "No"
                 }
-                break
 
-        if found_fbo:
-            results.append({
+            except Exception as e:
+                return {"Deice Info": f"Error: {e}"}
+
+        results = []
+        progress = st.progress(0)
+        status_text = st.empty()
+
+        for i, (_, row) in enumerate(df_deice.iterrows()):
+            code = next((str(row[k]).strip() for k in ["ICAO", "IATA", "FAA"] if pd.notna(row.get(k))), None)
+            if not code:
+                results.append({
+                    "ICAO": row.get("ICAO"),
+                    "IATA": row.get("IATA"),
+                    "FAA": row.get("FAA"),
+                    "Deice Info": "No Code Provided"
+                })
+                progress.progress((i + 1) / len(df_deice))
+                continue
+
+            status_text.text(f"Checking {code} ({i+1}/{len(df_deice)}) …")
+            deice_data = get_deice_info(code)
+            deice_data.update({
                 "ICAO": row.get("ICAO"),
                 "IATA": row.get("IATA"),
                 "FAA": row.get("FAA"),
-                **found_fbo
             })
-        else:
-            results.append({
-                "ICAO": row.get("ICAO"),
-                "IATA": row.get("IATA"),
-                "FAA": row.get("FAA"),
-                "Default FBO Company": "No Default Selected"
-            })
+            results.append(deice_data)
+            progress.progress((i + 1) / len(df_deice))
+            time.sleep(0.2)
 
-    except Exception as e:
-        results.append({
-            "ICAO": row.get("ICAO"),
-            "IATA": row.get("IATA"),
-            "FAA": row.get("FAA"),
-            "Default FBO Company": f"Error: {e}"
-        })
+        results_df = pd.DataFrame(results)
+        merged = df_deice.merge(results_df, on=["ICAO", "IATA", "FAA"], how="left")
 
-    progress_bar.progress((i + 1) / len(df))
-    time.sleep(0.25)  # small delay for API courtesy
+        st.success("✅ Deice lookup complete!")
+        st.dataframe(merged, use_container_width=True)
 
-# =========================
-# Merge & Display
-# =========================
-results_df = pd.DataFrame(results)
-merged = df.merge(results_df, on=["ICAO", "IATA", "FAA"], how="left")
+        csv = merged.to_csv(index=False).encode("utf-8")
+        st.download_button("💾 Download Deice Info CSV", csv, "Airports_Deice_Info.csv", "text/csv")
 
-st.success("✅ FBO lookup complete!")
-st.dataframe(merged)
-
-csv = merged.to_csv(index=False).encode("utf-8")
-st.download_button("Download Updated CSV", csv, "Canada Airports with FBOs.csv", "text/csv")
+st.caption("Built by Morgan’s AirSprint Tools 🔧")
