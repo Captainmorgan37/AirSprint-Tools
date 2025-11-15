@@ -2,6 +2,7 @@ import csv
 import hashlib
 import html
 import json
+import re
 from collections import defaultdict
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
@@ -10,6 +11,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 import requests
 import streamlit as st
 
+from deice_info_helper import DeiceRecord, get_deice_record
 from fl3xx_client import fetch_flights
 from flight_leg_utils import (
     FlightDataError,
@@ -105,6 +107,10 @@ TAIL_DISPLAY_ORDER: Sequence[str] = (
 TAIL_INDEX = {tail: idx for idx, tail in enumerate(TAIL_DISPLAY_ORDER)}
 FAR_FUTURE = datetime.max.replace(tzinfo=timezone.utc)
 
+_TYPE_I_REGEX = re.compile(r"\btype(?:s)?\s*(?:i|1)\b", re.IGNORECASE)
+_TYPE_IV_REGEX = re.compile(r"\btype(?:s)?\s*(?:iv|4)\b", re.IGNORECASE)
+_WEATHER_PREFIXES = ("TS", "SH", "DR", "BL")
+
 TAILWIND_DIRECTION_RANGES: Dict[str, Tuple[int, int]] = {
     "CYRV": (30, 210),
     "KSUN": (40, 220),
@@ -150,8 +156,15 @@ st.markdown(
     .flight-card__header {display:flex; justify-content:space-between; align-items:flex-start; gap:0.75rem;}
     .flight-card h4 {margin:0 0 0.35rem 0; font-size:1.05rem; color:#f8fafc;}
     .flight-card__runway {font-size:0.75rem; color:#e2e8f0; background:rgba(30, 64, 175, 0.35);
-                          border-radius:0.6rem; padding:0.2rem 0.55rem; white-space:nowrap;
-                          font-weight:600; letter-spacing:0.03em;}
+                          border-radius:0.6rem; padding:0.35rem 0.6rem; white-space:normal;
+                          font-weight:600; letter-spacing:0.03em; display:flex; flex-direction:column;
+                          gap:0.15rem; min-width:fit-content;}
+    .flight-card__runway-text {font-size:0.75rem; line-height:1.2;}
+    .flight-card__deice {font-size:0.7rem; text-transform:uppercase; letter-spacing:0.04em;}
+    .flight-card__deice--full {color:#bbf7d0;}
+    .flight-card__deice--partial {color:#fde68a;}
+    .flight-card__deice--none {color:#fecaca;}
+    .flight-card__deice--unknown {color:#fef9c3;}
     .flight-card .times {font-family:"Source Code Pro", Menlo, Consolas, monospace; font-size:0.9rem;
                          margin-bottom:0.45rem; line-height:1.35; color:#cbd5f5;}
     .flight-card .past-flag {display:inline-block; padding:0.25rem 0.55rem; margin-bottom:0.5rem;
@@ -308,6 +321,93 @@ def _coerce_code(value: Any) -> Optional[str]:
         return None
     text = str(value).strip().upper()
     return text or None
+
+
+_DEICE_STATUS_CACHE: Dict[str, Dict[str, str]] = {}
+
+
+def _extract_type_mentions(info_text: Optional[str]) -> Tuple[bool, bool]:
+    if not info_text:
+        return False, False
+    return bool(_TYPE_I_REGEX.search(info_text)), bool(_TYPE_IV_REGEX.search(info_text))
+
+
+def _classify_deice_record(record: Optional[DeiceRecord]) -> Tuple[str, str]:
+    if record is None:
+        return "unknown", "Deice info unavailable"
+
+    has_type1, has_type4 = _extract_type_mentions(record.deice_info)
+
+    if record.has_deice is False:
+        return "none", "No deice available"
+
+    if has_type1 and not has_type4:
+        return "partial", "Partial deice (Type I only)"
+
+    if record.has_deice is True or has_type4:
+        label = "Full deice capability"
+        if has_type1 and has_type4:
+            label += " (Types I & IV)"
+        return "full", label
+
+    return "unknown", "Deice info unavailable"
+
+
+def _resolve_deice_status(airport_code: Optional[str]) -> Dict[str, str]:
+    code = _coerce_code(airport_code)
+    if not code:
+        return {"code": "unknown", "label": "Deice info unavailable"}
+    if code not in _DEICE_STATUS_CACHE:
+        record = get_deice_record(icao=code)
+        status_code, label = _classify_deice_record(record)
+        _DEICE_STATUS_CACHE[code] = {"code": status_code, "label": label}
+    cached = _DEICE_STATUS_CACHE[code]
+    return {"code": cached["code"], "label": cached["label"]}
+
+
+def _has_wintry_precip(weather_text: Optional[str]) -> bool:
+    if not weather_text:
+        return False
+    if not isinstance(weather_text, str):
+        weather_text = str(weather_text)
+    tokens = re.split(r"\s+", weather_text.upper())
+    for token in tokens:
+        normalized = token.strip()
+        if not normalized:
+            continue
+        while normalized and normalized[0] in "+-":
+            normalized = normalized[1:]
+        if normalized.startswith("VC"):
+            normalized = normalized[2:]
+        changed = True
+        while changed and normalized:
+            changed = False
+            for prefix in _WEATHER_PREFIXES:
+                if normalized.startswith(prefix):
+                    normalized = normalized[len(prefix):]
+                    changed = True
+        if not normalized:
+            continue
+        if normalized.startswith("FZ"):
+            return True
+        for code in ("SN", "SG", "PL", "IC", "GS", "GR"):
+            if code in normalized:
+                return True
+    return False
+
+
+def _get_weather_highlight(value: Optional[str], deice_status: Optional[str]) -> Optional[str]:
+    if value in (None, ""):
+        return None
+    highlight = "red" if _should_highlight_weather(value) else None
+    if not deice_status:
+        deice_status = "full"
+    if _has_wintry_precip(value):
+        if deice_status in ("partial", "none"):
+            return "red"
+        if deice_status == "unknown" and highlight != "red":
+            return "yellow"
+    return highlight
 
 
 def _tail_order_key(tail: str) -> Tuple[int, str]:
@@ -470,6 +570,8 @@ def _summarise_period(
     period: Dict[str, Any],
     arrival_dt: Optional[datetime],
     airport_code: Optional[str],
+    *,
+    deice_status: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     details_map = {label: value for label, value in period.get("details", [])}
 
@@ -507,7 +609,12 @@ def _summarise_period(
     ):
         value = _coerce(details_map.get(detail_key))
         if value:
-            summary.append({"label": label, "value": value})
+            entry: Dict[str, Any] = {"label": label, "value": value}
+            if label == "Weather":
+                weather_highlight = _get_weather_highlight(value, deice_status)
+                if weather_highlight:
+                    entry["highlight"] = weather_highlight
+            summary.append(entry)
 
     # --- NEW: include only relevant TEMPO / PROB windows ---
     tempo_blocks = period.get("tempo", [])
@@ -587,7 +694,7 @@ def _summarise_period(
         tempo_highlight = _combine_highlight_levels(
             (
                 _get_visibility_highlight(vis_t),
-                "red" if wx_t and _should_highlight_weather(wx_t) else None,
+                _get_weather_highlight(wx_t, deice_status),
                 _get_ceiling_highlight(clouds_t) if clouds_t else None,
             )
         )
@@ -630,6 +737,7 @@ def _build_taf_html(
     period: Optional[Dict[str, Any]],
     arrival_dt: Optional[datetime],
     airport_code: Optional[str],
+    deice_status: Optional[str],
 ) -> str:
     if report is None:
         return "<div class='taf taf-missing'>No TAF segment matched the arrival window.</div>"
@@ -693,7 +801,12 @@ def _build_taf_html(
             f"{html.escape(end_local_text)} ({html.escape(diff_text)} before arrival"
             f" at {html.escape(arrival_local_text)}).</div>"
         )
-    summary_items = _summarise_period(period, arrival_dt, airport_code)
+    summary_items = _summarise_period(
+        period,
+        arrival_dt,
+        airport_code,
+        deice_status=deice_status,
+    )
 
     lines: List[str] = []
     if fallback_banner:
@@ -793,12 +906,22 @@ def _build_flight_card(flight: Dict[str, Any], taf_html: str) -> str:
 
     runway_html = ""
     longest_runway = flight.get("longest_runway_ft")
-    if longest_runway:
-        runway_html = (
-            "<span class='flight-card__runway'>"
-            f"Longest RWY {longest_runway:,} ft"
-            "</span>"
-        )
+    deice_label = flight.get("deice_status_label")
+    deice_code = flight.get("deice_status_code") or "unknown"
+    if longest_runway or deice_label:
+        runway_lines: List[str] = []
+        if longest_runway:
+            runway_lines.append(
+                "<div class='flight-card__runway-text'>"
+                f"Longest RWY {longest_runway:,} ft"
+                "</div>"
+            )
+        if deice_label:
+            runway_lines.append(
+                "<div class='flight-card__deice flight-card__deice--"
+                f"{html.escape(deice_code)}'">{html.escape(deice_label)}</div>"
+            )
+        runway_html = "<div class='flight-card__runway'>" + "".join(runway_lines) + "</div>"
 
     header_html = (
         "<div class='flight-card__header'>"
@@ -881,6 +1004,8 @@ for row in flight_rows:
     candidate_date = candidate_dt.date() if candidate_dt else None
     arrival_airport = _coerce_code(row.get("arrival_airport") or row.get("arrivalAirport") or row.get("airportTo"))
     departure_airport = _coerce_code(row.get("departure_airport") or row.get("departureAirport") or row.get("airportFrom"))
+    deice_status = _resolve_deice_status(arrival_airport)
+
     processed_flights.append(
         {
             "tail": tail,
@@ -897,6 +1022,8 @@ for row in flight_rows:
             "local_service_date": candidate_date,
             "is_today": candidate_date == today_local_date,
             "longest_runway_ft": runway_lengths.get(arrival_airport or ""),
+            "deice_status_code": deice_status.get("code"),
+            "deice_status_label": deice_status.get("label"),
         }
     )
 
@@ -973,6 +1100,7 @@ for tail in sorted(flights_by_tail.keys(), key=_tail_order_key):
             flight.get("taf_period"),
             flight.get("arr_dt_utc"),
             flight.get("arrival_airport"),
+            flight.get("deice_status_code"),
         )
         cards.append(_build_flight_card(flight, taf_html))
     st.markdown(f"<div class='flight-row'>{''.join(cards)}</div>", unsafe_allow_html=True)
