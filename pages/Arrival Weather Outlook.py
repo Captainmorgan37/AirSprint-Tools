@@ -11,7 +11,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 import requests
 import streamlit as st
 
-from deice_info_helper import DeiceRecord, get_deice_record
+from arrival_deice_utils import resolve_deice_status
 from fl3xx_client import fetch_flights
 from flight_leg_utils import (
     FlightDataError,
@@ -107,8 +107,6 @@ TAIL_DISPLAY_ORDER: Sequence[str] = (
 TAIL_INDEX = {tail: idx for idx, tail in enumerate(TAIL_DISPLAY_ORDER)}
 FAR_FUTURE = datetime.max.replace(tzinfo=timezone.utc)
 
-_TYPE_I_REGEX = re.compile(r"\btype(?:s)?\s*(?:i|1)\b", re.IGNORECASE)
-_TYPE_IV_REGEX = re.compile(r"\btype(?:s)?\s*(?:iv|4)\b", re.IGNORECASE)
 _WEATHER_PREFIXES = ("TS", "SH", "DR", "BL")
 
 TAILWIND_DIRECTION_RANGES: Dict[str, Tuple[int, int]] = {
@@ -323,46 +321,6 @@ def _coerce_code(value: Any) -> Optional[str]:
     return text or None
 
 
-_DEICE_STATUS_CACHE: Dict[str, Dict[str, str]] = {}
-
-
-def _extract_type_mentions(info_text: Optional[str]) -> Tuple[bool, bool]:
-    if not info_text:
-        return False, False
-    return bool(_TYPE_I_REGEX.search(info_text)), bool(_TYPE_IV_REGEX.search(info_text))
-
-
-def _classify_deice_record(record: Optional[DeiceRecord]) -> Tuple[str, str]:
-    if record is None:
-        return "unknown", "Deice info unavailable"
-
-    has_type1, has_type4 = _extract_type_mentions(record.deice_info)
-
-    if record.has_deice is False:
-        return "none", "No deice available"
-
-    if has_type1 and not has_type4:
-        return "partial", "Partial deice (Type I only)"
-
-    if record.has_deice is True or has_type4:
-        label = "Full deice capability"
-        if has_type1 and has_type4:
-            label += " (Types I & IV)"
-        return "full", label
-
-    return "unknown", "Deice info unavailable"
-
-
-def _resolve_deice_status(airport_code: Optional[str]) -> Dict[str, str]:
-    code = _coerce_code(airport_code)
-    if not code:
-        return {"code": "unknown", "label": "Deice info unavailable"}
-    if code not in _DEICE_STATUS_CACHE:
-        record = get_deice_record(icao=code)
-        status_code, label = _classify_deice_record(record)
-        _DEICE_STATUS_CACHE[code] = {"code": status_code, "label": label}
-    cached = _DEICE_STATUS_CACHE[code]
-    return {"code": cached["code"], "label": cached["label"]}
 
 
 def _has_wintry_precip(weather_text: Optional[str]) -> bool:
@@ -1004,7 +962,7 @@ for row in flight_rows:
     candidate_date = candidate_dt.date() if candidate_dt else None
     arrival_airport = _coerce_code(row.get("arrival_airport") or row.get("arrivalAirport") or row.get("airportTo"))
     departure_airport = _coerce_code(row.get("departure_airport") or row.get("departureAirport") or row.get("airportFrom"))
-    deice_status = _resolve_deice_status(arrival_airport)
+    deice_status = resolve_deice_status(arrival_airport)
 
     processed_flights.append(
         {
