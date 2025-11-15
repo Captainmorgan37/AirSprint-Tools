@@ -919,7 +919,7 @@ def _build_flight_card(flight: Dict[str, Any], taf_html: str) -> str:
         if deice_label:
             runway_lines.append(
                 "<div class='flight-card__deice flight-card__deice--"
-                f"{html.escape(deice_code)}'">{html.escape(deice_label)}</div>"
+                f"{html.escape(deice_code)}'>{html.escape(deice_label)}</div>"
             )
         runway_html = "<div class='flight-card__runway'>" + "".join(runway_lines) + "</div>"
 
