@@ -52,8 +52,6 @@ def classify_deice_record(record: Optional[DeiceRecord]) -> Tuple[str, str]:
 
     if record.has_deice is True or has_type4:
         label = "Full deice capability"
-        if has_type1 and has_type4:
-            label += " (Types I & IV)"
         return "full", label
 
     return "unknown", "Deice info unavailable"
