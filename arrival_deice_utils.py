@@ -51,8 +51,7 @@ def classify_deice_record(record: Optional[DeiceRecord]) -> Tuple[str, str]:
         return "partial", "Partial deice (Type I only)"
 
     if record.has_deice is True or has_type4:
-        label = "Full deice capability"
-        return "full", label
+        return "full", "Full deice capability"
 
     return "unknown", "Deice info unavailable"
 
