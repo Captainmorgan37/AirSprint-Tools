@@ -553,7 +553,9 @@ def evaluate_hangar_need(
         if freezing_fog:
             triggers.append("Freezing fog or fog with sub-zero temperatures expected")
         else:
-            triggers.append("Dense fog expected at the aerodrome")
+            assessment["notes"].append(
+                "Fog expected but temperatures remain above freezing — hangar not auto-triggered"
+            )
 
     blowing_snow_entries = [
         entry for entry in parsed_combined_codes if "BL" in entry["descriptors"] and "SN" in entry["core"]

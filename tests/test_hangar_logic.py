@@ -158,6 +158,23 @@ def test_freezing_fog_detected_from_metar():
     assert any("Freezing fog" in trigger for trigger in assessment["triggers"])
 
 
+def test_warm_fog_does_not_trigger_hangar():
+    taf = _build_taf(temp=6, weather="FG")
+    metar = [
+        {
+            "temperature": 14,
+            "dewpoint": 12,
+            "wind_speed": 10,
+            "metar_data": {"wxString": "FG"},
+        }
+    ]
+
+    assessment = evaluate_hangar_need(taf, metar)
+
+    assert all("fog" not in trigger.lower() for trigger in assessment["triggers"])
+    assert any("Fog expected but temperatures remain above freezing" in note for note in assessment["notes"])
+
+
 def test_strong_winds_from_metar_trigger():
     metar = [
         {
