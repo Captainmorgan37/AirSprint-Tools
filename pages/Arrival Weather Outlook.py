@@ -30,6 +30,8 @@ from arrival_weather_utils import (
     _format_clouds_value,
     _get_ceiling_highlight,
     _get_visibility_highlight,
+    _has_freezing_precip,
+    _has_wintry_precip,
     _parse_ceiling_value,
     _parse_fraction,
     _parse_visibility_value,
@@ -106,8 +108,6 @@ TAIL_DISPLAY_ORDER: Sequence[str] = (
 )
 TAIL_INDEX = {tail: idx for idx, tail in enumerate(TAIL_DISPLAY_ORDER)}
 FAR_FUTURE = datetime.max.replace(tzinfo=timezone.utc)
-
-_WEATHER_PREFIXES = ("TS", "SH", "DR", "BL")
 
 TAILWIND_DIRECTION_RANGES: Dict[str, Tuple[int, int]] = {
     "CYRV": (30, 210),
@@ -192,6 +192,7 @@ st.markdown(
     .taf-highlight {font-weight:600;}
     .taf-highlight--red {color:#c41230;}
     .taf-highlight--yellow {color:#b8860b;}
+    .taf-highlight--blue {color:#38bdf8;}
     .tail-header {font-size:1.2rem; margin:0.5rem 0 0.4rem 0; padding-left:0.1rem; color:#e0f2fe;}
     .section-divider {border-bottom:1px solid rgba(148,163,184,0.25); margin:0.75rem 0 1.1rem 0;}
     </style>
@@ -321,50 +322,23 @@ def _coerce_code(value: Any) -> Optional[str]:
     return text or None
 
 
-
-
-def _has_wintry_precip(weather_text: Optional[str]) -> bool:
-    if not weather_text:
-        return False
-    if not isinstance(weather_text, str):
-        weather_text = str(weather_text)
-    tokens = re.split(r"\s+", weather_text.upper())
-    for token in tokens:
-        normalized = token.strip()
-        if not normalized:
-            continue
-        while normalized and normalized[0] in "+-":
-            normalized = normalized[1:]
-        if normalized.startswith("VC"):
-            normalized = normalized[2:]
-        changed = True
-        while changed and normalized:
-            changed = False
-            for prefix in _WEATHER_PREFIXES:
-                if normalized.startswith(prefix):
-                    normalized = normalized[len(prefix):]
-                    changed = True
-        if not normalized:
-            continue
-        if normalized.startswith("FZ"):
-            return True
-        for code in ("SN", "SG", "PL", "IC", "GS", "GR"):
-            if code in normalized:
-                return True
-    return False
-
-
 def _get_weather_highlight(value: Optional[str], deice_status: Optional[str]) -> Optional[str]:
     if value in (None, ""):
         return None
     highlight = "red" if _should_highlight_weather(value) else None
     if not deice_status:
         deice_status = "full"
-    if _has_wintry_precip(value):
-        if deice_status in ("partial", "none"):
+    if _has_freezing_precip(value):
+        if highlight == "red":
             return "red"
-        if deice_status == "unknown" and highlight != "red":
-            return "yellow"
+        return "blue"
+    if _has_wintry_precip(value):
+        if deice_status == "partial":
+            return "red"
+        if deice_status in ("none", "unknown"):
+            if highlight == "red":
+                return "red"
+            return "blue"
     return highlight
 
 
@@ -534,9 +508,17 @@ def _summarise_period(
     details_map = {label: value for label, value in period.get("details", [])}
 
     def _coerce(value: Any) -> Optional[str]:
-        if value in (None, "", []):
+        if value in (None, ""):
             return None
-        return str(value)
+        if isinstance(value, (list, tuple, set)):
+            parts: List[str] = []
+            for item in value:
+                text = _coerce(item)
+                if text:
+                    parts.append(text)
+            return " ".join(parts) if parts else None
+        text = str(value).strip()
+        return text or None
 
     summary: List[Dict[str, Any]] = []
 

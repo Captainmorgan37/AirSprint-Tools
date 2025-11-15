@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import html
 import re
-from typing import Any, Iterable, List, Optional
+from typing import Any, Iterable, Iterator, List, Optional
 
 
 _CEILING_CODE_REGEX = re.compile(
@@ -18,6 +18,8 @@ _CEILING_SUFFIX_REGEX = re.compile(
 
 
 _HIGHLIGHT_SEVERITY = {"yellow": 1, "red": 2}
+_WEATHER_PREFIXES = ("TS", "SH", "DR", "BL")
+_WINTRY_CODES = ("SN", "SG", "PL", "IC", "GS", "GR")
 
 
 def _parse_fraction(value: str) -> Optional[float]:
@@ -184,16 +186,65 @@ def _should_highlight_weather(value) -> bool:
     return "TS" in value.upper()
 
 
+def _iter_weather_tokens(value: Optional[str]) -> Iterator[str]:
+    if not value:
+        return
+    if not isinstance(value, str):
+        value = str(value)
+    tokens = re.split(r"\s+", value.upper())
+    for token in tokens:
+        normalized = token.strip()
+        if not normalized:
+            continue
+        # Many upstream data sources may include punctuation (commas, brackets,
+        # quotes) when rendering lists, so strip those characters away before
+        # we check the actual weather codes.
+        normalized = normalized.strip(",;")
+        normalized = normalized.strip("[](){}'\"")
+        normalized = normalized.strip(",;")
+        while normalized and normalized[0] in "+-":
+            normalized = normalized[1:]
+        if normalized.startswith("VC"):
+            normalized = normalized[2:]
+        changed = True
+        while changed and normalized:
+            changed = False
+            for prefix in _WEATHER_PREFIXES:
+                if normalized.startswith(prefix):
+                    normalized = normalized[len(prefix):]
+                    changed = True
+        if normalized:
+            yield normalized
+
+
+def _has_freezing_precip(value: Optional[str]) -> bool:
+    for token in _iter_weather_tokens(value):
+        if token.startswith("FZ"):
+            return True
+    return False
+
+
+def _has_wintry_precip(value: Optional[str]) -> bool:
+    for token in _iter_weather_tokens(value):
+        if token.startswith("FZ"):
+            return True
+        for code in _WINTRY_CODES:
+            if code in token:
+                return True
+    return False
+
+
 def _wrap_highlight_html(text: str, level: Optional[str]) -> str:
     if not level:
         return text
     color_map = {
         "red": "#c41230",
         "yellow": "#b8860b",
+        "blue": "#38bdf8",
     }
     color = color_map.get(level, color_map["red"])
     css_classes = ["taf-highlight"]
-    if level in ("red", "yellow"):
+    if level in ("red", "yellow", "blue"):
         css_classes.append(f"taf-highlight--{level}")
     return f"<span class='{' '.join(css_classes)}' style='color:{color};'>{text}</span>"
 
@@ -269,6 +320,8 @@ __all__ = [
     "_parse_ceiling_value",
     "_get_ceiling_highlight",
     "_should_highlight_weather",
+    "_has_freezing_precip",
+    "_has_wintry_precip",
     "_wrap_highlight_html",
     "_determine_highlight_level",
     "_combine_highlight_levels",
