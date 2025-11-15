@@ -1471,6 +1471,15 @@ def get_metar_reports(icao_codes: Sequence[str]) -> Dict[str, List[Dict[str, Any
                 "windSpeedKt",
             )
         )
+        wind_gust = _coerce_float(
+            _first_present(
+                props,
+                "windGust",
+                "wind_gust",
+                "windGustKt",
+                "windGustKT",
+            )
+        )
         visibility = _coerce_float(
             _first_present(
                 props,
@@ -1489,6 +1498,7 @@ def get_metar_reports(icao_codes: Sequence[str]) -> Dict[str, List[Dict[str, Any
             "temperature": temperature,
             "dewpoint": dewpoint,
             "wind_speed": wind_speed,
+            "wind_gust": wind_gust,
             "visibility": visibility,
             "metar_data": dict(props),
         }
