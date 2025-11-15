@@ -508,9 +508,17 @@ def _summarise_period(
     details_map = {label: value for label, value in period.get("details", [])}
 
     def _coerce(value: Any) -> Optional[str]:
-        if value in (None, "", []):
+        if value in (None, ""):
             return None
-        return str(value)
+        if isinstance(value, (list, tuple, set)):
+            parts: List[str] = []
+            for item in value:
+                text = _coerce(item)
+                if text:
+                    parts.append(text)
+            return " ".join(parts) if parts else None
+        text = str(value).strip()
+        return text or None
 
     summary: List[Dict[str, Any]] = []
 

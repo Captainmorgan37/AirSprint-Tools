@@ -45,7 +45,15 @@ def test_detects_freezing_precip_tokens():
     assert _has_freezing_precip("SN") is False
 
 
+def test_detects_freezing_precip_from_list_like_strings():
+    assert _has_freezing_precip("['FZRA', 'BR']") is True
+
+
 def test_detects_wintry_precip_with_prefixes():
     assert _has_wintry_precip("VCSH SN") is True
     assert _has_wintry_precip("PLRA") is True
     assert _has_wintry_precip("BR") is False
+
+
+def test_detects_wintry_precip_from_list_like_strings():
+    assert _has_wintry_precip("['SN', 'BR']") is True

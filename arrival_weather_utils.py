@@ -196,6 +196,12 @@ def _iter_weather_tokens(value: Optional[str]) -> Iterator[str]:
         normalized = token.strip()
         if not normalized:
             continue
+        # Many upstream data sources may include punctuation (commas, brackets,
+        # quotes) when rendering lists, so strip those characters away before
+        # we check the actual weather codes.
+        normalized = normalized.strip(",;")
+        normalized = normalized.strip("[](){}'\"")
+        normalized = normalized.strip(",;")
         while normalized and normalized[0] in "+-":
             normalized = normalized[1:]
         if normalized.startswith("VC"):
