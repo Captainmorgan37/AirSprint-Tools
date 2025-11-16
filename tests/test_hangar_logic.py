@@ -204,3 +204,28 @@ def test_wet_then_freeze_scenario():
 
     assert any("refreeze" in trigger for trigger in assessment["triggers"])
 
+
+def test_limited_deice_triggers_with_subzero_forecast():
+    taf = _build_taf(temp=-1)
+
+    assessment = evaluate_hangar_need(
+        taf,
+        [],
+        deice_status={"code": "none", "label": "No deice available"},
+    )
+
+    assert any("Limited or no deice" in trigger for trigger in assessment["triggers"])
+
+
+def test_limited_deice_dewpoint_spread_condition():
+    taf = _build_taf(temp=2)
+    metar = [{"temperature": 1, "dewpoint": 0, "wind_speed": 10}]
+
+    assessment = evaluate_hangar_need(
+        taf,
+        metar,
+        deice_status={"code": "partial", "label": "Partial deice (Type I)"},
+    )
+
+    assert any("dewpoint spread" in trigger for trigger in assessment["triggers"])
+

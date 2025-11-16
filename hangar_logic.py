@@ -351,6 +351,7 @@ def evaluate_hangar_need(
     *,
     aircraft_category: str | None = None,
     client_departure: bool = False,
+    deice_status: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     assessment: dict[str, Any] = {
         "needs_hangar": False,
@@ -361,6 +362,8 @@ def evaluate_hangar_need(
         "metar_dewpoint": None,
         "aircraft_category": aircraft_category,
         "client_departure": client_departure,
+        "deice_status_code": None,
+        "deice_status_label": None,
     }
 
     normalized_category = _normalize_text(aircraft_category)
@@ -368,6 +371,20 @@ def evaluate_hangar_need(
         assessment["notes"].append(f"Aircraft category: {normalized_category.title()}")
     if client_departure:
         assessment["notes"].append("Next leg is client-occupied.")
+
+    limited_deice = False
+    if deice_status:
+        code = deice_status.get("code") if isinstance(deice_status, Mapping) else deice_status
+        label = None
+        if isinstance(deice_status, Mapping):
+            label = deice_status.get("label")
+        normalized_code = _normalize_text(code)
+        if normalized_code:
+            assessment["deice_status_code"] = normalized_code
+            limited_deice = normalized_code in {"NONE", "PARTIAL"}
+        if label:
+            assessment["deice_status_label"] = label
+            assessment["notes"].append(f"Deice status: {label}")
 
     metar_temp = extract_metar_value(metar_data, "temperature")
     metar_dewpoint = extract_metar_value(metar_data, "dewpoint")
@@ -382,21 +399,25 @@ def evaluate_hangar_need(
     if metar_temp is not None:
         assessment["notes"].append(f"Current METAR temperature: {metar_temp:.0f}°C")
     if metar_dewpoint is not None:
+        dewpoint_spread_value = metar_temp - metar_dewpoint if metar_temp is not None else None
+        spread_abs = abs(metar_temp - metar_dewpoint) if metar_temp is not None else None
         if metar_temp is not None:
-            spread = metar_temp - metar_dewpoint
             assessment["notes"].append(
-                f"Current dewpoint: {metar_dewpoint:.0f}°C (spread {spread:.0f}°C)"
+                f"Current dewpoint: {metar_dewpoint:.0f}°C (spread {dewpoint_spread_value:.0f}°C)"
             )
         else:
             assessment["notes"].append(
                 f"Current dewpoint from METAR: {metar_dewpoint:.0f}°C"
             )
+    else:
+        spread_abs = None
 
     temp_min: float | None = None
     temp_for_thresholds: float | None = None
     wx_codes: list[str] = []
     taf_wind: float | None = None
     taf_gust: float | None = None
+    taf_parsed_codes: list[dict[str, Any]] = []
 
     if not taf_data:
         assessment["notes"].append(
@@ -406,6 +427,7 @@ def evaluate_hangar_need(
         segments = taf_data[0].get("forecast", [])
         temp_min = parse_temp_from_taf(segments)
         wx_codes = parse_weather_codes(segments)
+        taf_parsed_codes = [_parse_weather_code(code) for code in wx_codes]
         taf_wind, taf_gust = _parse_wind_from_taf(segments)
         assessment["min_temp"] = temp_min
 
@@ -613,6 +635,39 @@ def evaluate_hangar_need(
     ):
         triggers.append(
             "Recent wet precip with sub-zero overnight forecast — risk of refreeze"
+        )
+
+    limited_deice_reasons: list[str] = []
+    taf_wintry = any(
+        (
+            "SN" in entry["core"]
+            or entry["core"].endswith("PL")
+            or ("FZ" in entry["descriptors"] and "RA" in entry["core"])
+        )
+        for entry in taf_parsed_codes
+    )
+    if limited_deice:
+        if temp_for_thresholds is not None and temp_for_thresholds < 0:
+            limited_deice_reasons.append(
+                f"overnight low forecast {temp_for_thresholds:.0f}°C"
+            )
+        if taf_wintry:
+            limited_deice_reasons.append("TAF indicates SN/FZRA/PL threats")
+        if (
+            frost_temp_indicator
+            and spread_abs is not None
+            and spread_abs < 2
+        ):
+            limited_deice_reasons.append(
+                f"dewpoint spread near {spread_abs:.0f}°C approaching dawn"
+            )
+        if fog_entries and freezing_fog:
+            limited_deice_reasons.append("fog with freezing temperatures likely")
+
+    if limited_deice_reasons:
+        triggers.append(
+            "Limited or no deice capability — hangar recommended because "
+            + _format_conditions(limited_deice_reasons)
         )
 
     if not triggers:
