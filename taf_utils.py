@@ -18,6 +18,7 @@ import requests
 
 EARTH_RADIUS_NM = 3440.065  # nautical miles
 FALLBACK_TAF_SEARCH_RADII_NM = [60, 90, 120, 180]
+_TAF_HEADER_MODIFIERS = {"AMD", "COR", "RTD"}
 
 _AIRPORT_COORDS: Dict[str, Tuple[float, float]] = {}
 
@@ -115,7 +116,7 @@ def _parse_raw_taf_bulletins(raw_text: str) -> List[Dict[str, Any]]:
             continue
 
         idx = 1
-        while idx < len(tokens) and tokens[idx] in {"AMD", "COR", "RTD"}:
+        while idx < len(tokens) and tokens[idx] in _TAF_HEADER_MODIFIERS:
             idx += 1
 
         if idx >= len(tokens):
@@ -606,7 +607,11 @@ def _fallback_parse_raw_taf(
     idx = 0
     if idx < len(tokens) and tokens[idx].startswith("TAF"):
         idx += 1
+    while idx < len(tokens) and tokens[idx] in _TAF_HEADER_MODIFIERS:
+        idx += 1
     if idx < len(tokens) and re.match(r"^[A-Z]{3,4}$", tokens[idx]):
+        idx += 1
+    while idx < len(tokens) and tokens[idx] in _TAF_HEADER_MODIFIERS:
         idx += 1
     if idx < len(tokens) and re.match(r"^\d{6}Z$", tokens[idx]):
         idx += 1
