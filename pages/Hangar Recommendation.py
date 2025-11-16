@@ -19,6 +19,7 @@ from hangar_logic import (
 )
 from Home import configure_page, get_secret, password_gate, render_sidebar
 from taf_utils import get_metar_reports, get_taf_reports
+from arrival_deice_utils import resolve_deice_status
 
 # ============================================================
 # Page Configuration
@@ -283,11 +284,13 @@ for entry in overnight_rows:
     metar_data = metar_reports.get(airport, [])
     aircraft_category = entry.get("aircraft_category")
     client_departure = bool(entry.get("client_departure"))
+    deice_status = resolve_deice_status(airport)
     assessment = evaluate_hangar_need(
         taf_data,
         metar_data,
         aircraft_category=aircraft_category,
         client_departure=client_departure,
+        deice_status=deice_status,
     )
     assessed_entries.append(
         {
@@ -295,6 +298,7 @@ for entry in overnight_rows:
             "assessment": assessment,
             "triggers": list(assessment.get("triggers", [])),
             "notes": list(assessment.get("notes", [])),
+            "deice_status": deice_status,
         }
     )
 
