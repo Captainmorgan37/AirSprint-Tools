@@ -9,6 +9,7 @@ from arrival_weather_utils import (
     _get_visibility_highlight,
     _has_freezing_precip,
     _has_wintry_precip,
+    _build_weather_value_html,
     _parse_ceiling_value,
     _parse_visibility_value,
 )
@@ -57,3 +58,18 @@ def test_detects_wintry_precip_with_prefixes():
 
 def test_detects_wintry_precip_from_list_like_strings():
     assert _has_wintry_precip("['SN', 'BR']") is True
+
+
+def test_weather_value_html_highlights_only_precip_tokens():
+    rendered = _build_weather_value_html("CYOW, -FZRA, BR", "full")
+    assert rendered is not None
+    assert rendered.count("taf-highlight--blue") == 1
+    assert "CYOW" in rendered and "BR" in rendered
+    assert "CYOW</span>" not in rendered
+
+
+def test_weather_value_html_requires_limited_deice_for_snow():
+    assert _build_weather_value_html("SN BR", "full") is None
+    rendered = _build_weather_value_html("SN BR", "unknown")
+    assert rendered is not None
+    assert rendered.count("taf-highlight--blue") == 1

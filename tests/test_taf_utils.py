@@ -77,6 +77,21 @@ def test_fallback_parser_preserves_mixed_fraction_visibility():
     assert details.get("Visibility") == "2 1/2SM"
 
 
+def test_fallback_parser_does_not_treat_station_as_weather():
+    issue_dt = datetime(2025, 11, 15, 3, 0, tzinfo=timezone.utc)
+    valid_from = issue_dt
+    valid_to = issue_dt + timedelta(days=1)
+    raw_taf = "TAF CYOW 150300Z 1503/1603 33010KT -FZRA BR"
+
+    segments = taf_utils._fallback_parse_raw_taf(raw_taf, issue_dt, valid_from, valid_to)
+
+    assert segments, "Fallback parser returned no segments"
+    weather = dict(segments[0].get("details", [])).get("Weather")
+
+    assert weather == "-FZRA, BR"
+    assert "CYOW" not in weather
+
+
 def test_format_iso_timestamp_handles_offset_without_colon():
     display, dt = taf_utils.format_iso_timestamp("2024-10-24T09:00:00-0400")
 
