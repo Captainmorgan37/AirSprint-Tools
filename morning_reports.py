@@ -9,7 +9,7 @@ from collections.abc import Iterable as IterableABC
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
 import requests
 
@@ -17,6 +17,7 @@ from fl3xx_api import (
     Fl3xxApiConfig,
     MOUNTAIN_TIME_ZONE,
     compute_fetch_dates,
+    fetch_airport_services,
     fetch_flights,
     fetch_flight_notification,
     fetch_flight_services,
@@ -1684,10 +1685,12 @@ def _build_fbo_disconnect_report(
     config: Fl3xxApiConfig,
     *,
     fetch_services_fn: Callable[[Fl3xxApiConfig, Any], Any] = fetch_flight_services,
+    fetch_airport_services_fn: Callable[[Fl3xxApiConfig, Any], Any] = fetch_airport_services,
 ) -> MorningReportResult:
     sorted_rows = _sort_rows(rows)
     last_arrival_by_tail: Dict[str, Dict[str, Any]] = {}
     services_cache: Dict[str, Optional[Any]] = {}
+    airport_services_cache: Dict[str, Optional[Set[str]]] = {}
     matches: List[Dict[str, Any]] = []
     warnings: List[str] = []
     inspected = 0
@@ -1722,10 +1725,9 @@ def _build_fbo_disconnect_report(
             arrival_handler_raw: Optional[str] = None
 
             if flight_identifier:
-                if session is None:
-                    session = requests.Session()
-
                 if flight_identifier not in services_cache:
+                    if session is None:
+                        session = requests.Session()
                     try:
                         services_cache[flight_identifier] = fetch_services_fn(
                             config, flight_identifier, session=session
@@ -1757,6 +1759,43 @@ def _build_fbo_disconnect_report(
                 departure_handler_norm = _normalize_handler_name(departure_handler_raw)
 
                 if previous_handler_norm != departure_handler_norm:
+                    arrival_listed: Optional[bool] = None
+                    departure_listed: Optional[bool] = None
+                    handler_listing_status = "unknown"
+
+                    if dep_airport_key and fetch_airport_services_fn:
+                        airport_handlers = airport_services_cache.get(dep_airport_key)
+                        if dep_airport_key not in airport_services_cache:
+                            if session is None:
+                                session = requests.Session()
+                            try:
+                                airport_payload = fetch_airport_services_fn(
+                                    config, dep_airport_key, session=session
+                                )
+                            except Exception as exc:  # pragma: no cover - defensive path
+                                warnings.append(
+                                    f"Failed to fetch airport services for {dep_airport_key}: {exc}"
+                                )
+                                airport_services_cache[dep_airport_key] = None
+                                airport_handlers = None
+                            else:
+                                airport_handlers = _extract_ground_handler_names(
+                                    airport_payload
+                                )
+                                airport_services_cache[dep_airport_key] = airport_handlers
+                        if airport_handlers is not None:
+                            if previous_handler_norm:
+                                arrival_listed = (
+                                    previous_handler_norm in airport_handlers
+                                )
+                            if departure_handler_norm:
+                                departure_listed = (
+                                    departure_handler_norm in airport_handlers
+                                )
+                            handler_listing_status = _classify_handler_listing(
+                                arrival_listed, departure_listed
+                            )
+
                     previous_handler_display = arrival_entry.get("handler") or "Unknown"
                     departure_handler_display = departure_handler_raw or "Unknown"
                     airport_display = dep_airport_key
@@ -1767,6 +1806,15 @@ def _build_fbo_disconnect_report(
                         f"departure: {departure_handler_display})"
                     )
 
+                    listing_note = _format_handler_listing_note(
+                        airport_display,
+                        arrival_listed,
+                        departure_listed,
+                        handler_listing_status,
+                    )
+                    if listing_note:
+                        issue_line = f"{issue_line} {listing_note}"
+
                     matches.append(
                         {
                             **formatted,
@@ -1776,6 +1824,9 @@ def _build_fbo_disconnect_report(
                             "previous_line": arrival_entry.get("formatted_line"),
                             "arrival_handler": arrival_entry.get("handler"),
                             "departure_handler": departure_handler_raw,
+                            "arrival_handler_listed": arrival_listed,
+                            "departure_handler_listed": departure_listed,
+                            "handler_listing_status": handler_listing_status,
                         }
                     )
 
@@ -2456,6 +2507,119 @@ def _extract_handler_company(payload: Any, departure: bool) -> Optional[str]:
 
     return _search(payload)
 
+
+def _extract_ground_handler_names(payload: Any) -> Set[str]:
+    handlers: Set[str] = set()
+
+    if payload is None:
+        return handlers
+
+    def _iter_services(obj: Any) -> Iterable[Any]:
+        if isinstance(obj, Mapping):
+            items = obj.get("items")
+            if isinstance(items, IterableABC) and not isinstance(
+                items, (str, bytes, bytearray)
+            ):
+                for entry in items:
+                    yield entry
+            else:
+                yield obj
+        elif isinstance(obj, IterableABC) and not isinstance(
+            obj, (str, bytes, bytearray)
+        ):
+            for entry in obj:
+                yield entry
+        else:
+            return
+
+    for service in _iter_services(payload):
+        if not isinstance(service, Mapping):
+            continue
+        type_info = service.get("type")
+        type_id: Optional[int] = None
+        type_name: Optional[str] = None
+        type_display: Optional[str] = None
+        if isinstance(type_info, Mapping):
+            try:
+                type_id = int(type_info.get("id")) if type_info.get("id") is not None else None
+            except (TypeError, ValueError):
+                type_id = None
+            type_name = _normalize_str(type_info.get("name"))
+            type_display = _normalize_str(type_info.get("displayName"))
+        else:
+            type_name = _normalize_str(type_info)
+
+        if not _is_ground_handler_type(type_id, type_name, type_display):
+            continue
+
+        company_name: Optional[str] = None
+        for candidate_key in ("company", "name", "handler", "provider", "title"):
+            candidate_value = service.get(candidate_key)
+            normalized = _normalize_handler_name(candidate_value)
+            if normalized:
+                company_name = normalized
+                break
+        if company_name:
+            handlers.add(company_name)
+
+    return handlers
+
+
+def _is_ground_handler_type(
+    type_id: Optional[int],
+    type_name: Optional[str],
+    type_display: Optional[str],
+) -> bool:
+    if type_id == 2:
+        return True
+
+    for text in (type_name, type_display):
+        if not text:
+            continue
+        upper_text = text.upper()
+        if "FBO" in upper_text or "GROUND" in upper_text:
+            return True
+    return False
+
+
+def _classify_handler_listing(
+    arrival_listed: Optional[bool], departure_listed: Optional[bool]
+) -> str:
+    if arrival_listed is True and departure_listed is True:
+        return "both_listed"
+    if arrival_listed is False or departure_listed is False:
+        return "missing_handler"
+    if arrival_listed is None and departure_listed is None:
+        return "unknown"
+    return "partial_listing"
+
+
+def _format_handler_listing_note(
+    airport: Optional[str],
+    arrival_listed: Optional[bool],
+    departure_listed: Optional[bool],
+    status: str,
+) -> Optional[str]:
+    airport_component = f" at {airport}" if airport else ""
+    if status == "unknown":
+        return f"[listing check unavailable{airport_component}]"
+
+    if arrival_listed is True and departure_listed is True:
+        return f"[listing check: both handlers listed{airport_component}]"
+
+    details: List[str] = []
+    if arrival_listed is not None:
+        arrival_text = "listed" if arrival_listed else "missing"
+        details.append(f"arrival {arrival_text}")
+    if departure_listed is not None:
+        departure_text = "listed" if departure_listed else "missing"
+        details.append(f"departure {departure_text}")
+
+    if not details:
+        return None
+
+    detail_text = ", ".join(details)
+    return f"[listing check: {detail_text}{airport_component}]"
 
 def _extract_aircraft_category(row: Mapping[str, Any]) -> Optional[str]:
     for key in (

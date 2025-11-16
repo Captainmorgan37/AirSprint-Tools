@@ -23,6 +23,16 @@ def make_services_fetcher(data: Dict[str, Any]):
     return _fetch
 
 
+def make_airport_services_fetcher(data: Dict[str, Any]):
+    def _fetch(config: Fl3xxApiConfig, airport: Any, *, session: Any = None) -> Any:
+        key = str(airport).upper()
+        if key not in data:
+            raise AssertionError(f"Unexpected airport requested: {airport}")
+        return data[key]
+
+    return _fetch
+
+
 def test_matching_handlers_are_not_flagged():
     services = {
         "100": {
@@ -60,6 +70,7 @@ def test_matching_handlers_are_not_flagged():
         rows,
         Fl3xxApiConfig(),
         fetch_services_fn=make_services_fetcher(services),
+        fetch_airport_services_fn=make_airport_services_fetcher({}),
     )
 
     assert isinstance(result, MorningReportResult)
@@ -101,10 +112,18 @@ def test_mismatched_handlers_are_flagged():
         },
     ]
 
+    airport_services = {
+        "CYUL": [
+            {"company": "Signature Montreal", "type": {"id": 2, "name": "FBO"}},
+            {"company": "Skyservice Montreal", "type": {"id": 2, "name": "FBO"}},
+        ]
+    }
+
     result = _build_fbo_disconnect_report(
         rows,
         Fl3xxApiConfig(),
         fetch_services_fn=make_services_fetcher(services),
+        fetch_airport_services_fn=make_airport_services_fetcher(airport_services),
     )
 
     assert len(result.rows) == 1
@@ -114,6 +133,10 @@ def test_mismatched_handlers_are_flagged():
     assert issue["arrival_handler"].upper() == "SIGNATURE MONTREAL"
     assert issue["departure_handler"].upper() == "SKYSERVICE MONTREAL"
     assert "handler mismatch" in issue["line"].lower()
+    assert "both handlers listed" in issue["line"].lower()
+    assert issue["arrival_handler_listed"] is True
+    assert issue["departure_handler_listed"] is True
+    assert issue["handler_listing_status"] == "both_listed"
     assert result.metadata["match_count"] == 1
     assert result.metadata["comparisons_evaluated"] == 1
 
@@ -146,10 +169,17 @@ def test_missing_services_information_is_reported():
         },
     ]
 
+    airport_services = {
+        "CYVR": [
+            {"company": "Skyservice Vancouver", "type": {"id": 2, "name": "FBO"}},
+        ]
+    }
+
     result = _build_fbo_disconnect_report(
         rows,
         Fl3xxApiConfig(),
         fetch_services_fn=make_services_fetcher(services),
+        fetch_airport_services_fn=make_airport_services_fetcher(airport_services),
     )
 
     assert len(result.rows) == 1
@@ -159,6 +189,60 @@ def test_missing_services_information_is_reported():
     assert result.warnings
     warning_text = "".join(result.warnings).lower()
     assert "missing flight identifier" in warning_text
+
+
+def test_partial_airport_listings_flag_potential_scenario_one():
+    services = {
+        "401": {
+            "departureHandler": {"company": "Skyservice Toronto"},
+            "arrivalHandler": {"company": "Signature Montreal"},
+        },
+        "402": {
+            "departureHandler": {"company": "Skyservice Montreal"},
+            "arrivalHandler": {"company": "Skyservice Ottawa"},
+        },
+    }
+
+    rows = [
+        {
+            "tail": "C-GXYZ",
+            "leg_id": "LEG-401",
+            "flightId": "401",
+            "dep_time": iso(dt.datetime(2024, 7, 4, 12, 0)),
+            "arrivalTimeUtc": iso(dt.datetime(2024, 7, 4, 14, 0)),
+            "departureAirport": {"icao": "CYYZ"},
+            "arrivalAirport": {"icao": "CYUL"},
+        },
+        {
+            "tail": "C-GXYZ",
+            "leg_id": "LEG-402",
+            "flightId": "402",
+            "dep_time": iso(dt.datetime(2024, 7, 4, 18, 0)),
+            "arrivalTimeUtc": iso(dt.datetime(2024, 7, 4, 20, 0)),
+            "departureAirport": {"icao": "CYUL"},
+            "arrivalAirport": {"icao": "CYOW"},
+        },
+    ]
+
+    airport_services = {
+        "CYUL": [
+            {"company": "Signature Montreal", "type": {"id": 2, "name": "FBO"}},
+        ]
+    }
+
+    result = _build_fbo_disconnect_report(
+        rows,
+        Fl3xxApiConfig(),
+        fetch_services_fn=make_services_fetcher(services),
+        fetch_airport_services_fn=make_airport_services_fetcher(airport_services),
+    )
+
+    assert len(result.rows) == 1
+    issue = result.rows[0]
+    assert issue["arrival_handler_listed"] is True
+    assert issue["departure_handler_listed"] is False
+    assert issue["handler_listing_status"] == "missing_handler"
+    assert "departure missing" in issue["line"].lower()
 
 
 def test_handler_company_is_extracted_from_nested_airport_service():
