@@ -1,0 +1,12 @@
+icao,category,min_ground_time_minutes,notes
+CYYC,OSA,90,Home base international arrivals typically require OSA buffers.
+CYYZ,SSA,120,Major SSA requiring extended ground time.
+CYVR,SSA,120,Peak congestion requires SSA handling plan.
+CYUL,OSA,90,Jeppesen coordination recommended for OSA operations.
+CYQB,OSA,90,
+CYEG,OSA,90,
+CYHZ,STANDARD,60,
+KAPA,STANDARD,45,
+KTEB,SSA,120,High-risk international gateway.
+MMMX,SSA,120,Permits and extended ground time mandatory.
+EGLL,SSA,120,
