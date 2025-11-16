@@ -398,6 +398,29 @@ def _iter_forecast_candidates(value: Any) -> Iterable[MutableMapping[str, Any]]:
             yield candidate
 
 
+def _strip_station_from_weather(value: Any, station: str) -> str:
+    """Remove stray station identifiers (e.g. ``CYOW``) from weather strings."""
+
+    text = str(value or "").strip()
+    if not text:
+        return ""
+
+    station_code = (station or "").strip().upper()
+    if not station_code:
+        return text
+
+    pattern = re.compile(
+        rf"(?<![A-Z0-9]){re.escape(station_code)}(?![A-Z0-9])[\s,]*",
+        re.IGNORECASE,
+    )
+    cleaned = pattern.sub("", text)
+    cleaned = re.sub(r",\s*,", ", ", cleaned)
+    cleaned = re.sub(r"\s+,", ", ", cleaned)
+    cleaned = re.sub(r",\s+", ", ", cleaned)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned)
+    return cleaned.strip(" ,")
+
+
 def build_detail_list(data_dict: Any, field_map: Iterable[Tuple[Iterable[str], str]]) -> List[Tuple[str, Any]]:
     if not isinstance(data_dict, MutableMapping):
         return []
@@ -1171,7 +1194,9 @@ def _build_report_from_props(
                     if simplified not in (None, "", []):
                         parts.append(str(simplified))
                 wx = ", ".join(parts)
-            fc_details.append(("Weather", wx))
+            cleaned_weather = _strip_station_from_weather(wx, station)
+            if cleaned_weather:
+                fc_details.append(("Weather", cleaned_weather))
 
         clouds = (
             fc_processed.get("clouds")

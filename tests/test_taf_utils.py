@@ -176,6 +176,43 @@ def test_get_taf_reports_normalises_nested_structures(monkeypatch: pytest.Monkey
     assert weather_entries.get("Weather") == "-RA"
 
 
+def test_get_taf_reports_strips_station_from_weather(monkeypatch: pytest.MonkeyPatch):
+    payload = {
+        "features": [
+            {
+                "properties": {
+                    "station": "CYOW",
+                    "issueTime": "2025-11-15T03:00:00Z",
+                    "validTimeFrom": "2025-11-15T03:00:00Z",
+                    "validTimeTo": "2025-11-16T03:00:00Z",
+                    "rawTAF": "TAF CYOW 150300Z 1503/1603 33010KT -FZRA BR",
+                    "forecast": {
+                        "periods": [
+                            _build_forecast_segment(
+                                "2025-11-15T03:00:00Z",
+                                "2025-11-15T09:00:00Z",
+                                wxString="CYOW, -FZRA, BR",
+                            )
+                        ]
+                    },
+                }
+            }
+        ]
+    }
+
+    def fake_get(url: str, params: Dict[str, Any], timeout: int) -> DummyResponse:
+        assert "CYOW" in params["ids"].upper()
+        return DummyResponse(payload)
+
+    monkeypatch.setattr(taf_utils.requests, "get", fake_get)
+
+    reports = taf_utils.get_taf_reports(["cyow"])
+
+    weather_entries = dict(reports["CYOW"][0]["forecast"][0]["details"])
+    assert weather_entries.get("Weather") == "-FZRA, BR"
+    assert "CYOW" not in weather_entries.get("Weather", "")
+
+
 def test_get_taf_reports_extracts_modern_forecast_format(monkeypatch: pytest.MonkeyPatch):
     payload = {
         "features": [
