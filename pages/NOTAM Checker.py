@@ -9,6 +9,8 @@ import pandas as pd
 import requests
 import streamlit as st
 
+from arrival_deice_utils import resolve_deice_status
+from arrival_weather_utils import _build_weather_value_html
 from fl3xx_client import compute_fetch_dates, fetch_flights
 from flight_leg_utils import (
     FlightDataError,
@@ -40,6 +42,18 @@ CATEGORY_COLORS = {
     "Other": "#ccc"
 }
 st.title("CFPS & FAA NOTAM Viewer")
+
+st.markdown(
+    """
+    <style>
+        .taf-highlight {font-weight:600;}
+        .taf-highlight--red {color:#c41230;}
+        .taf-highlight--yellow {color:#b8860b;}
+        .taf-highlight--blue {color:#38bdf8;}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 # ----- RUNWAYS DATA -----
 @st.cache_data
@@ -518,7 +532,42 @@ def _wrap_highlight(text: str, level: str = "red") -> str:
     return f"<span style='color:{color};font-weight:bold'>{text}</span>"
 
 
-def _format_detail_entry(label: str, value) -> str:
+def _normalize_deice_status(deice_status: Optional[str]) -> str:
+    if not deice_status:
+        return "unknown"
+    text = str(deice_status).strip().lower()
+    return text or "unknown"
+
+
+def _deice_status_for_weather_tokens(deice_status: Optional[str]) -> str:
+    normalized = _normalize_deice_status(deice_status)
+    if normalized == "partial":
+        return "none"
+    return normalized
+
+
+def _render_weather_value(value, *, deice_status: Optional[str] = None) -> str:
+    if value in (None, ""):
+        display_text = "—"
+        highlight_source = None
+    else:
+        display_text = str(value)
+        highlight_source = display_text
+
+    rendered = display_text
+    if highlight_source:
+        weather_html = _build_weather_value_html(
+            highlight_source,
+            _deice_status_for_weather_tokens(deice_status),
+        )
+        if weather_html:
+            rendered = weather_html
+        if _should_highlight_weather(highlight_source):
+            rendered = _wrap_highlight(rendered, "red")
+    return rendered
+
+
+def _format_detail_entry(label: str, value, *, deice_status: Optional[str] = None) -> str:
     value_text = "—" if value in (None, "") else str(value)
     label_lower = label.lower()
     highlight_level = None
@@ -528,14 +577,15 @@ def _format_detail_entry(label: str, value) -> str:
         highlight_level = _get_ceiling_highlight(value)
     if not highlight_level and "cloud" in label_lower:
         highlight_level = _get_ceiling_highlight(value)
-    if not highlight_level and "weather" in label_lower and _should_highlight_weather(value_text):
-        highlight_level = "red"
-    if highlight_level:
+    if "weather" in label_lower:
+        value_text = _render_weather_value(value, deice_status=deice_status)
+        highlight_level = None
+    elif highlight_level:
         value_text = _wrap_highlight(value_text, highlight_level)
     return f"<strong>{label}:</strong> {value_text}"
 
 
-def _format_inline_detail(label: str, value) -> str:
+def _format_inline_detail(label: str, value, *, deice_status: Optional[str] = None) -> str:
     value_text = "—" if value in (None, "") else str(value)
     label_lower = label.lower()
     highlight_level = None
@@ -545,10 +595,13 @@ def _format_inline_detail(label: str, value) -> str:
         highlight_level = _get_ceiling_highlight(value)
     if not highlight_level and "cloud" in label_lower:
         highlight_level = _get_ceiling_highlight(value)
-    if not highlight_level and "weather" in label_lower and _should_highlight_weather(value_text):
-        highlight_level = "red"
+    if "weather" in label_lower:
+        value_text = _render_weather_value(value, deice_status=deice_status)
+        highlight_level = None
     text = f"{label}: {value_text}"
-    return _wrap_highlight(text, highlight_level) if highlight_level else text
+    if highlight_level:
+        return _wrap_highlight(text, highlight_level)
+    return text
 
 
 def _parse_signed_temperature(value: str) -> int | None:
@@ -614,7 +667,7 @@ def parse_metar_raw(raw_text: str) -> dict:
     return parsed
 
 
-def build_metar_summary(report_entry: dict) -> list[str]:
+def build_metar_summary(report_entry: dict, *, deice_status: Optional[str] = None) -> list[str]:
     metar_data = report_entry.get("metar_data") or {}
     if not isinstance(metar_data, dict):
         metar_data = {}
@@ -718,9 +771,8 @@ def build_metar_summary(report_entry: dict) -> list[str]:
 
     weather = _format_weather(metar_data)
     if weather:
-        weather_line = f"Weather {weather}"
-        if _should_highlight_weather(weather):
-            weather_line = _wrap_highlight(weather_line)
+        weather_value = _render_weather_value(weather, deice_status=deice_status)
+        weather_line = f"Weather {weather_value}"
         summary_lines.append(weather_line)
 
     clouds = _format_cloud_layers(metar_data)
@@ -1175,7 +1227,7 @@ def format_taf_for_display(raw_taf: str) -> str:
     return "\n".join(" ".join(line) for line in lines)
 
 
-def format_taf_for_display_html(raw_taf: str) -> str:
+def format_taf_for_display_html(raw_taf: str, *, deice_status: Optional[str] = None) -> str:
     lines = _split_taf_into_lines(raw_taf)
     if not lines:
         escaped = html.escape(raw_taf or "")
@@ -1186,10 +1238,15 @@ def format_taf_for_display_html(raw_taf: str) -> str:
         )
 
     html_lines: list[str] = []
+    weather_status = _deice_status_for_weather_tokens(deice_status)
     for line in lines:
         tokens_html = []
         for token in line:
             token_str = token or ""
+            weather_html = _build_weather_value_html(token_str, weather_status)
+            if weather_html:
+                tokens_html.append(weather_html)
+                continue
             escaped_token = html.escape(token_str)
             ceiling_level = _get_ceiling_highlight(token_str)
             if ceiling_level:
@@ -1714,8 +1771,12 @@ with tab2:
         for code in unique_codes:
             metars = metar_reports.get(code, [])
             tafs = taf_reports.get(code, [])
+            deice_info = resolve_deice_status(code)
+            deice_code = _normalize_deice_status(deice_info.get("code"))
+            deice_label = deice_info.get("label") or "Deice info unavailable"
 
             with st.expander(code, expanded=False):
+                st.caption(f"Deice availability: {deice_label}")
                 if metars:
                     st.subheader("Latest METAR")
                     latest_metar = max(
@@ -1738,7 +1799,10 @@ with tab2:
                     st.markdown(" · ".join(header_parts))
                     st.code(latest_metar.get("raw", ""), language="text")
 
-                    summary_lines = build_metar_summary(latest_metar)
+                    summary_lines = build_metar_summary(
+                        latest_metar,
+                        deice_status=deice_code,
+                    )
                     if summary_lines:
                         st.markdown(
                             "\n".join(f"- {line}" for line in summary_lines),
@@ -1752,7 +1816,11 @@ with tab2:
                     ]
                     if remaining_details:
                         detail_html = "<br>".join(
-                            _format_detail_entry(label, value)
+                            _format_detail_entry(
+                                label,
+                                value,
+                                deice_status=deice_code,
+                            )
                             for label, value in remaining_details
                         )
                         st.markdown(detail_html, unsafe_allow_html=True)
@@ -1787,13 +1855,20 @@ with tab2:
 
                         st.markdown(" · ".join(header_parts))
                         raw_taf = taf.get("raw", "")
-                        formatted_taf_html = format_taf_for_display_html(raw_taf)
+                        formatted_taf_html = format_taf_for_display_html(
+                            raw_taf,
+                            deice_status=deice_code,
+                        )
                         st.markdown(formatted_taf_html, unsafe_allow_html=True)
 
                         forecast_rows = []
                         for fc in taf.get("forecast", []):
                             detail_entries = [
-                                _format_inline_detail(label, value)
+                                _format_inline_detail(
+                                    label,
+                                    value,
+                                    deice_status=deice_code,
+                                )
                                 for label, value in fc.get("details", [])
                             ]
                             details_text = "; ".join(detail_entries) if detail_entries else "—"
