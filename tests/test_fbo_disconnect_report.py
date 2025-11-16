@@ -137,6 +137,7 @@ def test_mismatched_handlers_are_flagged():
     assert issue["arrival_handler_listed"] is True
     assert issue["departure_handler_listed"] is True
     assert issue["handler_listing_status"] == "both_listed"
+    assert issue["listing_scenario"] == "same_airport"
     assert result.metadata["match_count"] == 1
     assert result.metadata["comparisons_evaluated"] == 1
 
@@ -242,6 +243,7 @@ def test_partial_airport_listings_flag_potential_scenario_one():
     assert issue["arrival_handler_listed"] is True
     assert issue["departure_handler_listed"] is False
     assert issue["handler_listing_status"] == "missing_handler"
+    assert issue["listing_scenario"] == "handler_missing"
     assert "departure missing" in issue["line"].lower()
 
 

@@ -66,6 +66,8 @@ class MorningReportResult:
             return _format_cj3_on_cj2_block(self)
         if self.code == "16.1.7":
             return _format_priority_status_block(self)
+        if self.code == "16.1.11":
+            return _format_fbo_disconnect_block(self)
 
         lines = ["Results Found:", self.header_label]
         lines.extend(row.get("line", "") for row in self.rows)
@@ -135,6 +137,41 @@ def _format_priority_status_block(report: MorningReportResult) -> str:
         header=f"PRIORITY CLIENTS: (based on the {report.title})",
         line_builder=_build_priority_line,
     )
+
+
+def _format_fbo_disconnect_block(report: MorningReportResult) -> str:
+    same_airport_rows: List[Mapping[str, Any]] = []
+    handler_missing_rows: List[Mapping[str, Any]] = []
+
+    for row in report.rows:
+        scenario = _normalize_str(row.get("listing_scenario"))
+        if scenario == "same_airport":
+            same_airport_rows.append(row)
+        else:
+            handler_missing_rows.append(row)
+
+    lines: List[str] = ["Results Found:", report.header_label]
+
+    def _append_section(title: str, rows: List[Mapping[str, Any]]):
+        if lines and lines[-1] != "":
+            lines.append("")
+        lines.append(title)
+        if rows:
+            lines.extend(entry.get("line", "") for entry in rows)
+        else:
+            lines.append("No matches")
+
+    if same_airport_rows:
+        _append_section(
+            "Scenario 2: handlers confirmed at the same airport", same_airport_rows
+        )
+
+    _append_section(
+        "Scenario 1: at least one handler missing from the airport listing",
+        handler_missing_rows,
+    )
+
+    return "\n".join(lines)
 
 
 def _render_preferred_block(
@@ -1827,6 +1864,9 @@ def _build_fbo_disconnect_report(
                             "arrival_handler_listed": arrival_listed,
                             "departure_handler_listed": departure_listed,
                             "handler_listing_status": handler_listing_status,
+                            "listing_scenario": _determine_listing_scenario(
+                                handler_listing_status
+                            ),
                         }
                     )
 
@@ -2620,6 +2660,13 @@ def _format_handler_listing_note(
 
     detail_text = ", ".join(details)
     return f"[listing check: {detail_text}{airport_component}]"
+
+
+def _determine_listing_scenario(status: Optional[str]) -> str:
+    if status == "both_listed":
+        return "same_airport"
+    return "handler_missing"
+
 
 def _extract_aircraft_category(row: Mapping[str, Any]) -> Optional[str]:
     for key in (

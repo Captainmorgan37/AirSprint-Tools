@@ -284,3 +284,34 @@ def test_priority_status_preferred_block_formatting():
     )
 
     assert result.formatted_output() == expected
+
+
+def test_fbo_disconnect_report_groups_listing_scenarios():
+    rows = [
+        {
+            "line": "2025-11-17-KEAVF-AirSprint Inc.-C-FASW - KPIT handler mismatch",
+            "listing_scenario": "same_airport",
+        },
+        {
+            "line": "2025-11-17-LOOVV-O'Kelco Ltd.-C-GASW - CYYC handler mismatch",
+            "listing_scenario": "handler_missing",
+        },
+    ]
+
+    result = MorningReportResult(
+        code="16.1.11",
+        title="FBO Disconnect Report",
+        header_label="FBO Disconnect Checks",
+        rows=rows,
+    )
+
+    expected = (
+        "Results Found:\n"
+        "FBO Disconnect Checks\n\n"
+        "Scenario 2: handlers confirmed at the same airport\n"
+        "2025-11-17-KEAVF-AirSprint Inc.-C-FASW - KPIT handler mismatch\n\n"
+        "Scenario 1: at least one handler missing from the airport listing\n"
+        "2025-11-17-LOOVV-O'Kelco Ltd.-C-GASW - CYYC handler mismatch"
+    )
+
+    assert result.formatted_output() == expected
