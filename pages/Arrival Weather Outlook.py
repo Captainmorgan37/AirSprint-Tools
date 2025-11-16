@@ -30,6 +30,9 @@ from arrival_weather_utils import (
     _format_clouds_value,
     _get_ceiling_highlight,
     _get_visibility_highlight,
+    _has_freezing_precip,
+    _has_wintry_precip,
+    _build_weather_value_html,
     _parse_ceiling_value,
     _parse_fraction,
     _parse_visibility_value,
@@ -106,8 +109,6 @@ TAIL_DISPLAY_ORDER: Sequence[str] = (
 )
 TAIL_INDEX = {tail: idx for idx, tail in enumerate(TAIL_DISPLAY_ORDER)}
 FAR_FUTURE = datetime.max.replace(tzinfo=timezone.utc)
-
-_WEATHER_PREFIXES = ("TS", "SH", "DR", "BL")
 
 TAILWIND_DIRECTION_RANGES: Dict[str, Tuple[int, int]] = {
     "CYRV": (30, 210),
@@ -192,6 +193,7 @@ st.markdown(
     .taf-highlight {font-weight:600;}
     .taf-highlight--red {color:#c41230;}
     .taf-highlight--yellow {color:#b8860b;}
+    .taf-highlight--blue {color:#38bdf8;}
     .tail-header {font-size:1.2rem; margin:0.5rem 0 0.4rem 0; padding-left:0.1rem; color:#e0f2fe;}
     .section-divider {border-bottom:1px solid rgba(148,163,184,0.25); margin:0.75rem 0 1.1rem 0;}
     </style>
@@ -321,50 +323,23 @@ def _coerce_code(value: Any) -> Optional[str]:
     return text or None
 
 
-
-
-def _has_wintry_precip(weather_text: Optional[str]) -> bool:
-    if not weather_text:
-        return False
-    if not isinstance(weather_text, str):
-        weather_text = str(weather_text)
-    tokens = re.split(r"\s+", weather_text.upper())
-    for token in tokens:
-        normalized = token.strip()
-        if not normalized:
-            continue
-        while normalized and normalized[0] in "+-":
-            normalized = normalized[1:]
-        if normalized.startswith("VC"):
-            normalized = normalized[2:]
-        changed = True
-        while changed and normalized:
-            changed = False
-            for prefix in _WEATHER_PREFIXES:
-                if normalized.startswith(prefix):
-                    normalized = normalized[len(prefix):]
-                    changed = True
-        if not normalized:
-            continue
-        if normalized.startswith("FZ"):
-            return True
-        for code in ("SN", "SG", "PL", "IC", "GS", "GR"):
-            if code in normalized:
-                return True
-    return False
-
-
 def _get_weather_highlight(value: Optional[str], deice_status: Optional[str]) -> Optional[str]:
     if value in (None, ""):
         return None
     highlight = "red" if _should_highlight_weather(value) else None
     if not deice_status:
         deice_status = "full"
-    if _has_wintry_precip(value):
-        if deice_status in ("partial", "none"):
+    if _has_freezing_precip(value):
+        if highlight == "red":
             return "red"
-        if deice_status == "unknown" and highlight != "red":
-            return "yellow"
+        return "blue"
+    if _has_wintry_precip(value):
+        if deice_status == "partial":
+            return "red"
+        if deice_status in ("none", "unknown"):
+            if highlight == "red":
+                return "red"
+            return "blue"
     return highlight
 
 
@@ -534,9 +509,17 @@ def _summarise_period(
     details_map = {label: value for label, value in period.get("details", [])}
 
     def _coerce(value: Any) -> Optional[str]:
-        if value in (None, "", []):
+        if value in (None, ""):
             return None
-        return str(value)
+        if isinstance(value, (list, tuple, set)):
+            parts: List[str] = []
+            for item in value:
+                text = _coerce(item)
+                if text:
+                    parts.append(text)
+            return " ".join(parts) if parts else None
+        text = str(value).strip()
+        return text or None
 
     summary: List[Dict[str, Any]] = []
 
@@ -572,6 +555,10 @@ def _summarise_period(
                 weather_highlight = _get_weather_highlight(value, deice_status)
                 if weather_highlight:
                     entry["highlight"] = weather_highlight
+                if weather_highlight == "blue":
+                    inline_html = _build_weather_value_html(value, deice_status)
+                    if inline_html:
+                        entry["value_html"] = inline_html
             summary.append(entry)
 
     # --- NEW: include only relevant TEMPO / PROB windows ---
@@ -627,6 +614,18 @@ def _summarise_period(
         # flatten tempo details similar to prevailing
         tempo_detail_map = {label: value for label, value in tempo.get("details", [])}
         tempo_bits: List[str] = []
+        tempo_bits_html: List[str] = []
+        tempo_bits_have_html = False
+
+        def _append_tempo_bit(text: str, html_override: Optional[str] = None) -> None:
+            nonlocal tempo_bits_have_html
+            tempo_bits.append(text)
+            if html_override is not None:
+                tempo_bits_have_html = True
+                tempo_bits_html.append(html_override)
+            else:
+                tempo_bits_html.append(html.escape(text))
+
         tempo_wind_dir = _coerce(tempo_detail_map.get("Wind Dir (°)"))
         tempo_wind_speed = _coerce(tempo_detail_map.get("Wind Speed (kt)"))
         tempo_wind_gust = _coerce(tempo_detail_map.get("Wind Gust (kt)"))
@@ -638,35 +637,42 @@ def _summarise_period(
         if tempo_wind_gust:
             tempo_wind_parts.append(f"G{tempo_wind_gust}")
         if tempo_wind_parts:
-            tempo_bits.append("Wind " + " ".join(tempo_wind_parts))
+            _append_tempo_bit("Wind " + " ".join(tempo_wind_parts))
         vis_t = _coerce(tempo_detail_map.get("Visibility"))
         wx_t = _coerce(tempo_detail_map.get("Weather"))
         clouds_t = _coerce(tempo_detail_map.get("Clouds"))
         if vis_t:
-            tempo_bits.append(f"Vis {vis_t}")
+            _append_tempo_bit(f"Vis {vis_t}")
+        weather_highlight = None
         if wx_t:
-            tempo_bits.append(wx_t)
+            weather_highlight = _get_weather_highlight(wx_t, deice_status)
+            html_override = None
+            if weather_highlight == "blue":
+                html_override = _build_weather_value_html(wx_t, deice_status)
+            _append_tempo_bit(wx_t, html_override)
         if clouds_t:
-            tempo_bits.append(clouds_t)
+            _append_tempo_bit(clouds_t)
 
         tempo_highlight = _combine_highlight_levels(
             (
                 _get_visibility_highlight(vis_t),
-                _get_weather_highlight(wx_t, deice_status),
+                weather_highlight,
                 _get_ceiling_highlight(clouds_t) if clouds_t else None,
             )
         )
 
         tempo_tailwind = _is_tailwind_direction(airport_code, tempo_wind_dir)
         if tempo_tailwind:
-            tempo_bits.append(f"Tailwind ({source_label})")
+            _append_tempo_bit(f"Tailwind ({source_label})")
 
-        if tempo_bits or tempo_tailwind:
-            entry_value = "; ".join(tempo_bits) if tempo_bits else f"Tailwind ({source_label})"
+        if tempo_bits:
+            entry_value = "; ".join(tempo_bits)
             tempo_entry: Dict[str, Any] = {
                 "label": f"{source_label} {window_txt}",
                 "value": entry_value,
             }
+            if tempo_bits_have_html:
+                tempo_entry["value_html"] = "; ".join(tempo_bits_html)
             if tempo_tailwind:
                 tempo_entry["highlight"] = "red"
             elif tempo_highlight:
@@ -778,11 +784,17 @@ def _build_taf_html(
         for entry in summary_items:
             label = entry.get("label")
             value = entry.get("value")
+            value_html = entry.get("value_html")
             if label is None:
                 continue
             label_lower = label.lower()
             explicit_highlight = entry.get("highlight")
-            if "cloud" in label_lower:
+            if value_html is not None:
+                value_text = value_html
+                highlight_level = explicit_highlight or _determine_highlight_level(label, value)
+                if highlight_level == "blue":
+                    highlight_level = None
+            elif "cloud" in label_lower:
                 value_text = _format_clouds_value(value)
                 highlight_level = explicit_highlight
             else:

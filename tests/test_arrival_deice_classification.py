@@ -19,4 +19,4 @@ def test_type_one_and_four_line_counts_as_full_deice():
     )
     code, label = classify_deice_record(record)
     assert code == "full"
-    assert "Types I & IV" in label
+    assert label == "Full deice capability"

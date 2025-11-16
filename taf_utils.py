@@ -590,6 +590,9 @@ def _fallback_parse_raw_taf(
     if idx < len(tokens) and re.match(r"^\d{4}/\d{4}$", tokens[idx]):
         idx += 1
 
+    tokens = tokens[idx:]
+    idx = 0
+
     def _parse_fm(token: str) -> datetime | None:
         match = re.match(r"FM(\d{2})(\d{2})(\d{2})", token)
         if not match or not issue_dt:
