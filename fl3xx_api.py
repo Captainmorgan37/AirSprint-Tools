@@ -208,6 +208,16 @@ def _build_planning_note_endpoint(base_url: str, flight_id: Any) -> str:
     return f"{base}/{flight_id}/planningnote"
 
 
+def _build_airport_services_endpoint(base_url: str, airport_code: Any) -> str:
+    base = base_url.rstrip("/")
+    if base.lower().endswith("/flights"):
+        base = base[: -len("/flights")]
+    if base.lower().endswith("/flight"):
+        base = base[: -len("/flight")]
+    airport_ident = str(airport_code).strip().upper()
+    return f"{base}/airports/{airport_ident}/services"
+
+
 def _normalise_crew_payload(payload: Any) -> List[Dict[str, Any]]:
     """Return a list of crew member dictionaries from various payload layouts."""
 
@@ -975,6 +985,33 @@ def fetch_flight_services(
     try:
         response = http.get(
             _build_services_endpoint(config.base_url, flight_id),
+            headers=config.build_headers(),
+            timeout=config.timeout,
+            verify=config.verify_ssl,
+        )
+        response.raise_for_status()
+        return response.json()
+    finally:
+        if close_session:
+            try:
+                http.close()
+            except AttributeError:
+                pass
+
+
+def fetch_airport_services(
+    config: Fl3xxApiConfig,
+    airport_code: Any,
+    *,
+    session: Optional[requests.Session] = None,
+) -> Any:
+    """Return the services payload for a specific airport (FBO listings, etc.)."""
+
+    http = session or requests.Session()
+    close_session = session is None
+    try:
+        response = http.get(
+            _build_airport_services_endpoint(config.base_url, airport_code),
             headers=config.build_headers(),
             timeout=config.timeout,
             verify=config.verify_ssl,
