@@ -2,6 +2,7 @@ import csv
 import hashlib
 import html
 import json
+import re
 from collections import defaultdict
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
@@ -10,6 +11,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 import requests
 import streamlit as st
 
+from arrival_deice_utils import resolve_deice_status
 from fl3xx_client import fetch_flights
 from flight_leg_utils import (
     FlightDataError,
@@ -28,6 +30,9 @@ from arrival_weather_utils import (
     _format_clouds_value,
     _get_ceiling_highlight,
     _get_visibility_highlight,
+    _has_freezing_precip,
+    _has_wintry_precip,
+    _build_weather_value_html,
     _parse_ceiling_value,
     _parse_fraction,
     _parse_visibility_value,
@@ -150,8 +155,15 @@ st.markdown(
     .flight-card__header {display:flex; justify-content:space-between; align-items:flex-start; gap:0.75rem;}
     .flight-card h4 {margin:0 0 0.35rem 0; font-size:1.05rem; color:#f8fafc;}
     .flight-card__runway {font-size:0.75rem; color:#e2e8f0; background:rgba(30, 64, 175, 0.35);
-                          border-radius:0.6rem; padding:0.2rem 0.55rem; white-space:nowrap;
-                          font-weight:600; letter-spacing:0.03em;}
+                          border-radius:0.6rem; padding:0.35rem 0.6rem; white-space:normal;
+                          font-weight:600; letter-spacing:0.03em; display:flex; flex-direction:column;
+                          gap:0.15rem; min-width:fit-content;}
+    .flight-card__runway-text {font-size:0.75rem; line-height:1.2;}
+    .flight-card__deice {font-size:0.7rem; text-transform:uppercase; letter-spacing:0.04em;}
+    .flight-card__deice--full {color:#bbf7d0;}
+    .flight-card__deice--partial {color:#fde68a;}
+    .flight-card__deice--none {color:#fecaca;}
+    .flight-card__deice--unknown {color:#fef9c3;}
     .flight-card .times {font-family:"Source Code Pro", Menlo, Consolas, monospace; font-size:0.9rem;
                          margin-bottom:0.45rem; line-height:1.35; color:#cbd5f5;}
     .flight-card .past-flag {display:inline-block; padding:0.25rem 0.55rem; margin-bottom:0.5rem;
@@ -181,6 +193,7 @@ st.markdown(
     .taf-highlight {font-weight:600;}
     .taf-highlight--red {color:#c41230;}
     .taf-highlight--yellow {color:#b8860b;}
+    .taf-highlight--blue {color:#38bdf8;}
     .tail-header {font-size:1.2rem; margin:0.5rem 0 0.4rem 0; padding-left:0.1rem; color:#e0f2fe;}
     .section-divider {border-bottom:1px solid rgba(148,163,184,0.25); margin:0.75rem 0 1.1rem 0;}
     </style>
@@ -308,6 +321,26 @@ def _coerce_code(value: Any) -> Optional[str]:
         return None
     text = str(value).strip().upper()
     return text or None
+
+
+def _get_weather_highlight(value: Optional[str], deice_status: Optional[str]) -> Optional[str]:
+    if value in (None, ""):
+        return None
+    highlight = "red" if _should_highlight_weather(value) else None
+    if not deice_status:
+        deice_status = "full"
+    if _has_freezing_precip(value):
+        if highlight == "red":
+            return "red"
+        return "blue"
+    if _has_wintry_precip(value):
+        if deice_status == "partial":
+            return "red"
+        if deice_status in ("none", "unknown"):
+            if highlight == "red":
+                return "red"
+            return "blue"
+    return highlight
 
 
 def _tail_order_key(tail: str) -> Tuple[int, str]:
@@ -470,13 +503,23 @@ def _summarise_period(
     period: Dict[str, Any],
     arrival_dt: Optional[datetime],
     airport_code: Optional[str],
+    *,
+    deice_status: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     details_map = {label: value for label, value in period.get("details", [])}
 
     def _coerce(value: Any) -> Optional[str]:
-        if value in (None, "", []):
+        if value in (None, ""):
             return None
-        return str(value)
+        if isinstance(value, (list, tuple, set)):
+            parts: List[str] = []
+            for item in value:
+                text = _coerce(item)
+                if text:
+                    parts.append(text)
+            return " ".join(parts) if parts else None
+        text = str(value).strip()
+        return text or None
 
     summary: List[Dict[str, Any]] = []
 
@@ -507,7 +550,16 @@ def _summarise_period(
     ):
         value = _coerce(details_map.get(detail_key))
         if value:
-            summary.append({"label": label, "value": value})
+            entry: Dict[str, Any] = {"label": label, "value": value}
+            if label == "Weather":
+                weather_highlight = _get_weather_highlight(value, deice_status)
+                if weather_highlight:
+                    entry["highlight"] = weather_highlight
+                if weather_highlight == "blue":
+                    inline_html = _build_weather_value_html(value, deice_status)
+                    if inline_html:
+                        entry["value_html"] = inline_html
+            summary.append(entry)
 
     # --- NEW: include only relevant TEMPO / PROB windows ---
     tempo_blocks = period.get("tempo", [])
@@ -562,6 +614,18 @@ def _summarise_period(
         # flatten tempo details similar to prevailing
         tempo_detail_map = {label: value for label, value in tempo.get("details", [])}
         tempo_bits: List[str] = []
+        tempo_bits_html: List[str] = []
+        tempo_bits_have_html = False
+
+        def _append_tempo_bit(text: str, html_override: Optional[str] = None) -> None:
+            nonlocal tempo_bits_have_html
+            tempo_bits.append(text)
+            if html_override is not None:
+                tempo_bits_have_html = True
+                tempo_bits_html.append(html_override)
+            else:
+                tempo_bits_html.append(html.escape(text))
+
         tempo_wind_dir = _coerce(tempo_detail_map.get("Wind Dir (°)"))
         tempo_wind_speed = _coerce(tempo_detail_map.get("Wind Speed (kt)"))
         tempo_wind_gust = _coerce(tempo_detail_map.get("Wind Gust (kt)"))
@@ -573,35 +637,42 @@ def _summarise_period(
         if tempo_wind_gust:
             tempo_wind_parts.append(f"G{tempo_wind_gust}")
         if tempo_wind_parts:
-            tempo_bits.append("Wind " + " ".join(tempo_wind_parts))
+            _append_tempo_bit("Wind " + " ".join(tempo_wind_parts))
         vis_t = _coerce(tempo_detail_map.get("Visibility"))
         wx_t = _coerce(tempo_detail_map.get("Weather"))
         clouds_t = _coerce(tempo_detail_map.get("Clouds"))
         if vis_t:
-            tempo_bits.append(f"Vis {vis_t}")
+            _append_tempo_bit(f"Vis {vis_t}")
+        weather_highlight = None
         if wx_t:
-            tempo_bits.append(wx_t)
+            weather_highlight = _get_weather_highlight(wx_t, deice_status)
+            html_override = None
+            if weather_highlight == "blue":
+                html_override = _build_weather_value_html(wx_t, deice_status)
+            _append_tempo_bit(wx_t, html_override)
         if clouds_t:
-            tempo_bits.append(clouds_t)
+            _append_tempo_bit(clouds_t)
 
         tempo_highlight = _combine_highlight_levels(
             (
                 _get_visibility_highlight(vis_t),
-                "red" if wx_t and _should_highlight_weather(wx_t) else None,
+                weather_highlight,
                 _get_ceiling_highlight(clouds_t) if clouds_t else None,
             )
         )
 
         tempo_tailwind = _is_tailwind_direction(airport_code, tempo_wind_dir)
         if tempo_tailwind:
-            tempo_bits.append(f"Tailwind ({source_label})")
+            _append_tempo_bit(f"Tailwind ({source_label})")
 
-        if tempo_bits or tempo_tailwind:
-            entry_value = "; ".join(tempo_bits) if tempo_bits else f"Tailwind ({source_label})"
+        if tempo_bits:
+            entry_value = "; ".join(tempo_bits)
             tempo_entry: Dict[str, Any] = {
                 "label": f"{source_label} {window_txt}",
                 "value": entry_value,
             }
+            if tempo_bits_have_html:
+                tempo_entry["value_html"] = "; ".join(tempo_bits_html)
             if tempo_tailwind:
                 tempo_entry["highlight"] = "red"
             elif tempo_highlight:
@@ -630,6 +701,7 @@ def _build_taf_html(
     period: Optional[Dict[str, Any]],
     arrival_dt: Optional[datetime],
     airport_code: Optional[str],
+    deice_status: Optional[str],
 ) -> str:
     if report is None:
         return "<div class='taf taf-missing'>No TAF segment matched the arrival window.</div>"
@@ -693,7 +765,12 @@ def _build_taf_html(
             f"{html.escape(end_local_text)} ({html.escape(diff_text)} before arrival"
             f" at {html.escape(arrival_local_text)}).</div>"
         )
-    summary_items = _summarise_period(period, arrival_dt, airport_code)
+    summary_items = _summarise_period(
+        period,
+        arrival_dt,
+        airport_code,
+        deice_status=deice_status,
+    )
 
     lines: List[str] = []
     if fallback_banner:
@@ -707,11 +784,17 @@ def _build_taf_html(
         for entry in summary_items:
             label = entry.get("label")
             value = entry.get("value")
+            value_html = entry.get("value_html")
             if label is None:
                 continue
             label_lower = label.lower()
             explicit_highlight = entry.get("highlight")
-            if "cloud" in label_lower:
+            if value_html is not None:
+                value_text = value_html
+                highlight_level = explicit_highlight or _determine_highlight_level(label, value)
+                if highlight_level == "blue":
+                    highlight_level = None
+            elif "cloud" in label_lower:
                 value_text = _format_clouds_value(value)
                 highlight_level = explicit_highlight
             else:
@@ -793,12 +876,22 @@ def _build_flight_card(flight: Dict[str, Any], taf_html: str) -> str:
 
     runway_html = ""
     longest_runway = flight.get("longest_runway_ft")
-    if longest_runway:
-        runway_html = (
-            "<span class='flight-card__runway'>"
-            f"Longest RWY {longest_runway:,} ft"
-            "</span>"
-        )
+    deice_label = flight.get("deice_status_label")
+    deice_code = flight.get("deice_status_code") or "unknown"
+    if longest_runway or deice_label:
+        runway_lines: List[str] = []
+        if longest_runway:
+            runway_lines.append(
+                "<div class='flight-card__runway-text'>"
+                f"Longest RWY {longest_runway:,} ft"
+                "</div>"
+            )
+        if deice_label:
+            runway_lines.append(
+                "<div class='flight-card__deice flight-card__deice--"
+                f"{html.escape(deice_code)}'>{html.escape(deice_label)}</div>"
+            )
+        runway_html = "<div class='flight-card__runway'>" + "".join(runway_lines) + "</div>"
 
     header_html = (
         "<div class='flight-card__header'>"
@@ -881,6 +974,8 @@ for row in flight_rows:
     candidate_date = candidate_dt.date() if candidate_dt else None
     arrival_airport = _coerce_code(row.get("arrival_airport") or row.get("arrivalAirport") or row.get("airportTo"))
     departure_airport = _coerce_code(row.get("departure_airport") or row.get("departureAirport") or row.get("airportFrom"))
+    deice_status = resolve_deice_status(arrival_airport)
+
     processed_flights.append(
         {
             "tail": tail,
@@ -897,6 +992,8 @@ for row in flight_rows:
             "local_service_date": candidate_date,
             "is_today": candidate_date == today_local_date,
             "longest_runway_ft": runway_lengths.get(arrival_airport or ""),
+            "deice_status_code": deice_status.get("code"),
+            "deice_status_label": deice_status.get("label"),
         }
     )
 
@@ -973,6 +1070,7 @@ for tail in sorted(flights_by_tail.keys(), key=_tail_order_key):
             flight.get("taf_period"),
             flight.get("arr_dt_utc"),
             flight.get("arrival_airport"),
+            flight.get("deice_status_code"),
         )
         cards.append(_build_flight_card(flight, taf_html))
     st.markdown(f"<div class='flight-row'>{''.join(cards)}</div>", unsafe_allow_html=True)

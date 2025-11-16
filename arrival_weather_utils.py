@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import html
 import re
-from typing import Any, Iterable, List, Optional
+from typing import Any, Iterable, Iterator, List, Optional
 
 
 _CEILING_CODE_REGEX = re.compile(
@@ -18,6 +18,9 @@ _CEILING_SUFFIX_REGEX = re.compile(
 
 
 _HIGHLIGHT_SEVERITY = {"yellow": 1, "red": 2}
+_WEATHER_PREFIXES = ("TS", "SH", "DR", "BL")
+_WINTRY_CODES = ("SN", "SG", "PL", "IC", "GS", "GR")
+_WEATHER_SPLIT_REGEX = re.compile(r"(\s+|,\s*)")
 
 
 def _parse_fraction(value: str) -> Optional[float]:
@@ -184,16 +187,105 @@ def _should_highlight_weather(value) -> bool:
     return "TS" in value.upper()
 
 
+def _normalize_weather_code(token: str) -> str:
+    normalized = token.strip()
+    if not normalized:
+        return ""
+    normalized = normalized.strip(",;")
+    normalized = normalized.strip("[](){}'\"")
+    normalized = normalized.strip(",;")
+    while normalized and normalized[0] in "+-":
+        normalized = normalized[1:]
+    if normalized.startswith("VC"):
+        normalized = normalized[2:]
+    changed = True
+    while changed and normalized:
+        changed = False
+        for prefix in _WEATHER_PREFIXES:
+            if normalized.startswith(prefix):
+                normalized = normalized[len(prefix) :]
+                changed = True
+    return normalized
+
+
+def _iter_weather_tokens(value: Optional[str]) -> Iterator[str]:
+    if not value:
+        return
+    if not isinstance(value, str):
+        value = str(value)
+    tokens = re.split(r"\s+", value.upper())
+    for token in tokens:
+        normalized = _normalize_weather_code(token)
+        if normalized:
+            yield normalized
+
+
+def _has_freezing_precip(value: Optional[str]) -> bool:
+    for token in _iter_weather_tokens(value):
+        if token.startswith("FZ"):
+            return True
+    return False
+
+
+def _has_wintry_precip(value: Optional[str]) -> bool:
+    for token in _iter_weather_tokens(value):
+        if token.startswith("FZ"):
+            return True
+        for code in _WINTRY_CODES:
+            if code in token:
+                return True
+    return False
+
+
+def _should_highlight_weather_token(token: str, deice_status: str) -> bool:
+    if not token:
+        return False
+    if token.startswith("FZ"):
+        return True
+    if deice_status in {"none", "unknown"}:
+        for code in _WINTRY_CODES:
+            if code in token:
+                return True
+    return False
+
+
+def _build_weather_value_html(value: Optional[str], deice_status: Optional[str]) -> Optional[str]:
+    if value in (None, ""):
+        return None
+    text = str(value)
+    if not text.strip():
+        return None
+    deice = (deice_status or "full").strip().lower()
+    parts: List[str] = []
+    highlighted = False
+    for segment in _WEATHER_SPLIT_REGEX.split(text):
+        if segment is None or segment == "":
+            continue
+        if _WEATHER_SPLIT_REGEX.fullmatch(segment):
+            parts.append(html.escape(segment))
+            continue
+        normalized = _normalize_weather_code(segment.upper())
+        if _should_highlight_weather_token(normalized, deice):
+            highlighted = True
+            parts.append(_wrap_highlight_html(html.escape(segment), "blue"))
+        else:
+            parts.append(html.escape(segment))
+    if highlighted:
+        return "".join(parts)
+    return None
+
+
 def _wrap_highlight_html(text: str, level: Optional[str]) -> str:
     if not level:
         return text
     color_map = {
         "red": "#c41230",
         "yellow": "#b8860b",
+        "blue": "#38bdf8",
     }
     color = color_map.get(level, color_map["red"])
     css_classes = ["taf-highlight"]
-    if level in ("red", "yellow"):
+    if level in ("red", "yellow", "blue"):
         css_classes.append(f"taf-highlight--{level}")
     return f"<span class='{' '.join(css_classes)}' style='color:{color};'>{text}</span>"
 
@@ -269,6 +361,9 @@ __all__ = [
     "_parse_ceiling_value",
     "_get_ceiling_highlight",
     "_should_highlight_weather",
+    "_has_freezing_precip",
+    "_has_wintry_precip",
+    "_build_weather_value_html",
     "_wrap_highlight_html",
     "_determine_highlight_level",
     "_combine_highlight_levels",

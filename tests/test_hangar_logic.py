@@ -7,12 +7,22 @@ from hangar_logic import (
 )
 
 
-def _build_taf(temp: float | None = None, weather: str | None = None, raw: str = ""):
+def _build_taf(
+    temp: float | None = None,
+    weather: str | None = None,
+    raw: str = "",
+    wind_speed: float | None = None,
+    wind_gust: float | None = None,
+):
     details = []
     if temp is not None:
         details.append(("Temperature", str(temp)))
     if weather:
         details.append(("Weather", weather))
+    if wind_speed is not None:
+        details.append(("Wind Speed (kt)", str(wind_speed)))
+    if wind_gust is not None:
+        details.append(("Wind Gust (kt)", str(wind_gust)))
     return [
         {
             "forecast": [
@@ -123,4 +133,99 @@ def test_identify_aircraft_category(row, expected):
 )
 def test_is_client_departure(row, expected):
     assert is_client_departure(row) is expected
+
+
+def test_snow_weather_code_triggers_hangar():
+    taf = _build_taf(temp=-2, weather="-SN")
+    assessment = evaluate_hangar_need(taf, [])
+
+    assert any("Snow" in trigger for trigger in assessment["triggers"])
+
+
+def test_freezing_fog_detected_from_metar():
+    taf = _build_taf(temp=-1)
+    metar = [
+        {
+            "temperature": -1,
+            "dewpoint": -1,
+            "wind_speed": 2,
+            "metar_data": {"wxString": "FG"},
+        }
+    ]
+
+    assessment = evaluate_hangar_need(taf, metar)
+
+    assert any("Freezing fog" in trigger for trigger in assessment["triggers"])
+
+
+def test_warm_fog_does_not_trigger_hangar():
+    taf = _build_taf(temp=6, weather="FG")
+    metar = [
+        {
+            "temperature": 14,
+            "dewpoint": 12,
+            "wind_speed": 10,
+            "metar_data": {"wxString": "FG"},
+        }
+    ]
+
+    assessment = evaluate_hangar_need(taf, metar)
+
+    assert all("fog" not in trigger.lower() for trigger in assessment["triggers"])
+    assert any("Fog expected but temperatures remain above freezing" in note for note in assessment["notes"])
+
+
+def test_strong_winds_from_metar_trigger():
+    metar = [
+        {
+            "temperature": -5,
+            "dewpoint": -7,
+            "wind_speed": 32,
+        }
+    ]
+
+    assessment = evaluate_hangar_need([], metar)
+
+    assert any("sustained winds" in trigger for trigger in assessment["triggers"])
+
+
+def test_wet_then_freeze_scenario():
+    taf = _build_taf(temp=-5)
+    metar = [
+        {
+            "temperature": 2,
+            "dewpoint": 1,
+            "wind_speed": 6,
+            "metar_data": {"wxString": "-RA"},
+        }
+    ]
+
+    assessment = evaluate_hangar_need(taf, metar)
+
+    assert any("refreeze" in trigger for trigger in assessment["triggers"])
+
+
+def test_limited_deice_triggers_with_subzero_forecast():
+    taf = _build_taf(temp=-1)
+
+    assessment = evaluate_hangar_need(
+        taf,
+        [],
+        deice_status={"code": "none", "label": "No deice available"},
+    )
+
+    assert any("Limited or no deice" in trigger for trigger in assessment["triggers"])
+
+
+def test_limited_deice_dewpoint_spread_condition():
+    taf = _build_taf(temp=2)
+    metar = [{"temperature": 1, "dewpoint": 0, "wind_speed": 10}]
+
+    assessment = evaluate_hangar_need(
+        taf,
+        metar,
+        deice_status={"code": "partial", "label": "Partial deice (Type I)"},
+    )
+
+    assert any("dewpoint spread" in trigger for trigger in assessment["triggers"])
 
