@@ -41,6 +41,23 @@ def _international(
     return dep_country.strip().upper() != arr_country.strip().upper()
 
 
+def _international(
+    dep_country: Optional[str], arr_country: Optional[str]
+) -> bool:  # pragma: no cover - exercised via evaluate_airport
+    """Return ``True`` when the given countries form an international leg.
+
+    ``None``/blank values are treated as unknown, so the leg is assumed to be
+    domestic (``False``) until both ends have concrete values. Comparisons are
+    case-insensitive to avoid mismatches caused by inconsistent casing in the
+    source data.
+    """
+
+    if not dep_country or not arr_country:
+        return False
+
+    return dep_country.strip().upper() != arr_country.strip().upper()
+
+
 def _get_tz_from_lookup(
     lookup: Mapping[str, Mapping[str, Optional[str]]]
 ) -> Optional[Callable[[str], Optional[str]]]:  # pragma: no cover - lightweight helper
