@@ -157,31 +157,29 @@ If marginal → CAUTION
 
 🛬 5.2 Airport Checks
 
-Inputs:
+The airport category has evolved into its own sub-module so that we can reuse the logic in multiple tools (Feasibility Engine, quote planners, airport digests, etc.).  The new module lives in `/feasibility/airport_module.py` (with supporting helpers) and exposes `evaluate_airport_feasibility_for_leg`.  It consumes a `LegContext` derived from a FL3XX quote leg and produces an `AirportFeasibilityResult` object that mirrors our standard PASS/CAUTION/FAIL structure for both the departure and arrival sides of a leg.
 
-runway lengths
+Inputs (superset of what the legacy checker expected):
 
-OSA/SSA airport type
+* LegContext data — departure/arrival ICAO, UTC times, pax, aircraft type/category, workflow metadata, leg notes and warnings.
+* Airport reference lookups — runway and ops approval (`AirportProfile`), deice capability (`DeiceProfile`), customs rules, OSA/SSA region, slot/PPR requirements, and global overflight permit rules.  These come from the existing CSVs/lookup helpers so no API calls are required at runtime.
+* Operational notes — pulled from `GET /api/external/airports/{icao}/operationalNotes` for the local flight date so we can react to short-notice closures, deice outages, slot caps, etc.
 
-airport category (from your CSV)
+Outputs:
 
-deice capability
+* `AirportFeasibilityResult` containing a per-side object with `CategoryResult` entries for: suitability, deice, customs, slot/PPR, OSA/SSA, overflight, and a summarized view of any operational notes (full notes also returned for context).
 
-customs capability
+Category rules (applied inside `evaluate_airport_side`):
 
-contamination / NOTAMs (optional future integration)
+* **Suitability** — ensures the airport is approved for ops and that the runway length supports the aircraft type.  Operational notes are parsed for closures, curfews, “no GA” windows, and similar hazards.  Fail when closed or insufficient runway; caution for marginal lengths or partial closures.
+* **Deice** — checks the static deice profile plus operational notes for outages.  Missing capability is a CAUTION (or FAIL when critical during winter ops).
+* **Customs** — validates AOE/CANPASS availability, known hours, and temporary restrictions noted in ops notes.  Arrivals without required customs support fail; CANPASS-only arrivals with missing CANPASS information receive CAUTION.
+* **Slot / PPR** — flags slot or PPR requirements, calling out lead times and whether the planned date falls inside the request window.  Ops notes mentioning high-demand periods escalate the severity.
+* **OSA / SSA** — classifies the airport region and warns when Jeppesen ITP is mandatory.
+* **Overflight** — runs a rough great-circle path against known permit regions so we can note upcoming permit requirements early in the planning flow.
+* **Operational notes** — summarized text plus raw notes so the IOCC team has the latest hazards/changes without leaving the tool.
 
-Rules:
-
-Runway suitability by aircraft type
-
-SSA/OSA → enforce 90/120 min ground time
-
-Customs availability restrictions
-
-Deice = No + expected freezing temps → CAUTION
-
-Missing airport data → CAUTION
+By centralizing all of the above, the airport feasibility check now acts as a single source of truth for runway suitability, customs/deice status, and regulatory requirements.  The main Feasibility Engine simply consumes the category summaries (PASS/CAUTION/FAIL with issues) so no other module needs to duplicate this logic.
 
 ⏱️ 5.3 Duty / FRMS Checks
 
@@ -218,6 +216,30 @@ OSA/SSA airports → Jeppesen planning required
 International sectors requiring advance planning
 
 High-risk countries → Jeppesen mandatory
+
+=======================================
+Appendix — Flight Category Reference
+=======================================
+
+Use these simplified definitions when classifying flights during feasibility reviews. They supersede the earlier sample workbook.
+
+🟩 Regular Flights
+
+- Both the departure and arrival airports are located in Canada (excluding any Nunavut airport) **or** in the contiguous United States (excluding Alaska and Hawaii).
+- These flights stay entirely inside the core service area, so only standard airport handling and ground-time rules apply.
+
+🟨 SSA (Secondary Service Area) Flights
+
+- At least one airport is in Alaska, Nunavut, the Caribbean, or Mexico.
+- These sectors typically require the SSA buffers (e.g., extended ground time, advance handling coordination) that the feasibility engine enforces.
+
+🟥 OSA (Outside Service Area) Flights
+
+- Any flight that is not Regular or SSA falls into OSA.
+- This includes, but is not limited to, Hawaii, Central and South America outside of Mexico, Europe, Africa, the Middle East, and the Asia-Pacific region.
+- Expect the full OSA planning workflow (Jeppesen engagement, extended ground-time requirements, permits, etc.).
+
+Note: A multi-leg trip can mix categories. Evaluate each leg using the above logic so the downstream checkers apply the correct handling templates.
 
 🛫 5.5 Overflight Permits
 

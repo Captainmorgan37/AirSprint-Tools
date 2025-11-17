@@ -526,7 +526,7 @@ CYXS,YXS,,Prince George,Prince George,Canada,53.8840361,-122.6775528,AirSprint I
 CYXT,YXT,,Terrace,Terrace,Canada,54.468611,-128.578333,AirSprint Inc.: A,,"DEICE/ANTI-ICE:
 
 •	Type 1 & 4 available",No
-CYXU,YXU,,London International,London,Canada,43.0330528,-81.151,AirSprint Inc.: A,A_5,No Deice Mentions Found,
+CYXU,YXU,,London International,London,Canada,43.0330528,-81.151,AirSprint Inc.: A,A_5,"DEICE/ANTI-ICE: Type 1 and 4 available",No
 CYXX,YXX,,Abbotsford ,Abbotsford,Canada,49.0252667,-122.3599556,AirSprint Inc.: A,,"DEICE/ANTI-ICE:
 
 Executive Aviation
@@ -2194,4 +2194,5 @@ NOT AVAILABLE",Yes
 ,,1R7,Brookhaven-Lincoln County,Brookhaven,United States,31.605833,-90.409306,AirSprint Inc.: B,,"DEICE/ANTI-ICE:
 
 NOT AVAILABLE",Yes
+
 

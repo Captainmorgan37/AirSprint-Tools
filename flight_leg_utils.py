@@ -161,7 +161,12 @@ def load_airport_metadata_lookup() -> Dict[str, Dict[str, Optional[str]]]:
         if isinstance(country_value, str) and country_value.strip():
             country = country_value.strip()
 
-        if tz is None and country is None:
+        subdivision: Optional[str] = None
+        subd_value = row.get("subd")
+        if isinstance(subd_value, str) and subd_value.strip():
+            subdivision = subd_value.strip()
+
+        if tz is None and country is None and subdivision is None:
             continue
         for key in ("icao", "iata", "lid"):
             code_value = row.get(key)
@@ -169,6 +174,7 @@ def load_airport_metadata_lookup() -> Dict[str, Dict[str, Optional[str]]]:
                 lookup[code_value.strip().upper()] = {
                     "tz": tz,
                     "country": country,
+                    "subd": subdivision,
                 }
     return lookup
 

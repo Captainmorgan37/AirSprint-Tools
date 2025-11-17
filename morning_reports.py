@@ -1614,7 +1614,6 @@ def _build_upgrade_flights_report(
             quote_id = _extract_quote_identifier(row)
             assigned_type = _extract_assigned_aircraft_type(row)
             requested_type = _extract_requested_aircraft_type(row)
-            booking_note: Optional[str] = None
             planning_note: Optional[str] = None
             account_name: Optional[str] = formatted.get("account_name")
 
@@ -1652,7 +1651,6 @@ def _build_upgrade_flights_report(
                         account_name = _extract_account_name(detail)
                     planning_note = _extract_planning_note(detail)
 
-                booking_note = _extract_booking_note(detail)
             else:
                 warnings.append(
                     f"Missing quote identifier for upgrade workflow leg "
@@ -1678,6 +1676,11 @@ def _build_upgrade_flights_report(
             if transition_label:
                 line_parts.append(transition_label)
 
+            planning_note = planning_note or _extract_planning_note(row)
+            upgrade_reason_note = _planning_note_upgrade_reason(planning_note)
+            billing_instruction_note = _planning_note_billing_instruction(
+                planning_note
+            )
             matches.append(
                 {
                     "line": "-".join(line_parts),
@@ -1686,10 +1689,9 @@ def _build_upgrade_flights_report(
                     "booking_reference": booking_reference,
                     "quote_id": quote_id,
                     "workflow": workflow,
-                    "assigned_aircraft_type": assigned_type,
-                    "requested_aircraft_type": requested_type,
-                    "booking_note": booking_note,
-                    "planning_note": planning_note or _extract_planning_note(row),
+                    "upgrade_reason_note": upgrade_reason_note,
+                    "billing_instruction_note": billing_instruction_note,
+                    "planning_note": planning_note,
                     "account_name": account_name,
                     "leg_id": formatted.get("leg_id"),
                 }
@@ -2873,6 +2875,48 @@ def _extract_planning_note(detail: Optional[Mapping[str, Any]]) -> Optional[str]
         value = detail.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
+    return None
+
+
+def _split_planning_note_segments(note: str) -> List[str]:
+    segments = re.split(r"(?:[\r\n]+|(?<=[.!?])\s+)", note)
+    cleaned: List[str] = []
+    for segment in segments:
+        if not segment:
+            continue
+        trimmed = segment.strip(" -")
+        if trimmed:
+            cleaned.append(trimmed)
+    return cleaned
+
+
+def _planning_note_upgrade_reason(note: Optional[str]) -> Optional[str]:
+    if not note:
+        return None
+    for segment in _split_planning_note_segments(note):
+        lowered = segment.lower()
+        if "upgrade" not in lowered:
+            continue
+        if "due" not in lowered and "because" not in lowered:
+            continue
+        return segment
+    return None
+
+
+def _planning_note_billing_instruction(note: Optional[str]) -> Optional[str]:
+    if not note:
+        return None
+    for segment in _split_planning_note_segments(note):
+        lowered = segment.lower()
+        if "bill" not in lowered:
+            continue
+        if "hour" not in lowered:
+            continue
+        if "cj" not in lowered:
+            continue
+        if not re.search(r"\d+(?:\.\d+)?", segment):
+            continue
+        return segment
     return None
 
 
