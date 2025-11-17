@@ -59,3 +59,28 @@ def test_missing_pax_triggers_caution_for_supported_profile():
     )
     assert result.status == "CAUTION"
     assert "passenger count unknown" in result.summary
+
+
+def test_icao_category_aliases_use_passenger_profiles():
+    result = checker_aircraft.evaluate_aircraft(
+        {
+            "aircraftType": "C25B",
+            "plannedBlockTime": "3:30",
+            "pax": 5,
+        }
+    )
+    assert result.status == "PASS"
+    assert "within pax endurance" in result.summary
+    assert any("Limit for 5 pax" in issue for issue in result.issues)
+
+
+def test_generic_limit_lookup_uses_canonical_alias():
+    result = checker_aircraft.evaluate_aircraft(
+        {
+            "aircraftType": "CJ4",
+            "plannedBlockTime": "3:55",
+            "pax": 4,
+        }
+    )
+    assert result.status == "FAIL"
+    assert "exceeds endurance" in result.summary

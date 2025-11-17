@@ -110,18 +110,38 @@ _PASSENGER_PROFILES: Mapping[str, PaxProfile] = {
 
 
 _AIRCRAFT_ALIASES = {
+    # Praetor/Legacy fleet
     "PRAETOR 500": "PRAETOR 500",
     "EMBRAER PRAETOR 500": "PRAETOR 500",
+    "EMB-550": "PRAETOR 500",
+    "E550": "PRAETOR 500",
     "LEGACY 450": "LEGACY 450",
     "EMBRAER LEGACY 450": "LEGACY 450",
+    "EMB-545": "LEGACY 450",
+    "E545": "LEGACY 450",
+    # CJ fleet
     "CITATION CJ3+": "CITATION CJ3+",
     "CITATION CJ3 PLUS": "CITATION CJ3+",
     "CJ3+": "CITATION CJ3+",
     "CJ3": "CITATION CJ3+",
+    "CESSNA 525B": "CITATION CJ3+",
+    "C25B": "CITATION CJ3+",
     "CITATION CJ2+": "CITATION CJ2+",
     "CITATION CJ2": "CITATION CJ2+",
     "CJ2+": "CITATION CJ2+",
     "CJ2": "CITATION CJ2+",
+    "CESSNA 525A": "CITATION CJ2+",
+    "C25A": "CITATION CJ2+",
+    "CITATION CJ4": "CITATION CJ4",
+    "CJ4": "CITATION CJ4",
+    "CITATION CJ4 GEN2": "CITATION CJ4",
+    "CESSNA 525C": "CITATION CJ4",
+    "C25C": "CITATION CJ4",
+    # PC-12 utility
+    "PILATUS PC-12": "PILATUS PC-12",
+    "PILATUS PC12": "PILATUS PC-12",
+    "PC12": "PILATUS PC-12",
+    "PC-12": "PILATUS PC-12",
 }
 
 _AIRCRAFT_KEYWORD_ALIASES = (
@@ -129,13 +149,14 @@ _AIRCRAFT_KEYWORD_ALIASES = (
     ("LEGACY", "LEGACY 450"),
     ("CJ3", "CITATION CJ3+"),
     ("CJ2", "CITATION CJ2+"),
+    ("CJ4", "CITATION CJ4"),
 )
 
 _ENDURANCE_LIMITS = {
-    "CJ2": 210,
-    "CJ3": 220,
-    "CJ4": 230,
-    "PC12": 240,
+    "CITATION CJ2+": 210,
+    "CITATION CJ3+": 220,
+    "CITATION CJ4": 230,
+    "PILATUS PC-12": 240,
 }
 
 _DEFAULT_ENDURANCE = 240
@@ -234,7 +255,7 @@ def evaluate_aircraft(flight: Mapping[str, Any]) -> CategoryResult:
     canonical = _canonical_aircraft(aircraft_type)
     profile = _PASSENGER_PROFILES.get(canonical)
 
-    limit = _ENDURANCE_LIMITS.get(aircraft_type.upper(), _DEFAULT_ENDURANCE)
+    limit = _ENDURANCE_LIMITS.get(canonical, _DEFAULT_ENDURANCE)
 
     if block_minutes is None:
         return CategoryResult(
