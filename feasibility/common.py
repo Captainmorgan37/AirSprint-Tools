@@ -318,6 +318,10 @@ def classify_flight_category(
             reasons.append("At least one airport is in the SSA region.")
         return FlightCategoryResult(SSA_CATEGORY, tuple(reasons))
 
+    if cross_border_core:
+        reason = "Cross-border Canada/U.S. sector remains within the core service area."
+        return FlightCategoryResult(REGULAR_CATEGORY, (reason,))
+
     if (
         dep_info.category == REGULAR_CATEGORY
         and arr_info.category == REGULAR_CATEGORY
@@ -335,8 +339,5 @@ def classify_flight_category(
     if arr_info.category == OSA_CATEGORY:
         reasons.extend(arr_info.reasons)
     if not reasons:
-        if cross_border_core:
-            reasons.append("Cross-border Canada/U.S. sector falls outside the Regular definition.")
-        else:
-            reasons.append("Flight extends outside the Regular/SSA definitions.")
+        reasons.append("Flight extends outside the Regular/SSA definitions.")
     return FlightCategoryResult(OSA_CATEGORY, tuple(reasons))
