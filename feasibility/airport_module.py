@@ -631,6 +631,9 @@ def evaluate_customs(
     status: CategoryStatus = "PASS"
     summary = "Customs available"
 
+    if side == "DEP":
+        return CategoryResult(status=status, summary="Not required for departure", issues=issues)
+
     if not leg.get("is_international"):
         summary = "Domestic leg"
         return CategoryResult(status=status, summary=summary, issues=issues)
