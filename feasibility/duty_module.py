@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Callable, List, Optional
 
 import pytz
@@ -17,6 +17,8 @@ _SPLIT_DUTY_THRESHOLD_MINUTES = 6 * 60
 _RESET_DUTY_THRESHOLD_MINUTES = 11 * 60 + 15
 _STANDARD_DUTY_LIMIT_MINUTES = 14 * 60
 _EXTENDED_DUTY_LIMIT_MINUTES = 17 * 60
+_DUTY_START_BUFFER_MINUTES = 60
+_DUTY_END_BUFFER_MINUTES = 15
 
 
 def _parse_timestamp(value: Optional[str]) -> Optional[datetime]:
@@ -85,14 +87,27 @@ def evaluate_generic_duty_day(
 
     first_leg = legs[0]
     last_leg = legs[-1]
-    start_time = _parse_timestamp(first_leg.get("departure_date_utc"))
-    end_time = _parse_timestamp(last_leg.get("arrival_date_utc"))
+    scheduled_start = _parse_timestamp(first_leg.get("departure_date_utc"))
+    scheduled_end = _parse_timestamp(last_leg.get("arrival_date_utc"))
+    start_time = (
+        scheduled_start - timedelta(minutes=_DUTY_START_BUFFER_MINUTES)
+        if scheduled_start
+        else None
+    )
+    end_time = (
+        scheduled_end + timedelta(minutes=_DUTY_END_BUFFER_MINUTES)
+        if scheduled_end
+        else None
+    )
 
     total_duty: Optional[int] = None
     if start_time and end_time:
         total_duty = max(int((end_time - start_time).total_seconds() // 60), 0)
         issues.append(
             f"Duty window {start_time.isoformat().replace('+00:00', 'Z')} → {end_time.isoformat().replace('+00:00', 'Z')}"
+        )
+        issues.append(
+            "Duty start includes 60m pre-departure buffer; duty end includes 15m post-arrival buffer."
         )
     else:
         issues.append("Unable to compute duty duration; missing timestamps on one or more legs.")
@@ -109,8 +124,24 @@ def evaluate_generic_duty_day(
             f"Turn between {previous['arrival_icao']} and {current['departure_icao']}: {_format_minutes(turn)}"
         )
 
-    split_possible = any(turn >= _SPLIT_DUTY_THRESHOLD_MINUTES for turn in turn_times)
+    qualifying_split_turns = [turn for turn in turn_times if turn >= _SPLIT_DUTY_THRESHOLD_MINUTES]
+    split_possible = bool(qualifying_split_turns)
     reset_possible = any(turn >= _RESET_DUTY_THRESHOLD_MINUTES for turn in turn_times)
+
+    split_extension_minutes = 0
+    if qualifying_split_turns:
+        best_ground = max(qualifying_split_turns)
+        split_extension_minutes = max(best_ground - 120, 0) // 2
+        split_extension_minutes = min(
+            split_extension_minutes,
+            _EXTENDED_DUTY_LIMIT_MINUTES - _STANDARD_DUTY_LIMIT_MINUTES,
+        )
+        issues.append(
+            "Split duty window available (≥6h ground)."
+        )
+        issues.append(
+            f"Ground time {_format_minutes(best_ground)} allows {_format_minutes(split_extension_minutes)} duty extension."
+        )
 
     duty_start_local = _format_local(start_time, first_leg.get("departure_icao"), tz_provider)
     duty_end_local = _format_local(end_time, last_leg.get("arrival_icao"), tz_provider)
@@ -118,20 +149,25 @@ def evaluate_generic_duty_day(
     if total_duty is None:
         status: CategoryStatus = "CAUTION"
         summary = "Duty duration unavailable"
-    elif total_duty <= _STANDARD_DUTY_LIMIT_MINUTES:
-        status = "PASS"
-        summary = f"Total duty {_format_minutes(total_duty)} (PASS)"
-    elif total_duty < _EXTENDED_DUTY_LIMIT_MINUTES:
-        status = "CAUTION"
-        summary = f"Total duty {_format_minutes(total_duty)} exceeds 14h standard"
-        issues.append("Duty exceeds 14 hours and requires extension feasibility.")
     else:
-        status = "FAIL"
-        summary = f"Total duty {_format_minutes(total_duty)} exceeds 17h limit"
-        issues.append("Duty exceeds 17-hour maximum.")
+        allowed_limit = _STANDARD_DUTY_LIMIT_MINUTES + split_extension_minutes
+        allowed_limit = min(allowed_limit, _EXTENDED_DUTY_LIMIT_MINUTES)
+        limit_label = _format_minutes(allowed_limit)
 
-    if split_possible:
-        issues.append("Split duty window available (≥6h ground).")
+        if total_duty <= allowed_limit:
+            status = "PASS"
+            summary = f"Total duty {_format_minutes(total_duty)} within {limit_label} limit"
+        elif total_duty < _EXTENDED_DUTY_LIMIT_MINUTES:
+            status = "CAUTION"
+            summary = f"Total duty {_format_minutes(total_duty)} exceeds {limit_label} limit"
+            issues.append(
+                f"Duty {_format_minutes(total_duty)} exceeds the allowable {limit_label} duty window."
+            )
+        else:
+            status = "FAIL"
+            summary = f"Total duty {_format_minutes(total_duty)} exceeds 17h limit"
+            issues.append("Duty exceeds 17-hour maximum.")
+
     if reset_possible:
         issues.append("Reset duty window available (≥11h15 ground).")
 

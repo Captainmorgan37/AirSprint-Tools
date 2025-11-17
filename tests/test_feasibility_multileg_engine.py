@@ -53,7 +53,7 @@ def test_phase1_engine_runs_for_entire_quote() -> None:
 
     assert result["bookingIdentifier"] == "PIURB"
     assert len(result["legs"]) == 2
-    assert result["duty"]["total_duty"] == 195
+    assert result["duty"]["total_duty"] == 270
     assert result["duty"]["status"] == "PASS"
 
 
@@ -89,7 +89,45 @@ def test_duty_module_flags_extended_day_and_split_window() -> None:
 
     result = evaluate_generic_duty_day(day)
 
-    assert result["total_duty"] == 960
-    assert result["status"] == "CAUTION"
+    assert result["total_duty"] == 1035
+    assert result["status"] == "FAIL"
     assert result["split_duty_possible"] is True
     assert result["reset_duty_possible"] is False
+
+
+def test_split_duty_extension_extends_allowable_window() -> None:
+    legs = [
+        {
+            "leg_id": "1",
+            "departure_icao": "CYYC",
+            "arrival_icao": "CYEG",
+            "departure_date_utc": "2025-01-01T08:00:00Z",
+            "arrival_date_utc": "2025-01-01T10:00:00Z",
+        },
+        {
+            "leg_id": "2",
+            "departure_icao": "CYEG",
+            "arrival_icao": "CYYC",
+            "departure_date_utc": "2025-01-01T18:00:00Z",
+            "arrival_date_utc": "2025-01-01T23:00:00Z",
+        },
+    ]
+    day = cast(
+        DayContext,
+        {
+            "quote_id": "Q2",
+            "bookingIdentifier": "DEF",
+            "aircraft_type": "Test",
+            "aircraft_category": "",
+            "legs": legs,
+            "sales_contact": None,
+            "createdDate": None,
+        },
+    )
+
+    result = evaluate_generic_duty_day(day)
+
+    assert result["total_duty"] == 975
+    assert result["status"] == "PASS"
+    assert result["split_duty_possible"] is True
+    assert any("allows" in issue for issue in result["issues"])
