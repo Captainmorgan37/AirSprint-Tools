@@ -7,13 +7,17 @@ from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from flight_leg_utils import load_airport_metadata_lookup
 
-from .airport_module import (
-    AirportFeasibilityResult,
-    build_leg_context_from_flight,
-    evaluate_airport_feasibility_for_leg,
+from .common import (
+    OSA_CATEGORY,
+    OSA_MIN_GROUND_MINUTES,
+    SSA_CATEGORY,
+    SSA_MIN_GROUND_MINUTES,
+    classify_airport_category,
+    extract_airport_code,
+    get_country_for_airport,
 )
-from .data_access import AirportCategoryRecord, CustomsRule, load_airport_categories, load_customs_rules
-from .schemas import CategoryResult, combine_statuses
+from .data_access import CustomsRule, load_customs_rules
+from .schemas import CategoryResult, CategoryStatus
 
 
 def _get_tz_from_lookup(
@@ -59,28 +63,62 @@ def evaluate_airport(
     flight: Mapping[str, Any],
     *,
     airport_lookup: Optional[Mapping[str, Mapping[str, Optional[str]]]] = None,
-    airport_categories: Optional[Mapping[str, AirportCategoryRecord]] = None,
     customs_rules: Optional[Mapping[str, CustomsRule]] = None,
 ) -> CategoryResult:
     lookup = airport_lookup or load_airport_metadata_lookup()
-    categories = airport_categories or load_airport_categories()
     customs = customs_rules or load_customs_rules()
 
-    leg = build_leg_context_from_flight(flight, airport_metadata=lookup)
-    if not leg:
-        return CategoryResult(
-            status="CAUTION",
-            summary="Missing airport data",
-            issues=["Departure or arrival airport missing; unable to run feasibility."],
-        )
+    dep = extract_airport_code(flight, arrival=False)
+    arr = extract_airport_code(flight, arrival=True)
 
-    tz_provider = _get_tz_from_lookup(lookup)
-    feasibility_result = evaluate_airport_feasibility_for_leg(
-        leg,
-        tz_provider=tz_provider,
-        airport_metadata=lookup,
-        airport_categories=categories,
-        customs_rules=customs,
-        now=datetime.now(timezone.utc),
-    )
-    return _summarize_airport_feasibility(feasibility_result)
+    dep_country = get_country_for_airport(dep, lookup)
+    arr_country = get_country_for_airport(arr, lookup)
+
+    alerts: List[tuple[CategoryStatus, str]] = []
+    issues: List[str] = []
+
+    if not dep or not arr:
+        alerts.append(("CAUTION", "Missing departure or arrival airport"))
+        issues.append("Ensure both departure and arrival airports are populated in FL3XX.")
+    else:
+        issues.append(f"Route: {dep} → {arr}")
+
+    if arr:
+        arrival_category = classify_airport_category(arr, lookup)
+        if arrival_category.category == SSA_CATEGORY:
+            minutes = SSA_MIN_GROUND_MINUTES
+            alerts.append(("CAUTION", f"{arr} classified as {SSA_CATEGORY}"))
+            issues.append(f"{arr} requires at least {minutes} minutes on the ground.")
+            issues.extend(arrival_category.reasons)
+        elif arrival_category.category == OSA_CATEGORY:
+            minutes = OSA_MIN_GROUND_MINUTES
+            alerts.append(("CAUTION", f"{arr} classified as {OSA_CATEGORY}"))
+            issues.append(f"{arr} requires at least {minutes} minutes on the ground.")
+            issues.extend(arrival_category.reasons)
+
+    if _international(dep_country, arr_country):
+        customs_rule = customs.get(arr) if arr else None
+        if customs_rule is None:
+            alerts.append(("CAUTION", "International arrival missing customs rule"))
+            issues.append(f"No customs data found for {arr}; confirm lead times manually.")
+        else:
+            issues.append(
+                f"Customs service type for {arr}: {customs_rule.service_type or 'Unknown'}."
+            )
+            if customs_rule.notes:
+                issues.append(customs_rule.notes)
+
+    if arr:
+        deice = has_deice_available(icao=arr)
+        if deice is False:
+            alerts.append(("CAUTION", f"No deice available at {arr}"))
+            issues.append(f"Arrange alternate deice support for {arr} or plan tech stop.")
+        elif deice is None:
+            issues.append(f"No deice intel for {arr}; monitor forecast if icing possible.")
+
+    summary = _pick_summary(alerts)
+    status = "PASS" if not alerts else max(alerts, key=lambda a: _ALERT_PRIORITY[a[0]])[0]
+    if status == "PASS" and issues:
+        summary = "Airports verified"
+
+    return CategoryResult(status=status, summary=summary, issues=issues)
