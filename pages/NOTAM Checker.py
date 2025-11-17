@@ -852,6 +852,20 @@ def highlight_keywords(notam_text: str):
         )
     return notam_text
 
+
+def strip_french_translation(notam_text: str) -> str:
+    """Remove trailing French translations that start with ``FR:``."""
+
+    if not notam_text:
+        return notam_text
+
+    lines = notam_text.splitlines()
+    for idx, line in enumerate(lines):
+        stripped = line.strip()
+        if re.match(r"^FR\s*:", stripped, re.IGNORECASE):
+            return "\n".join(lines[:idx]).rstrip()
+    return notam_text
+
 def parse_cfps_times(notam_text):
     start_match = re.search(r'\bB\)\s*(\d{10}|PERM)', notam_text)
     end_match = re.search(r'\bC\)\s*(\d{10}|PERM)', notam_text)
@@ -911,6 +925,8 @@ def get_cfps_notams(icao: str):
                 notam_text = notam_json.get("raw", text)
             except:
                 notam_text = text
+
+            notam_text = strip_french_translation(notam_text)
 
             if any(hide_kw.lower() in notam_text.lower() for hide_kw in HIDE_KEYWORDS):
                 continue
