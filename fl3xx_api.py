@@ -194,6 +194,15 @@ def _build_leg_endpoint(base_url: str, quote_id: Any) -> str:
     return f"{base}/leg/{quote_id}"
 
 
+def _build_quote_endpoint(base_url: str, quote_id: Any) -> str:
+    base = base_url.rstrip("/")
+    if base.lower().endswith("/flights"):
+        base = base[: -len("/flights")]
+    if base.lower().endswith("/flight"):
+        base = base[: -len("/flight")]
+    return f"{base}/quote/{quote_id}"
+
+
 def _build_services_endpoint(base_url: str, flight_id: Any) -> str:
     base = base_url.rstrip("/")
     if base.lower().endswith("/flights"):
@@ -1123,6 +1132,33 @@ def fetch_leg_details(
     try:
         response = http.get(
             _build_leg_endpoint(config.base_url, quote_id),
+            headers=config.build_headers(),
+            timeout=config.timeout,
+            verify=config.verify_ssl,
+        )
+        response.raise_for_status()
+        return response.json()
+    finally:
+        if close_session:
+            try:
+                http.close()
+            except AttributeError:
+                pass
+
+
+def fetch_quote_details(
+    config: Fl3xxApiConfig,
+    quote_id: Any,
+    *,
+    session: Optional[requests.Session] = None,
+) -> Any:
+    """Return the quote payload for a specific quote identifier."""
+
+    http = session or requests.Session()
+    close_session = session is None
+    try:
+        response = http.get(
+            _build_quote_endpoint(config.base_url, quote_id),
             headers=config.build_headers(),
             timeout=config.timeout,
             verify=config.verify_ssl,
