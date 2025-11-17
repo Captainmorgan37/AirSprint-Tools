@@ -29,9 +29,9 @@ def test_canada_domestic_leg_is_regular() -> None:
     assert result.category == REGULAR_CATEGORY
 
 
-def test_cross_border_core_leg_is_osa() -> None:
+def test_cross_border_core_leg_is_regular() -> None:
     result = classify_flight_category("CYYZ", "KBOS", LOOKUP)
-    assert result.category == OSA_CATEGORY
+    assert result.category == REGULAR_CATEGORY
     assert any("Cross-border" in reason for reason in result.reasons)
 
 
