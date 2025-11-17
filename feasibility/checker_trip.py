@@ -6,8 +6,7 @@ from typing import Any, List, Mapping, Optional
 
 from flight_leg_utils import load_airport_metadata_lookup
 
-from .common import extract_airport_code, get_country_for_airport
-from .data_access import AirportCategoryRecord, load_airport_categories
+from .common import classify_flight_category, extract_airport_code, get_country_for_airport, OSA_CATEGORY, SSA_CATEGORY
 from .schemas import CategoryResult
 
 
@@ -30,10 +29,8 @@ def evaluate_trip(
     flight: Mapping[str, Any],
     *,
     airport_lookup: Optional[Mapping[str, Mapping[str, Optional[str]]]] = None,
-    airport_categories: Optional[Mapping[str, AirportCategoryRecord]] = None,
 ) -> CategoryResult:
     lookup = airport_lookup or load_airport_metadata_lookup()
-    categories = airport_categories or load_airport_categories()
 
     dep = extract_airport_code(flight, arrival=False)
     arr = extract_airport_code(flight, arrival=True)
@@ -44,19 +41,10 @@ def evaluate_trip(
     issues: List[str] = []
     flags: List[str] = []
 
-    def _category_flag(airport: Optional[str]) -> Optional[str]:
-        if not airport:
-            return None
-        record = categories.get(airport)
-        if record and record.category in {"SSA", "OSA"}:
-            return f"{airport} is {record.category}; Jeppesen planning required."
-        return None
-
-    dep_flag = _category_flag(dep)
-    arr_flag = _category_flag(arr)
-    for flag in (dep_flag, arr_flag):
-        if flag:
-            flags.append(flag)
+    classification = classify_flight_category(dep, arr, lookup)
+    if classification.category in {SSA_CATEGORY, OSA_CATEGORY}:
+        flags.append(f"{classification.category} sector; Jeppesen planning required.")
+        issues.extend(classification.reasons)
 
     if dep_country and arr_country and dep_country != arr_country:
         flags.append("International sector; confirm Jeppesen support.")

@@ -8,7 +8,7 @@ from typing import Any, Dict, Mapping, MutableMapping, Optional
 from flight_leg_utils import load_airport_metadata_lookup
 
 from . import checker_aircraft, checker_airport, checker_duty, checker_overflight, checker_trip
-from .data_access import load_airport_categories, load_customs_rules
+from .data_access import load_customs_rules
 from .lookup import lookup_booking
 from .schemas import CategoryResult, FeasibilityResult
 
@@ -35,7 +35,6 @@ def evaluate_flight(
 ) -> FeasibilityResult:
     reference_time = now or datetime.now(timezone.utc)
     airport_lookup = airport_lookup or load_airport_metadata_lookup()
-    airport_categories = load_airport_categories()
     customs_rules = load_customs_rules()
 
     categories: Dict[str, CategoryResult] = {
@@ -43,12 +42,11 @@ def evaluate_flight(
         "airport": checker_airport.evaluate_airport(
             flight,
             airport_lookup=airport_lookup,
-            airport_categories=airport_categories,
             customs_rules=customs_rules,
         ),
         "duty": checker_duty.evaluate_duty(flight, now=reference_time),
         "trip": checker_trip.evaluate_trip(
-            flight, airport_lookup=airport_lookup, airport_categories=airport_categories
+            flight, airport_lookup=airport_lookup
         ),
         "overflight": checker_overflight.evaluate_overflight(flight, now=reference_time),
     }

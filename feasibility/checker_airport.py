@@ -7,8 +7,16 @@ from typing import Any, Dict, List, Mapping, Optional
 from deice_info_helper import has_deice_available
 from flight_leg_utils import load_airport_metadata_lookup
 
-from .common import extract_airport_code, get_country_for_airport
-from .data_access import AirportCategoryRecord, CustomsRule, load_airport_categories, load_customs_rules
+from .common import (
+    OSA_CATEGORY,
+    OSA_MIN_GROUND_MINUTES,
+    SSA_CATEGORY,
+    SSA_MIN_GROUND_MINUTES,
+    classify_airport_category,
+    extract_airport_code,
+    get_country_for_airport,
+)
+from .data_access import CustomsRule, load_customs_rules
 from .schemas import CategoryResult, CategoryStatus
 
 _ALERT_PRIORITY: Dict[CategoryStatus, int] = {"PASS": 0, "CAUTION": 1, "FAIL": 2}
@@ -29,11 +37,9 @@ def evaluate_airport(
     flight: Mapping[str, Any],
     *,
     airport_lookup: Optional[Mapping[str, Mapping[str, Optional[str]]]] = None,
-    airport_categories: Optional[Mapping[str, AirportCategoryRecord]] = None,
     customs_rules: Optional[Mapping[str, CustomsRule]] = None,
 ) -> CategoryResult:
     lookup = airport_lookup or load_airport_metadata_lookup()
-    categories = airport_categories or load_airport_categories()
     customs = customs_rules or load_customs_rules()
 
     dep = extract_airport_code(flight, arrival=False)
@@ -51,16 +57,18 @@ def evaluate_airport(
     else:
         issues.append(f"Route: {dep} → {arr}")
 
-    category_record = categories.get(arr) if arr else None
-    if category_record:
-        if category_record.category in {"SSA", "OSA"}:
-            minutes = category_record.min_ground_time_minutes or 90
-            alerts.append(("CAUTION", f"{arr} classified as {category_record.category}"))
+    if arr:
+        arrival_category = classify_airport_category(arr, lookup)
+        if arrival_category.category == SSA_CATEGORY:
+            minutes = SSA_MIN_GROUND_MINUTES
+            alerts.append(("CAUTION", f"{arr} classified as {SSA_CATEGORY}"))
             issues.append(f"{arr} requires at least {minutes} minutes on the ground.")
-            if category_record.notes:
-                issues.append(category_record.notes)
-    elif arr:
-        issues.append(f"No category configured for {arr}; treating as STANDARD.")
+            issues.extend(arrival_category.reasons)
+        elif arrival_category.category == OSA_CATEGORY:
+            minutes = OSA_MIN_GROUND_MINUTES
+            alerts.append(("CAUTION", f"{arr} classified as {OSA_CATEGORY}"))
+            issues.append(f"{arr} requires at least {minutes} minutes on the ground.")
+            issues.extend(arrival_category.reasons)
 
     if _international(dep_country, arr_country):
         customs_rule = customs.get(arr) if arr else None
