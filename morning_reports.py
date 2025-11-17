@@ -1677,6 +1677,10 @@ def _build_upgrade_flights_report(
                 line_parts.append(transition_label)
 
             planning_note = planning_note or _extract_planning_note(row)
+            upgrade_reason_note = _planning_note_upgrade_reason(planning_note)
+            billing_instruction_note = _planning_note_billing_instruction(
+                planning_note
+            )
             matches.append(
                 {
                     "line": "-".join(line_parts),
@@ -1685,11 +1689,9 @@ def _build_upgrade_flights_report(
                     "booking_reference": booking_reference,
                     "quote_id": quote_id,
                     "workflow": workflow,
+                    "upgrade_reason_note": upgrade_reason_note,
+                    "billing_instruction_note": billing_instruction_note,
                     "planning_note": planning_note,
-                    "upgrade_reason_note": _planning_note_upgrade_reason(planning_note),
-                    "billing_instruction_note": _planning_note_billing_instruction(
-                        planning_note
-                    ),
                     "account_name": account_name,
                     "leg_id": formatted.get("leg_id"),
                 }
