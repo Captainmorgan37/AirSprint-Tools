@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Mapping, Optional
+from datetime import datetime, timezone
+from typing import Any, Callable, Dict, List, Mapping, Optional
 
-from deice_info_helper import has_deice_available
 from flight_leg_utils import load_airport_metadata_lookup
 
 from .common import (
@@ -19,18 +19,44 @@ from .common import (
 from .data_access import CustomsRule, load_customs_rules
 from .schemas import CategoryResult, CategoryStatus
 
-_ALERT_PRIORITY: Dict[CategoryStatus, int] = {"PASS": 0, "CAUTION": 1, "FAIL": 2}
+
+def _get_tz_from_lookup(
+    lookup: Mapping[str, Mapping[str, Optional[str]]]
+) -> Optional[Callable[[str], Optional[str]]]:  # pragma: no cover - lightweight helper
+    if not lookup:
+        return None
+
+    def provider(icao: str) -> Optional[str]:
+        record = lookup.get(icao.upper())
+        if not isinstance(record, Mapping):
+            return None
+        tz = record.get("tz")
+        if isinstance(tz, str) and tz.strip():
+            return tz.strip()
+        return None
+
+    return provider
 
 
-def _pick_summary(alerts: List[tuple[CategoryStatus, str]]) -> str:
-    if not alerts:
-        return "Airports verified"
-    alerts_sorted = sorted(alerts, key=lambda item: _ALERT_PRIORITY[item[0]], reverse=True)
-    return alerts_sorted[0][1]
+def _summarize_airport_feasibility(result: AirportFeasibilityResult) -> CategoryResult:
+    issues: List[str] = []
+    statuses: List[str] = []
+    for label, category_result in result.iter_all_categories():
+        statuses.append(category_result.status)
+        if category_result.status == "PASS":
+            continue
+        issues.append(f"{label}: {category_result.summary}")
+        for detail in category_result.issues:
+            issues.append(f"- {detail}")
 
-
-def _international(dep_country: Optional[str], arr_country: Optional[str]) -> bool:
-    return bool(dep_country and arr_country and dep_country != arr_country)
+    status = combine_statuses(statuses)
+    summary_map = {
+        "PASS": "Airports verified",
+        "CAUTION": "Airport cautions detected",
+        "FAIL": "Airport blockers detected",
+    }
+    summary = summary_map.get(status, "Airport checks complete")
+    return CategoryResult(status=status, summary=summary, issues=issues)
 
 
 def evaluate_airport(
