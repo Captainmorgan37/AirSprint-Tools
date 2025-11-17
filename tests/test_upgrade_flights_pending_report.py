@@ -87,13 +87,14 @@ def test_handles_nested_workflow_structures():
     assert len(result.rows) == 1
     entry = result.rows[0]
     assert entry["workflow"] == "Owner Upgrade Pending"
-    assert entry["booking_note"] == "Needs review of billable hours"
     assert entry["planning_note"] == "Confirm owner notes align with upgrade workflow"
+    assert entry["upgrade_reason_note"] is None
+    assert entry["billing_instruction_note"] is None
     assert entry["account_name"] == "Acme Corp"
     assert "-Acme Corp-" in entry["line"]
 
 
-def test_includes_booking_note_and_requested_type():
+def test_highlights_planning_note_details():
     dep = dt.datetime(2024, 8, 10, 12, 0)
     row = _leg(
         dep=dep,
@@ -104,11 +105,13 @@ def test_includes_booking_note_and_requested_type():
 
     payload_map = {
         "Q1": {
-            "bookingNote": "Upgrade approved for billable hours",
             "requestedAircraftType": "CJ3",
             "assignedAircraftType": "Legacy 450",
             "departureDateUTC": iso(dep),
-            "planningNotes": "OL confirmed upgrade is viable",
+            "planningNotes": (
+                "Comp upgraded due to busy CJ schedule. "
+                "Bill at 1.5 CJ2 hours please."
+            ),
         }
     }
 
@@ -127,10 +130,17 @@ def test_includes_booking_note_and_requested_type():
     assert len(result.rows) == 1
     entry = result.rows[0]
     assert entry["booking_reference"] == "BOOK-1"
-    assert entry["requested_aircraft_type"] == "CJ3"
-    assert entry["assigned_aircraft_type"] == "Legacy 450"
-    assert entry["booking_note"] == "Upgrade approved for billable hours"
-    assert entry["planning_note"] == "OL confirmed upgrade is viable"
+    assert entry["planning_note"] == (
+        "Comp upgraded due to busy CJ schedule. Bill at 1.5 CJ2 hours please."
+    )
+    assert (
+        entry["upgrade_reason_note"]
+        == "Comp upgraded due to busy CJ schedule."
+    )
+    assert (
+        entry["billing_instruction_note"]
+        == "Bill at 1.5 CJ2 hours please."
+    )
     assert entry["account_name"] == "Acme Corp"
     assert entry["line"].startswith("2024-08-10-C-GLXY-BOOK-1-Acme Corp-")
 
@@ -180,8 +190,9 @@ def test_missing_quote_id_includes_warning_and_row():
     entry = result.rows[0]
     assert entry["booking_reference"] == "BOOK-2"
     assert entry["quote_id"] is None
-    assert entry["booking_note"] is None
     assert entry["planning_note"] is None
+    assert entry["upgrade_reason_note"] is None
+    assert entry["billing_instruction_note"] is None
     assert entry["account_name"] == "Acme Corp"
     assert any("missing quote" in warning.lower() for warning in result.warnings)
 
