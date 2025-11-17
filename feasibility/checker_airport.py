@@ -7,6 +7,8 @@ from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from flight_leg_utils import load_airport_metadata_lookup
 
+from deice_info_helper import has_deice_available
+
 from .common import (
     OSA_CATEGORY,
     OSA_MIN_GROUND_MINUTES,
@@ -18,6 +20,25 @@ from .common import (
 )
 from .data_access import CustomsRule, load_customs_rules
 from .schemas import CategoryResult, CategoryStatus
+
+_ALERT_PRIORITY: Mapping[CategoryStatus, int] = {"PASS": 0, "CAUTION": 1, "FAIL": 2}
+
+
+def _international(
+    dep_country: Optional[str], arr_country: Optional[str]
+) -> bool:  # pragma: no cover - exercised via evaluate_airport
+    """Return ``True`` when the given countries form an international leg.
+
+    ``None``/blank values are treated as unknown, so the leg is assumed to be
+    domestic (``False``) until both ends have concrete values. Comparisons are
+    case-insensitive to avoid mismatches caused by inconsistent casing in the
+    source data.
+    """
+
+    if not dep_country or not arr_country:
+        return False
+
+    return dep_country.strip().upper() != arr_country.strip().upper()
 
 
 def _get_tz_from_lookup(
@@ -57,6 +78,13 @@ def _summarize_airport_feasibility(result: AirportFeasibilityResult) -> Category
     }
     summary = summary_map.get(status, "Airport checks complete")
     return CategoryResult(status=status, summary=summary, issues=issues)
+
+
+def _pick_summary(alerts: List[tuple[CategoryStatus, str]]) -> str:
+    if not alerts:
+        return "Airports verified"
+    worst_alert = max(alerts, key=lambda alert: _ALERT_PRIORITY.get(alert[0], 0))
+    return worst_alert[1]
 
 
 def evaluate_airport(
