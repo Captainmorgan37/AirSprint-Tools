@@ -219,6 +219,30 @@ International sectors requiring advance planning
 
 High-risk countries → Jeppesen mandatory
 
+=======================================
+Appendix — Flight Category Reference
+=======================================
+
+Use these simplified definitions when classifying flights during feasibility reviews. They supersede the earlier sample workbook.
+
+🟩 Regular Flights
+
+- Both the departure and arrival airports are located in Canada (excluding any Nunavut airport) **or** in the contiguous United States (excluding Alaska and Hawaii).
+- These flights stay entirely inside the core service area, so only standard airport handling and ground-time rules apply.
+
+🟨 SSA (Secondary Service Area) Flights
+
+- At least one airport is in Alaska, Nunavut, the Caribbean, or Mexico.
+- These sectors typically require the SSA buffers (e.g., extended ground time, advance handling coordination) that the feasibility engine enforces.
+
+🟥 OSA (Outside Service Area) Flights
+
+- Any flight that is not Regular or SSA falls into OSA.
+- This includes, but is not limited to, Hawaii, Central and South America outside of Mexico, Europe, Africa, the Middle East, and the Asia-Pacific region.
+- Expect the full OSA planning workflow (Jeppesen engagement, extended ground-time requirements, permits, etc.).
+
+Note: A multi-leg trip can mix categories. Evaluate each leg using the above logic so the downstream checkers apply the correct handling templates.
+
 🛫 5.5 Overflight Permits
 
 Inputs:
