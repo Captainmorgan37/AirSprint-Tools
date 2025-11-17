@@ -18,6 +18,13 @@ class CustomsRule:
     notes: Optional[str]
 
 
+@dataclass(frozen=True)
+class AirportCategoryRecord:
+    icao: str
+    category: Optional[str]
+    notes: Optional[str]
+
+
 @lru_cache(maxsize=1)
 def load_customs_rules(path: Optional[Path] = None) -> Dict[str, CustomsRule]:
     csv_path = Path(path) if path else _PROJECT_ROOT / "customs_rules.csv"
@@ -33,4 +40,22 @@ def load_customs_rules(path: Optional[Path] = None) -> Dict[str, CustomsRule]:
             service_type = (row.get("service_type") or "").strip() or None
             notes = (row.get("notes") or "").strip() or None
             lookup[icao] = CustomsRule(airport=icao, service_type=service_type, notes=notes)
+    return lookup
+
+
+@lru_cache(maxsize=1)
+def load_airport_categories(path: Optional[Path] = None) -> Dict[str, AirportCategoryRecord]:
+    csv_path = Path(path) if path else _PROJECT_ROOT / "data" / "airport_categories.csv"
+    if not csv_path.exists():
+        return {}
+    lookup: Dict[str, AirportCategoryRecord] = {}
+    with csv_path.open(newline="", encoding="utf-8-sig") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            icao = (row.get("airport_ident") or row.get("icao") or "").strip().upper()
+            if not icao:
+                continue
+            category = (row.get("category") or row.get("airport_category") or "").strip() or None
+            notes = (row.get("notes") or row.get("remarks") or "").strip() or None
+            lookup[icao] = AirportCategoryRecord(icao=icao, category=category, notes=notes)
     return lookup

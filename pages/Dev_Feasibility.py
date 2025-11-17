@@ -1,17 +1,23 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, Mapping, Optional, cast
 
 import streamlit as st
 
 from flight_leg_utils import FlightDataError, build_fl3xx_api_config
-from feasibility import FeasibilityResult, evaluate_flight, run_feasibility_for_booking
+from feasibility import (
+    FeasibilityResult,
+    evaluate_flight,
+    run_feasibility_for_booking,
+    run_feasibility_phase1,
+)
 from feasibility.lookup import BookingLookupError
 from feasibility.quote_lookup import (
     QuoteLookupError,
     fetch_quote_leg_options,
 )
 from Home import configure_page, password_gate, render_sidebar
+from feasibility.models import FullFeasibilityResult
 
 configure_page(page_title="Feasibility Engine (Dev)")
 password_gate()
@@ -104,6 +110,97 @@ def _run_quote_leg(flight: Mapping[str, Any]) -> Optional[FeasibilityResult]:
             return None
 
 
+def _run_full_quote_day(quote: Mapping[str, Any]) -> Optional[FullFeasibilityResult]:
+    with st.spinner("Running feasibility checks for entire quote day…"):
+        try:
+            return run_feasibility_phase1({"quote": quote})
+        except Exception as exc:  # pragma: no cover - UI safeguard
+            st.exception(exc)
+            return None
+
+
+def _format_minutes(total_minutes: Optional[int]) -> str:
+    if total_minutes is None:
+        return "n/a"
+    hours, minutes = divmod(int(total_minutes), 60)
+    return f"{hours:d}h {minutes:02d}m"
+
+
+def _render_leg_side(label: str, side: Mapping[str, Any]) -> None:
+    st.markdown(f"**{label} {side.get('icao', '???')}**")
+    category_labels = {
+        "suitability": "Suitability",
+        "deice": "Deice",
+        "customs": "Customs",
+        "slot_ppr": "Slot / PPR",
+        "osa_ssa": "OSA / SSA",
+        "overflight": "Overflight",
+        "operational_notes": "Operational Notes",
+    }
+    for key, display in category_labels.items():
+        category = side.get(key) if isinstance(side, Mapping) else None
+        if not isinstance(category, Mapping):
+            continue
+        status = category.get("status", "PASS")
+        summary = category.get("summary") or status
+        issues = category.get("issues") or []
+        details = summary
+        if issues:
+            details = f"{details} — {', '.join(str(item) for item in issues)}"
+        st.write(f"- {display}: {details} ({status})")
+
+
+def _render_full_quote_result(result: FullFeasibilityResult) -> None:
+    legs = result.get("legs", [])
+    duty = result.get("duty", {})
+    overall_status = result.get("overall_status", "PASS")
+    emoji = STATUS_EMOJI.get(overall_status, "")
+
+    st.markdown("---")
+    st.subheader(f"{emoji} Full Quote Day Status: {overall_status}")
+    st.caption(
+        f"{result.get('bookingIdentifier', 'Unknown Quote')} • {len(legs)} leg(s) • {result.get('aircraft_type', 'Unknown Aircraft')}"
+    )
+
+    summary = result.get("summary")
+    if summary:
+        formatted = summary.strip().replace("\n", "  \n")
+        st.markdown(formatted)
+
+    if result.get("issues"):
+        st.markdown("**Key Issues**")
+        st.markdown("\n".join(f"- {issue}" for issue in result.get("issues", [])))
+
+    with st.expander("Duty Day Evaluation", expanded=duty.get("status") != "PASS"):
+        status = duty.get("status", "PASS")
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Duty Status", status)
+        col2.metric("Total Duty", _format_minutes(duty.get("total_duty")))
+        col3.metric("Turn Segments", len(duty.get("turn_times", [])))
+        st.write(f"- Start: {duty.get('duty_start_local') or 'Unknown'}")
+        st.write(f"- End: {duty.get('duty_end_local') or 'Unknown'}")
+        if duty.get("split_duty_possible"):
+            st.write("- Split duty window available (≥ 6h ground).")
+        if duty.get("reset_duty_possible"):
+            st.write("- Reset possible (≥ 11h15 ground).")
+        if duty.get("issues"):
+            st.write("- Issues:")
+            for entry in duty.get("issues", []):
+                st.write(f"  • {entry}")
+
+    for index, leg in enumerate(legs, start=1):
+        departure = leg.get("departure", {}) if isinstance(leg, Mapping) else {}
+        arrival = leg.get("arrival", {}) if isinstance(leg, Mapping) else {}
+        dep_code = departure.get("icao", "???")
+        arr_code = arrival.get("icao", "???")
+        header = f"Leg {index}: {dep_code} → {arr_code}"
+        with st.expander(header, expanded=False):
+            _render_leg_side("Departure", departure)
+            _render_leg_side("Arrival", arrival)
+
+    with st.expander("Raw full quote result"):
+        st.json(result)
+
 quote_tab, booking_tab = st.tabs(["Quote ID", "Booking Identifier"])
 
 with quote_tab:
@@ -149,9 +246,28 @@ with quote_tab:
     else:
         st.info("Load a quote to view available legs for feasibility analysis.")
 
-    if quote_payload:
-        with st.expander("Loaded quote payload"):
+    quote_loaded = isinstance(quote_payload, Mapping)
+    with st.expander("Loaded quote payload"):
+        if quote_loaded:
             st.json(quote_payload)
+        else:
+            st.caption("Load a quote to view the payload and enable multi-leg checks.")
+
+    st.markdown("#### Evaluate Full Quote Day")
+    if not quote_loaded:
+        st.info("Load a quote to enable multi-leg feasibility checks.")
+
+    run_full_quote = st.button(
+        "Run Feasibility for Full Quote Day",
+        key="run-full-quote",
+        type="primary",
+        disabled=not quote_loaded,
+    )
+
+    if run_full_quote and quote_loaded:
+        full_day_result = _run_full_quote_day(quote_payload)
+        if full_day_result:
+            st.session_state["feasibility_last_full_quote_result"] = full_day_result
 
 with booking_tab:
     st.subheader("Search via Booking Identifier")
@@ -165,6 +281,7 @@ with booking_tab:
             st.session_state["feasibility_last_result"] = result
 
 stored_result = st.session_state.get("feasibility_last_result")
+full_quote_result = st.session_state.get("feasibility_last_full_quote_result")
 
 STATUS_EMOJI = {"PASS": "✅", "CAUTION": "⚠️", "FAIL": "❌"}
 
@@ -199,3 +316,6 @@ if stored_result and isinstance(stored_result, FeasibilityResult):
             st.json(stored_result.flight)
 else:
     st.info("Select a quote leg or submit a booking identifier to generate a feasibility report.")
+
+if isinstance(full_quote_result, Mapping):
+    _render_full_quote_result(cast(FullFeasibilityResult, full_quote_result))
