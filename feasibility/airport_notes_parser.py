@@ -69,7 +69,6 @@ class ParsedCustoms(TypedDict):
 _STATUS_PRIORITY: Mapping[CategoryStatus, int] = {"PASS": 0, "CAUTION": 1, "FAIL": 2}
 
 SLOT_KEYWORDS = ("slot", "slots", "reservation", "reservations", "ecvrs", "ocs")
-PPR_KEYWORDS = ("ppr", "prior permission", "private airport")
 WINTER_KEYWORDS = (
     "winter",
     "snow",
@@ -84,7 +83,27 @@ FUEL_KEYWORDS = ("fuel not available", "fuel unavailable", "no fuel")
 DEICE_KEYWORDS = ("deice", "antice", "de-ice")
 NIGHT_KEYWORDS = ("night ops", "no night ops", "night operations", "night landings", "curfew", "sunset")
 RUNWAY_KEYWORDS = ("rwy", "runway", "landings", "departures")
-CUSTOMS_NOTE_KEYWORDS = ("customs", "clear", "clearing", "canpass", "aoe", "cbsa")
+CUSTOMS_NOTE_KEYWORDS = (
+    "customs",
+    "canpass",
+    "aoe",
+    "cbsa",
+    "cbp",
+    "eapis",
+    "e-apis",
+    "ap is",
+    "landing rights",
+    "clear customs",
+    "clearing customs",
+    "customs information",
+    "customs procedure",
+)
+PPR_TRUE_PATTERNS = [
+    r"\bppr\b",
+    r"prior permission required",
+    r"prior approval required",
+    r"private airport\b",
+]
 
 SLOT_DAYS_OUT_RE = re.compile(r"(\d+)\s*days?\s*out")
 SLOT_HOURS_RE = re.compile(r"(\d+)\s*(?:h|hrs|hours)\s*(?:before|prior)")
@@ -100,7 +119,7 @@ HOURS_RE = re.compile(r"(\d{3,4})[-–](\d{3,4})")
 PRIOR_HOURS_RE = re.compile(r"(\d+)\s*(?:hours|hrs)\s*(?:notice|prior)")
 PRIOR_DAYS_RE = re.compile(r"(\d+)\s*(?:days?)\s*(?:notice|prior)")
 LOCATION_RE = re.compile(
-    r"(clear at|report to|meet officer at|customs located at)\s*([A-Za-z0-9\-\s]+)",
+    r"(?:location:|clear at|report to|proceed to|meet officer at|customs located at)\s*([A-Za-z0-9\-\s]+)",
     re.IGNORECASE,
 )
 
@@ -110,16 +129,16 @@ def _combine_status(existing: CategoryStatus, candidate: CategoryStatus) -> Cate
 
 
 def _note_text(note: Mapping[str, object]) -> str:
-    # FL3XX stores the full body under the "note" key, so prefer that when available.
-    if "note" in note:
-        value = note["note"]
-        if isinstance(value, str) and value.strip():
-            return value.strip()
+    """Extract the human-readable text body from an FL3XX airport note."""
+
+    value = note.get("note")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
 
     for key in ("title", "body", "category", "type"):
-        value = note.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
+        v = note.get(key)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
 
     return ""
 
@@ -180,12 +199,17 @@ def _contains_keyword(text: str, keywords: Sequence[str]) -> bool:
     return any(keyword in lower for keyword in keywords)
 
 
+def is_ppr_note(text: str) -> bool:
+    lower = text.lower()
+    return any(re.search(pattern, lower) for pattern in PPR_TRUE_PATTERNS)
+
+
 def _classify_operational_note(note: str) -> set[str]:
     categories: set[str] = set()
     lower = note.lower()
     if _contains_keyword(lower, SLOT_KEYWORDS):
         categories.add("slot")
-    if _contains_keyword(lower, PPR_KEYWORDS):
+    if is_ppr_note(lower):
         categories.add("ppr")
     if _contains_keyword(lower, WINTER_KEYWORDS):
         categories.add("winter")
@@ -210,7 +234,8 @@ def split_customs_operational_notes(
         if not text:
             continue
         lower = text.lower()
-        if any(keyword in lower for keyword in CUSTOMS_NOTE_KEYWORDS):
+        is_customs = any(keyword in lower for keyword in CUSTOMS_NOTE_KEYWORDS)
+        if is_customs:
             customs.append(text)
         else:
             operational.append(text)
@@ -276,7 +301,7 @@ def _extract_ppr_details(note: str, out: ParsedRestrictions) -> None:
 
 def _extract_deice_details(note: str, out: ParsedRestrictions) -> None:
     lower = note.lower()
-    if "not available" in lower:
+    if "not available" in lower or "no deice" in lower or "no de-ice" in lower:
         out["deice_unavailable"] = True
     if "limited" in lower:
         out["deice_limited"] = True
@@ -324,6 +349,25 @@ def _extract_generic(note: str, out: ParsedRestrictions) -> None:
         out["generic_restrictions"].append(note)
 
 
+DAY_KEYWORDS = (
+    ("mon", "Mon"),
+    ("tue", "Tue"),
+    ("wed", "Wed"),
+    ("thu", "Thu"),
+    ("fri", "Fri"),
+    ("sat", "Sat"),
+    ("sun", "Sun"),
+)
+
+
+def _detect_days(lower: str) -> list[str]:
+    days: list[str] = []
+    for token, label in DAY_KEYWORDS:
+        if token in lower:
+            days.append(label)
+    return days
+
+
 def parse_customs_notes(notes: Sequence[str]) -> ParsedCustoms:
     parsed = _empty_parsed_customs()
     for raw in notes:
@@ -332,26 +376,29 @@ def parse_customs_notes(notes: Sequence[str]) -> ParsedCustoms:
             continue
         lower = text.lower()
         parsed["raw_notes"].append(text)
-        if "customs" in lower:
+        if "customs" in lower or "clearing customs" in lower:
             parsed["customs_available"] = True
         if "canpass" in lower:
             parsed["canpass_only"] = True
             parsed["canpass_notes"].append(text)
-        if match := HOURS_RE.search(lower):
+        if match := re.search(HOURS_RE, lower):
             start, end = match.groups()
-            parsed["customs_hours"].append({"start": start, "end": end, "days": ["unknown"]})
-        if "after" in lower and "hour" in lower:
+            days = _detect_days(lower)
+            if not days:
+                days = ["unknown"]
+            parsed["customs_hours"].append({"start": start, "end": end, "days": days})
+        if "after hours" in lower or "afterhours" in lower:
             parsed["customs_afterhours_available"] = True
             parsed["customs_afterhours_requirements"].append(text)
-        if match := PRIOR_HOURS_RE.search(lower):
+        if match := re.search(PRIOR_HOURS_RE, lower):
             parsed["customs_prior_notice_hours"] = int(match.group(1))
-        if match := PRIOR_DAYS_RE.search(lower):
+        if match := re.search(PRIOR_DAYS_RE, lower):
             parsed["customs_prior_notice_days"] = int(match.group(1))
-        if any(keyword in lower for keyword in ("call", "phone", "contact", "notify")):
+        if any(k in lower for k in ("call", "phone", "contact", "notify")):
             parsed["customs_contact_required"] = True
             parsed["customs_contact_notes"].append(text)
-        if match := LOCATION_RE.search(lower):
-            parsed["location_to_clear"] = match.group(2).strip()
+        if match := re.search(LOCATION_RE, lower):
+            parsed["location_to_clear"] = match.group(1).strip()
             parsed["location_notes"].append(text)
         if "pax" in lower or "passenger" in lower:
             parsed["pax_requirements"].append(text)
@@ -367,7 +414,12 @@ def summarize_operational_notes(
     parsed_restrictions: ParsedRestrictions | None = None,
     parsed_customs: ParsedCustoms | None = None,
 ) -> CategoryResult:
-    if not notes:
+    has_raw_notes = bool(notes)
+    if parsed_restrictions and parsed_restrictions["raw_notes"]:
+        has_raw_notes = True
+    if parsed_customs and parsed_customs["raw_notes"]:
+        has_raw_notes = True
+    if not has_raw_notes:
         return CategoryResult(status="PASS", summary="No operational notes", issues=[])
 
     customs_texts: list[str]
