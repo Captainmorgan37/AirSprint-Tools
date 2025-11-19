@@ -941,6 +941,13 @@ def evaluate_slot_ppr(
     side: str,
     date_local: Optional[str],
 ) -> CategoryResult:
+    slot_booking_windows_days = {
+        "CYYZ": 10,
+        "CYUL": 10,
+        "CYYC": 10,
+        "CYVR": 3,
+    }
+
     issues: List[str] = []
     status: CategoryStatus = "PASS"
     summary = "No slot/PPR requirement"
@@ -951,9 +958,18 @@ def evaluate_slot_ppr(
     if target_dt:
         hours_until_event = (target_dt - now).total_seconds() / 3600
 
+    def _within_booking_window() -> bool:
+        icao = slot_ppr_profile.icao.upper()
+        booking_window_days = slot_booking_windows_days.get(icao)
+        if booking_window_days is None:
+            return True
+        if hours_until_event is None:
+            return False
+        return hours_until_event <= booking_window_days * 24
+
     def _check_requirement(required: bool, label: str, lead_days: Optional[int]) -> None:
         nonlocal status, summary
-        if not required:
+        if not required or not _within_booking_window():
             return
         required_summary = f"{label} required"
         summary = required_summary
