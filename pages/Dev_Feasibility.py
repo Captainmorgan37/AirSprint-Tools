@@ -418,6 +418,22 @@ def _render_category_block(label: str, category: Mapping[str, Any]) -> None:
                 st.markdown(f"- {issue}")
 
 
+def _render_aircraft_category(category: Mapping[str, Any] | None) -> None:
+    if not isinstance(category, Mapping):
+        return
+    status = str(category.get("status", "PASS"))
+    summary = category.get("summary") or status
+    header = f"{status_icon(status)} Aircraft – {summary}"
+    issues = [str(issue) for issue in category.get("issues", []) if issue]
+    with st.expander(header, expanded=status != "PASS"):
+        st.write(f"Status: **{status}**")
+        if issues:
+            for issue in issues:
+                st.markdown(f"- {issue}")
+        else:
+            st.write("No issues recorded.")
+
+
 def _render_leg_side(label: str, side: Mapping[str, Any]) -> None:
     icao = side.get("icao", "???") if isinstance(side, Mapping) else "???"
     st.markdown(f"**{label} {icao}**")
@@ -453,6 +469,12 @@ def _collect_key_issues(result: Mapping[str, Any]) -> List[str]:
         for index, leg in enumerate(legs, start=1):
             if not isinstance(leg, Mapping):
                 continue
+            aircraft = leg.get("aircraft")
+            if isinstance(aircraft, Mapping):
+                status = aircraft.get("status", "PASS")
+                if status in {"CAUTION", "FAIL"}:
+                    summary = aircraft.get("summary") or status
+                    issues.append(f"Leg {index} Aircraft: {summary}")
             for side_name in ("departure", "arrival"):
                 side = leg.get(side_name)
                 if not isinstance(side, Mapping):
@@ -518,10 +540,12 @@ def _render_full_quote_result(result: FullFeasibilityResult) -> None:
     for index, leg in enumerate(legs, start=1):
         departure = leg.get("departure", {}) if isinstance(leg, Mapping) else {}
         arrival = leg.get("arrival", {}) if isinstance(leg, Mapping) else {}
+        aircraft = leg.get("aircraft") if isinstance(leg, Mapping) else None
         dep_code = departure.get("icao", "???")
         arr_code = arrival.get("icao", "???")
         header = f"Leg {index}: {dep_code} → {arr_code}"
         with st.expander(header, expanded=False):
+            _render_aircraft_category(aircraft)
             _render_leg_side("Departure", departure)
             _render_leg_side("Arrival", arrival)
 
