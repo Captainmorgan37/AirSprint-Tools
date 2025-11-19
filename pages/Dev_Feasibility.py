@@ -229,17 +229,29 @@ def _explode_note_text(text: str) -> list[str]:
     return lines
 
 
+def _normalize_entry(entry: str) -> str:
+    return " ".join(entry.split()).casefold()
+
+
 def _collect_entries(values: Any, *, explode: bool = False) -> list[str]:
     entries: list[str] = []
+    seen: set[str] = set()
     if isinstance(values, Sequence) and not isinstance(values, (str, bytes)):
         for value in values:
             if not isinstance(value, str):
                 continue
             if explode:
-                entries.extend(_explode_note_text(value))
+                exploded = _explode_note_text(value)
+                for entry in exploded:
+                    key = _normalize_entry(entry)
+                    if key and key not in seen:
+                        seen.add(key)
+                        entries.append(entry)
             else:
                 cleaned = value.strip()
-                if cleaned:
+                key = _normalize_entry(cleaned)
+                if cleaned and key not in seen:
+                    seen.add(key)
                     entries.append(cleaned)
     return entries
 
@@ -251,9 +263,10 @@ def _render_bullet_section(title: str, lines: Sequence[str]) -> None:
         if not isinstance(line, str):
             continue
         cleaned = line.strip()
-        if not cleaned or cleaned in seen:
+        key = _normalize_entry(cleaned)
+        if not cleaned or key in seen:
             continue
-        seen.add(cleaned)
+        seen.add(key)
         entries.append(cleaned)
     if not entries:
         return
