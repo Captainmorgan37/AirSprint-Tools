@@ -245,7 +245,16 @@ def _collect_entries(values: Any, *, explode: bool = False) -> list[str]:
 
 
 def _render_bullet_section(title: str, lines: Sequence[str]) -> None:
-    entries = [line.strip() for line in lines if isinstance(line, str) and line.strip()]
+    entries: list[str] = []
+    seen: set[str] = set()
+    for line in lines:
+        if not isinstance(line, str):
+            continue
+        cleaned = line.strip()
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        entries.append(cleaned)
     if not entries:
         return
     st.markdown(f"**{title}**")
