@@ -202,6 +202,7 @@ def run_feasibility_phase1(request: FeasibilityRequest) -> FullFeasibilityResult
     day = _build_day_context(quote, legs)
 
     tz_provider = request.get("tz_provider") or _build_default_tz_provider()
+    operational_notes_fetcher = request.get("operational_notes_fetcher")
 
     leg_results: List[AirportFeasibilityResult] = []
     for leg in day["legs"]:
@@ -210,6 +211,7 @@ def run_feasibility_phase1(request: FeasibilityRequest) -> FullFeasibilityResult
                 leg,
                 tz_provider=tz_provider,
                 airport_metadata=airport_metadata,
+                operational_notes_fetcher=operational_notes_fetcher,
             )
         )
 

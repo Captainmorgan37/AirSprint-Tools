@@ -16,6 +16,7 @@ class FeasibilityRequest(TypedDict, total=False):
     quote: Mapping[str, Any]
     now_utc: datetime
     tz_provider: Callable[[str], Optional[str]]
+    operational_notes_fetcher: Callable[[str, Optional[str]], Sequence[Mapping[str, Any]]]
 
 
 class DayContext(TypedDict):

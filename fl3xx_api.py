@@ -227,6 +227,16 @@ def _build_airport_services_endpoint(base_url: str, airport_code: Any) -> str:
     return f"{base}/airports/{airport_ident}/services"
 
 
+def _build_operational_notes_endpoint(base_url: str, airport_code: Any) -> str:
+    base = base_url.rstrip("/")
+    if base.lower().endswith("/flights"):
+        base = base[: -len("/flights")]
+    if base.lower().endswith("/flight"):
+        base = base[: -len("/flight")]
+    airport_ident = str(airport_code).strip().upper()
+    return f"{base}/airports/{airport_ident}/operationalNotes"
+
+
 def _normalise_crew_payload(payload: Any) -> List[Dict[str, Any]]:
     """Return a list of crew member dictionaries from various payload layouts."""
 
@@ -1035,6 +1045,55 @@ def fetch_airport_services(
                 pass
 
 
+def fetch_operational_notes(
+    config: Fl3xxApiConfig,
+    airport_code: Any,
+    *,
+    from_date: Optional[date] = None,
+    to_date: Optional[date] = None,
+    session: Optional[requests.Session] = None,
+    now: Optional[datetime] = None,
+) -> List[Dict[str, Any]]:
+    """Return airport operational notes within the requested date range."""
+
+    reference_time = now or datetime.now(timezone.utc)
+    start = from_date or reference_time.date()
+    end = to_date or (start + timedelta(days=1))
+    if end <= start:
+        end = start + timedelta(days=1)
+
+    params = {"from": start.isoformat(), "to": end.isoformat()}
+
+    http = session or requests.Session()
+    close_session = session is None
+    try:
+        response = http.get(
+            _build_operational_notes_endpoint(config.base_url, airport_code),
+            params=params,
+            headers=config.build_headers(),
+            timeout=config.timeout,
+            verify=config.verify_ssl,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        notes: List[Dict[str, Any]] = []
+        if isinstance(payload, list):
+            notes = [dict(entry) for entry in payload if isinstance(entry, Mapping)]
+        elif isinstance(payload, Mapping):
+            notes = [dict(payload)] if payload else []
+        elif payload is None:
+            notes = []
+        else:
+            raise ValueError("Unsupported FL3XX operational notes payload structure")
+        return notes
+    finally:
+        if close_session:
+            try:
+                http.close()
+            except AttributeError:
+                pass
+
+
 def fetch_flight_planning_note(
     config: Fl3xxApiConfig,
     flight_id: Any,
@@ -1268,6 +1327,7 @@ __all__ = [
     "fetch_postflight",
     "fetch_preflight",
     "fetch_flight_services",
+    "fetch_operational_notes",
     "fetch_flight_planning_note",
     "fetch_flight_migration",
     "fetch_flight_notification",

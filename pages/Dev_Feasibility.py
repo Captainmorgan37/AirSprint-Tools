@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Mapping, Optional, Sequence, cast
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, cast
 
 import streamlit as st
 
@@ -10,6 +10,7 @@ from feasibility import (
     run_feasibility_for_booking,
     run_feasibility_phase1,
 )
+from feasibility.operational_notes import build_operational_notes_fetcher
 from feasibility.lookup import BookingLookupError
 from feasibility.quote_lookup import (
     QuoteLookupError,
@@ -73,6 +74,25 @@ def _load_fl3xx_settings() -> Dict[str, Any]:
     return {}
 
 
+def _build_operational_notes_fetcher() -> Optional[
+    Callable[[str, Optional[str]], Sequence[Mapping[str, Any]]]
+]:
+    config = st.session_state.get("feasibility_fl3xx_config")
+    if config is None:
+        settings = _load_fl3xx_settings()
+        if not settings:
+            return None
+        try:
+            config = build_fl3xx_api_config(dict(settings))
+        except FlightDataError:
+            return None
+        st.session_state["feasibility_fl3xx_config"] = config
+    try:
+        return build_operational_notes_fetcher(config)
+    except Exception:
+        return None
+
+
 def _run_feasibility(booking_identifier: str) -> Optional[FeasibilityResult]:
     if not booking_identifier:
         st.warning("Enter a booking identifier to continue.")
@@ -84,6 +104,7 @@ def _run_feasibility(booking_identifier: str) -> Optional[FeasibilityResult]:
     except FlightDataError as exc:
         st.error(str(exc))
         return None
+    st.session_state["feasibility_fl3xx_config"] = config
 
     cache = st.session_state.setdefault("feasibility_lookup_cache", {})
     with st.spinner("Fetching flight and running feasibility checks…"):
@@ -109,6 +130,7 @@ def _load_quote_options(quote_id: str) -> list[Dict[str, Any]]:
     except FlightDataError as exc:
         st.error(str(exc))
         return []
+    st.session_state["feasibility_fl3xx_config"] = config
 
     with st.spinner("Fetching quote and legs from FL3XX…"):
         try:
@@ -126,9 +148,13 @@ def _load_quote_options(quote_id: str) -> list[Dict[str, Any]]:
 
 
 def _run_full_quote_day(quote: Mapping[str, Any]) -> Optional[FullFeasibilityResult]:
+    request_payload: Dict[str, Any] = {"quote": quote}
+    fetcher = _build_operational_notes_fetcher()
+    if fetcher:
+        request_payload["operational_notes_fetcher"] = fetcher
     with st.spinner("Running feasibility checks for entire quote day…"):
         try:
-            return run_feasibility_phase1({"quote": quote})
+            return run_feasibility_phase1(request_payload)
         except Exception as exc:  # pragma: no cover - UI safeguard
             st.exception(exc)
             return None
