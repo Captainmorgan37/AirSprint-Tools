@@ -1,24 +1,107 @@
-"""Helpers for classifying airport operational notes."""
+"""Helpers for classifying and parsing airport operational notes."""
 
 from __future__ import annotations
 
-from typing import Mapping, Sequence
+import re
+from typing import Mapping, MutableSequence, Sequence, Tuple, TypedDict
 
 from .schemas import CategoryResult, CategoryStatus
 
+
+class ParsedRestrictions(TypedDict):
+    winter_sensitivity: bool
+    winter_notes: list[str]
+
+    deice_limited: bool
+    deice_unavailable: bool
+    deice_notes: list[str]
+
+    fuel_available: bool | None
+    fuel_notes: list[str]
+
+    ppr_required: bool
+    ppr_lead_days: int | None
+    ppr_lead_hours: int | None
+    ppr_notes: list[str]
+
+    slot_required: bool
+    slot_lead_days: int | None
+    slot_lead_hours: int | None
+    slot_validity_minutes: int | None
+    slot_time_windows: list[dict[str, object]]
+    slot_notes: list[str]
+
+    hours_of_operation: list[dict[str, object]]
+    night_ops_allowed: bool | None
+    curfew: dict[str, str] | None
+    hour_notes: list[str]
+
+    runway_limitations: list[str]
+    aircraft_type_limits: list[str]
+
+    generic_restrictions: list[str]
+    raw_notes: list[str]
+
+
+class ParsedCustoms(TypedDict):
+    customs_available: bool
+    customs_hours: list[dict[str, object]]
+    customs_afterhours_available: bool
+    customs_afterhours_requirements: list[str]
+    customs_prior_notice_hours: int | None
+    customs_prior_notice_days: int | None
+    customs_contact_required: bool
+    customs_contact_notes: list[str]
+
+    canpass_only: bool
+    canpass_notes: list[str]
+
+    location_to_clear: str | None
+    location_notes: list[str]
+
+    pax_requirements: list[str]
+    crew_requirements: list[str]
+
+    general_customs_notes: list[str]
+    raw_notes: list[str]
+
+
 _STATUS_PRIORITY: Mapping[CategoryStatus, int] = {"PASS": 0, "CAUTION": 1, "FAIL": 2}
 
-_HAZARD_KEYWORDS: Sequence[tuple[str, CategoryStatus]] = (
-    ("closure", "FAIL"),
-    ("closed", "FAIL"),
-    ("no ga", "FAIL"),
-    ("curfew", "CAUTION"),
-    ("construction", "CAUTION"),
-    ("runway work", "CAUTION"),
-    ("deice", "CAUTION"),
-    ("cdf", "CAUTION"),
-    ("slot", "CAUTION"),
-    ("ppr", "CAUTION"),
+SLOT_KEYWORDS = ("slot", "slots", "reservation", "reservations", "ecvrs", "ocs")
+PPR_KEYWORDS = ("ppr", "prior permission", "private airport")
+WINTER_KEYWORDS = (
+    "winter",
+    "snow",
+    "ice",
+    "contaminated",
+    "rwy contamination",
+    "limited winter maintenance",
+    "deice",
+    "antice",
+)
+FUEL_KEYWORDS = ("fuel not available", "fuel unavailable", "no fuel")
+DEICE_KEYWORDS = ("deice", "antice", "de-ice")
+NIGHT_KEYWORDS = ("night ops", "no night ops", "night operations", "night landings", "curfew", "sunset")
+RUNWAY_KEYWORDS = ("rwy", "runway", "landings", "departures")
+CUSTOMS_NOTE_KEYWORDS = ("customs", "canpass", "aoe", "cbsa")
+
+SLOT_DAYS_OUT_RE = re.compile(r"(\d+)\s*days?\s*out")
+SLOT_HOURS_RE = re.compile(r"(\d+)\s*(?:h|hrs|hours)\s*(?:before|prior)")
+SLOT_VALIDITY_RE = re.compile(r"\+/-\s*(\d+)\s*min")
+WITHIN_HOUR_RE = re.compile(r"within the hour")
+PPR_DAYS_OUT_RE = re.compile(r"(\d+)\s*days?\s*(?:notice|prior)")
+PPR_HOURS_OUT_RE = re.compile(r"(\d+)\s*(?:h|hrs|hours)\s*(?:notice|prior)")
+CLOSED_BETWEEN_RE = re.compile(r"closed between\s*(\d{3,4})[-–](\d{3,4})")
+RUNWAY_NUM_RE = re.compile(r"rwy\s*(\d{2}[lrc]?)", re.IGNORECASE)
+ACFT_LIMIT_RE = re.compile(r"(embraer|cj2|cj3|legacy|challenger|global)", re.IGNORECASE)
+
+HOURS_RE = re.compile(r"(\d{3,4})[-–](\d{3,4})")
+PRIOR_HOURS_RE = re.compile(r"(\d+)\s*(?:hours|hrs)\s*(?:notice|prior)")
+PRIOR_DAYS_RE = re.compile(r"(\d+)\s*(?:days?)\s*(?:notice|prior)")
+LOCATION_RE = re.compile(
+    r"(clear at|report to|meet officer at|customs located at)\s*([A-Za-z0-9\-\s]+)",
+    re.IGNORECASE,
 )
 
 
@@ -27,7 +110,7 @@ def _combine_status(existing: CategoryStatus, candidate: CategoryStatus) -> Cate
 
 
 def _note_text(note: Mapping[str, object]) -> str:
-    parts = []
+    parts: MutableSequence[str] = []
     for key in ("title", "body"):
         value = note.get(key)
         if isinstance(value, str) and value.strip():
@@ -36,26 +119,332 @@ def _note_text(note: Mapping[str, object]) -> str:
         category = note.get("category") or note.get("type")
         if isinstance(category, str) and category.strip():
             parts.append(category.strip())
-    return "; ".join(parts) if parts else "Operational note"
+    return "; ".join(parts)
 
 
-def summarize_operational_notes(icao: str, notes: Sequence[Mapping[str, object]]) -> CategoryResult:
-    """Return a CategoryResult summarising operational notes for an airport."""
+def _empty_parsed_restrictions() -> ParsedRestrictions:
+    return {
+        "winter_sensitivity": False,
+        "winter_notes": [],
+        "deice_limited": False,
+        "deice_unavailable": False,
+        "deice_notes": [],
+        "fuel_available": None,
+        "fuel_notes": [],
+        "ppr_required": False,
+        "ppr_lead_days": None,
+        "ppr_lead_hours": None,
+        "ppr_notes": [],
+        "slot_required": False,
+        "slot_lead_days": None,
+        "slot_lead_hours": None,
+        "slot_validity_minutes": None,
+        "slot_time_windows": [],
+        "slot_notes": [],
+        "hours_of_operation": [],
+        "night_ops_allowed": None,
+        "curfew": None,
+        "hour_notes": [],
+        "runway_limitations": [],
+        "aircraft_type_limits": [],
+        "generic_restrictions": [],
+        "raw_notes": [],
+    }
 
+
+def _empty_parsed_customs() -> ParsedCustoms:
+    return {
+        "customs_available": False,
+        "customs_hours": [],
+        "customs_afterhours_available": False,
+        "customs_afterhours_requirements": [],
+        "customs_prior_notice_hours": None,
+        "customs_prior_notice_days": None,
+        "customs_contact_required": False,
+        "customs_contact_notes": [],
+        "canpass_only": False,
+        "canpass_notes": [],
+        "location_to_clear": None,
+        "location_notes": [],
+        "pax_requirements": [],
+        "crew_requirements": [],
+        "general_customs_notes": [],
+        "raw_notes": [],
+    }
+
+
+def _contains_keyword(text: str, keywords: Sequence[str]) -> bool:
+    lower = text.lower()
+    return any(keyword in lower for keyword in keywords)
+
+
+def _classify_operational_note(note: str) -> set[str]:
+    categories: set[str] = set()
+    lower = note.lower()
+    if _contains_keyword(lower, SLOT_KEYWORDS):
+        categories.add("slot")
+    if _contains_keyword(lower, PPR_KEYWORDS):
+        categories.add("ppr")
+    if _contains_keyword(lower, WINTER_KEYWORDS):
+        categories.add("winter")
+    if _contains_keyword(lower, DEICE_KEYWORDS):
+        categories.add("deice")
+    if _contains_keyword(lower, FUEL_KEYWORDS):
+        categories.add("fuel")
+    if _contains_keyword(lower, NIGHT_KEYWORDS):
+        categories.add("night")
+    if _contains_keyword(lower, RUNWAY_KEYWORDS):
+        categories.add("runway")
+    return categories
+
+
+def split_customs_operational_notes(
+    notes: Sequence[Mapping[str, object]]
+) -> Tuple[list[str], list[str]]:
+    customs: list[str] = []
+    operational: list[str] = []
+    for note in notes:
+        text = _note_text(note)
+        if not text:
+            continue
+        lower = text.lower()
+        if any(keyword in lower for keyword in CUSTOMS_NOTE_KEYWORDS):
+            customs.append(text)
+        else:
+            operational.append(text)
+    return customs, operational
+
+
+def parse_operational_restrictions(notes: Sequence[str]) -> ParsedRestrictions:
+    parsed = _empty_parsed_restrictions()
+    for raw in notes:
+        text = raw.strip()
+        if not text:
+            continue
+        parsed["raw_notes"].append(text)
+        categories = _classify_operational_note(text)
+        if "slot" in categories:
+            _extract_slot_details(text, parsed)
+        if "ppr" in categories:
+            _extract_ppr_details(text, parsed)
+        if "winter" in categories:
+            parsed["winter_sensitivity"] = True
+            parsed["winter_notes"].append(text)
+        if "deice" in categories:
+            _extract_deice_details(text, parsed)
+        if "fuel" in categories:
+            _extract_fuel_details(text, parsed)
+        if "night" in categories:
+            _extract_night_details(text, parsed)
+        if "runway" in categories:
+            _extract_runway_details(text, parsed)
+            _extract_aircraft_limits(text, parsed)
+        if not categories:
+            _extract_generic(text, parsed)
+    return parsed
+
+
+def _extract_slot_details(note: str, out: ParsedRestrictions) -> None:
+    lower = note.lower()
+    out["slot_required"] = True
+    if match := SLOT_DAYS_OUT_RE.search(lower):
+        value = int(match.group(1))
+        current = out["slot_lead_days"] or 0
+        out["slot_lead_days"] = max(current, value) or value
+    if match := SLOT_HOURS_RE.search(lower):
+        value = int(match.group(1))
+        current = out["slot_lead_hours"] or 0
+        out["slot_lead_hours"] = max(current, value) or value
+    if match := SLOT_VALIDITY_RE.search(lower):
+        out["slot_validity_minutes"] = int(match.group(1))
+    if WITHIN_HOUR_RE.search(lower):
+        out["slot_validity_minutes"] = 60
+    out["slot_notes"].append(note)
+
+
+def _extract_ppr_details(note: str, out: ParsedRestrictions) -> None:
+    lower = note.lower()
+    out["ppr_required"] = True
+    if match := PPR_DAYS_OUT_RE.search(lower):
+        out["ppr_lead_days"] = int(match.group(1))
+    if match := PPR_HOURS_OUT_RE.search(lower):
+        out["ppr_lead_hours"] = int(match.group(1))
+    out["ppr_notes"].append(note)
+
+
+def _extract_deice_details(note: str, out: ParsedRestrictions) -> None:
+    lower = note.lower()
+    if "not available" in lower:
+        out["deice_unavailable"] = True
+    if "limited" in lower:
+        out["deice_limited"] = True
+    out["deice_notes"].append(note)
+
+
+def _extract_fuel_details(note: str, out: ParsedRestrictions) -> None:
+    lower = note.lower()
+    if any(keyword in lower for keyword in FUEL_KEYWORDS):
+        out["fuel_available"] = False
+    out["fuel_notes"].append(note)
+
+
+def _extract_night_details(note: str, out: ParsedRestrictions) -> None:
+    lower = note.lower()
+    if out["night_ops_allowed"] is None:
+        out["night_ops_allowed"] = True
+    if (
+        "day operations only" in lower
+        or "no night ops" in lower
+        or "night landings prohibited" in lower
+    ):
+        out["night_ops_allowed"] = False
+    if match := CLOSED_BETWEEN_RE.search(lower):
+        start, end = match.groups()
+        out["hours_of_operation"].append({"closed_from": start, "closed_to": end})
+    if "curfew" in lower:
+        out["curfew"] = {"raw": note}
+    out["hour_notes"].append(note)
+
+
+def _extract_runway_details(note: str, out: ParsedRestrictions) -> None:
+    if RUNWAY_NUM_RE.search(note):
+        out["runway_limitations"].append(note)
+
+
+def _extract_aircraft_limits(note: str, out: ParsedRestrictions) -> None:
+    lower = note.lower()
+    if ACFT_LIMIT_RE.search(lower) and ("only" in lower or "restricted" in lower):
+        out["aircraft_type_limits"].append(note)
+
+
+def _extract_generic(note: str, out: ParsedRestrictions) -> None:
+    if len(note.split()) > 3:
+        out["generic_restrictions"].append(note)
+
+
+def parse_customs_notes(notes: Sequence[str]) -> ParsedCustoms:
+    parsed = _empty_parsed_customs()
+    for raw in notes:
+        text = raw.strip()
+        if not text:
+            continue
+        lower = text.lower()
+        parsed["raw_notes"].append(text)
+        if "customs" in lower:
+            parsed["customs_available"] = True
+        if "canpass" in lower:
+            parsed["canpass_only"] = True
+            parsed["canpass_notes"].append(text)
+        if match := HOURS_RE.search(lower):
+            start, end = match.groups()
+            parsed["customs_hours"].append({"start": start, "end": end, "days": ["unknown"]})
+        if "after" in lower and "hour" in lower:
+            parsed["customs_afterhours_available"] = True
+            parsed["customs_afterhours_requirements"].append(text)
+        if match := PRIOR_HOURS_RE.search(lower):
+            parsed["customs_prior_notice_hours"] = int(match.group(1))
+        if match := PRIOR_DAYS_RE.search(lower):
+            parsed["customs_prior_notice_days"] = int(match.group(1))
+        if any(keyword in lower for keyword in ("call", "phone", "contact", "notify")):
+            parsed["customs_contact_required"] = True
+            parsed["customs_contact_notes"].append(text)
+        if match := LOCATION_RE.search(lower):
+            parsed["location_to_clear"] = match.group(2).strip()
+            parsed["location_notes"].append(text)
+        if "pax" in lower or "passenger" in lower:
+            parsed["pax_requirements"].append(text)
+        if "crew" in lower:
+            parsed["crew_requirements"].append(text)
+        parsed["general_customs_notes"].append(text)
+    return parsed
+
+
+def summarize_operational_notes(
+    icao: str,
+    notes: Sequence[Mapping[str, object]],
+    parsed_restrictions: ParsedRestrictions | None = None,
+    parsed_customs: ParsedCustoms | None = None,
+) -> CategoryResult:
     if not notes:
         return CategoryResult(status="PASS", summary="No operational notes", issues=[])
 
+    customs_texts: list[str]
+    operational_texts: list[str]
+    if parsed_restrictions is None or parsed_customs is None:
+        customs_texts, operational_texts = split_customs_operational_notes(notes)
+        if parsed_restrictions is None:
+            parsed_restrictions = parse_operational_restrictions(operational_texts)
+        if parsed_customs is None:
+            parsed_customs = parse_customs_notes(customs_texts)
     status: CategoryStatus = "PASS"
-    issues = []
-    for note in notes:
-        text = _note_text(note)
-        lower = text.lower()
-        for keyword, keyword_status in _HAZARD_KEYWORDS:
-            if keyword in lower:
-                status = _combine_status(status, keyword_status)
-                break
-        issues.append(text)
+    issues: list[str] = []
 
-    summary = "Operational notes available" if status == "PASS" else "Operational hazards detected"
+    def add_issue(message: str, severity: CategoryStatus = "PASS") -> None:
+        nonlocal status
+        issues.append(message)
+        status = _combine_status(status, severity)
+
+    restrictions = parsed_restrictions or _empty_parsed_restrictions()
+    customs = parsed_customs or _empty_parsed_customs()
+
+    if restrictions["slot_required"]:
+        detail = "Slot required"
+        if restrictions["slot_lead_days"]:
+            detail += f" ({restrictions['slot_lead_days']} day lead)"
+        elif restrictions["slot_lead_hours"]:
+            detail += f" ({restrictions['slot_lead_hours']} hour lead)"
+        add_issue(detail, "CAUTION")
+    if restrictions["ppr_required"]:
+        detail = "PPR required"
+        if restrictions["ppr_lead_days"]:
+            detail += f" ({restrictions['ppr_lead_days']} day notice)"
+        elif restrictions["ppr_lead_hours"]:
+            detail += f" ({restrictions['ppr_lead_hours']} hour notice)"
+        add_issue(detail, "CAUTION")
+    if restrictions["deice_unavailable"]:
+        add_issue("Operational note: deice unavailable", "CAUTION")
+        for note in restrictions["deice_notes"]:
+            issues.append(f"Deice note: {note}")
+    elif restrictions["deice_limited"]:
+        add_issue("Operational note: deice limited", "CAUTION")
+    if restrictions["winter_sensitivity"]:
+        add_issue("Winter operations sensitivity reported", "CAUTION")
+    if restrictions["fuel_available"] is False:
+        add_issue("Fuel unavailable per operational notes", "CAUTION")
+    if restrictions["night_ops_allowed"] is False:
+        add_issue("Night operations prohibited", "CAUTION")
+    if restrictions["curfew"]:
+        add_issue("Curfew in effect per operational notes", "CAUTION")
+    for runway_note in restrictions["runway_limitations"]:
+        add_issue(f"Runway restriction: {runway_note}", "CAUTION")
+    for acft_note in restrictions["aircraft_type_limits"]:
+        add_issue(f"Aircraft limit: {acft_note}", "CAUTION")
+
+    if customs["canpass_only"]:
+        add_issue("Customs limited to CANPASS", "CAUTION")
+    if customs["customs_prior_notice_hours"]:
+        add_issue(
+            f"Customs requires {customs['customs_prior_notice_hours']} hours notice",
+            "CAUTION",
+        )
+    if customs["customs_prior_notice_days"]:
+        add_issue(
+            f"Customs requires {customs['customs_prior_notice_days']} day notice",
+            "CAUTION",
+        )
+    if customs["customs_contact_required"]:
+        add_issue("Customs contact required", "CAUTION")
+    if customs["pax_requirements"]:
+        add_issue("Passenger documentation requirements noted", "CAUTION")
+    if customs["crew_requirements"]:
+        add_issue("Crew documentation requirements noted", "CAUTION")
+
+    summary = "Operational notes reviewed"
+    if status != "PASS":
+        summary = "Operational restrictions detected"
+
+    if not issues:
+        issues.append("Operational notes available")
+
     return CategoryResult(status=status, summary=summary, issues=issues)
 
