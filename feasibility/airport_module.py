@@ -5,7 +5,7 @@ from __future__ import annotations
 import csv
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, TypedDict
@@ -81,6 +81,8 @@ class DeiceProfile:
     icao: str
     deice_available: Optional[bool]
     notes: Optional[str]
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -116,6 +118,10 @@ OSA_SSA_PROFILE_OVERRIDES: Mapping[str, Dict[str, object]] = {
     "CYEG": {"region": "CANADA_DOMESTIC", "requires_jepp": False},
     "KPSP": {"region": "SSA", "requires_jepp": False},
 }
+
+KLAS_REFERENCE_LATITUDE = 36.0800439
+DEICE_SEASON_START = (10, 1)  # October 1
+DEICE_SEASON_END = (4, 30)  # April 30
 
 
 @dataclass
@@ -389,7 +395,13 @@ def _build_deice_profile(icao: str) -> DeiceProfile:
     record: Optional[DeiceRecord] = get_deice_record(icao=icao)
     if not record:
         return DeiceProfile(icao=icao, deice_available=None, notes=None)
-    return DeiceProfile(icao=icao, deice_available=record.has_deice, notes=record.deice_info)
+    return DeiceProfile(
+        icao=icao,
+        deice_available=record.has_deice,
+        notes=record.deice_info,
+        latitude=record.latitude,
+        longitude=record.longitude,
+    )
 
 
 def _build_customs_profile(icao: str, customs_rules: Mapping[str, CustomsRule]) -> Optional[CustomsProfile]:
@@ -567,6 +579,7 @@ def evaluate_airport_side(
         operational_notes,
         leg,
         side,
+        date_local=date_local,
         parsed_restrictions=parsed_operational_restrictions,
     )
     customs = evaluate_customs(
@@ -646,17 +659,49 @@ def evaluate_suitability(
     return CategoryResult(status=status, summary=summary, issues=issues)
 
 
+def _parse_iso_date(value: Optional[str]) -> Optional[date]:
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(value)
+    except Exception:
+        return None
+
+
+def _is_warm_weather_airport(latitude: Optional[float]) -> bool:
+    return latitude is not None and latitude <= KLAS_REFERENCE_LATITUDE
+
+
+def _is_within_deice_season(date_local: Optional[str]) -> bool:
+    parsed = _parse_iso_date(date_local)
+    if not parsed:
+        return True
+    month_day = (parsed.month, parsed.day)
+    return month_day >= DEICE_SEASON_START or month_day <= DEICE_SEASON_END
+
+
 def evaluate_deice(
     deice_profile: DeiceProfile,
     operational_notes: Sequence[Mapping[str, Any]],
     leg: LegContext,
     side: str,
     *,
+    date_local: Optional[str] = None,
     parsed_restrictions: ParsedRestrictions | None = None,
 ) -> CategoryResult:
     issues: List[str] = []
     status: CategoryStatus = "PASS"
     summary = "Deice available"
+
+    if _is_warm_weather_airport(deice_profile.latitude):
+        return CategoryResult(
+            status="PASS", summary="Deice not required (warm region)", issues=[]
+        )
+
+    if not _is_within_deice_season(date_local):
+        return CategoryResult(
+            status="PASS", summary="Deice not required (out of season)", issues=[]
+        )
 
     if deice_profile.deice_available is False:
         status = "CAUTION"

@@ -24,6 +24,8 @@ class DeiceRecord:
     has_deice: Optional[bool]
     deice_info: Optional[str]
     raw_deice_flag: Optional[str]
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
 
     @property
     def status_label(self) -> str:
@@ -45,6 +47,8 @@ class DeiceRecord:
             "IATA": self.iata,
             "FAA": self.faa,
             "Name": self.name,
+            "Latitude": self.latitude,
+            "Longitude": self.longitude,
             "Deice Info": self.deice_info,
             "Deice Not Available": self.raw_deice_flag,
         }
@@ -83,6 +87,15 @@ def _parse_deice_flag(value: Optional[str]) -> Optional[bool]:
     return None
 
 
+def _parse_float(value: Optional[str]) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return float(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
 @lru_cache(maxsize=4)
 def _load_deice_records(csv_path: Path) -> Dict[str, DeiceRecord]:
     path = Path(csv_path)
@@ -99,6 +112,8 @@ def _load_deice_records(csv_path: Path) -> Dict[str, DeiceRecord]:
                 iata=_normalize_identifier(row.get("IATA")),
                 faa=_normalize_identifier(row.get("FAA")),
                 name=row.get("Name") or None,
+                latitude=_parse_float(row.get("Latitude")),
+                longitude=_parse_float(row.get("Longitude")),
                 has_deice=_parse_deice_flag(deice_flag_raw),
                 deice_info=_clean_multiline_text(row.get("Deice Info")),
                 raw_deice_flag=deice_flag_raw,
