@@ -15,7 +15,14 @@ import pytz
 from deice_info_helper import DeiceRecord, get_deice_record
 from flight_leg_utils import load_airport_metadata_lookup, safe_parse_dt
 
-from .airport_notes_parser import summarize_operational_notes
+from .airport_notes_parser import (
+    ParsedCustoms,
+    ParsedRestrictions,
+    parse_customs_notes,
+    parse_operational_restrictions,
+    split_customs_operational_notes,
+    summarize_operational_notes,
+)
 from .common import extract_airport_code
 from .data_access import AirportCategoryRecord, CustomsRule, load_airport_categories, load_customs_rules
 from .schemas import CategoryResult, CategoryStatus
@@ -113,6 +120,8 @@ class AirportSideResult:
     osa_ssa: CategoryResult
     overflight: CategoryResult
     operational_notes: CategoryResult
+    parsed_operational_restrictions: ParsedRestrictions
+    parsed_customs_notes: ParsedCustoms
     raw_operational_notes: List[Mapping[str, Any]] = field(default_factory=list)
 
     def iter_category_results(self) -> Sequence[Tuple[str, CategoryResult]]:
@@ -136,6 +145,8 @@ class AirportSideResult:
             "osa_ssa": self.osa_ssa.as_dict(),
             "overflight": self.overflight.as_dict(),
             "operational_notes": self.operational_notes.as_dict(),
+            "parsed_operational_restrictions": dict(self.parsed_operational_restrictions),
+            "parsed_customs_notes": dict(self.parsed_customs_notes),
             "raw_operational_notes": list(self.raw_operational_notes),
         }
 
@@ -523,12 +534,33 @@ def evaluate_airport_side(
     overflight_result: CategoryResult,
     side: str,
 ) -> AirportSideResult:
+    customs_texts, operational_texts = split_customs_operational_notes(operational_notes)
+    parsed_customs_notes = parse_customs_notes(customs_texts)
+    parsed_operational_restrictions = parse_operational_restrictions(operational_texts)
+
     suitability = evaluate_suitability(airport_profile, leg, operational_notes, side)
-    deice = evaluate_deice(deice_profile, operational_notes, leg, side)
-    customs = evaluate_customs(customs_profile, leg, side, operational_notes)
+    deice = evaluate_deice(
+        deice_profile,
+        operational_notes,
+        leg,
+        side,
+        parsed_restrictions=parsed_operational_restrictions,
+    )
+    customs = evaluate_customs(
+        customs_profile,
+        leg,
+        side,
+        operational_notes,
+        parsed_customs=parsed_customs_notes,
+    )
     slot_ppr = evaluate_slot_ppr(slot_ppr_profile, leg, side, date_local)
     osa_ssa = evaluate_osa_ssa(osa_ssa_profile, leg, side)
-    operational_notes_result = summarize_operational_notes(icao, operational_notes)
+    operational_notes_result = summarize_operational_notes(
+        icao,
+        operational_notes,
+        parsed_operational_restrictions,
+        parsed_customs_notes,
+    )
 
     return AirportSideResult(
         icao=icao,
@@ -539,6 +571,8 @@ def evaluate_airport_side(
         osa_ssa=osa_ssa,
         overflight=overflight_result,
         operational_notes=operational_notes_result,
+        parsed_operational_restrictions=parsed_operational_restrictions,
+        parsed_customs_notes=parsed_customs_notes,
         raw_operational_notes=list(operational_notes),
     )
 
@@ -594,6 +628,8 @@ def evaluate_deice(
     operational_notes: Sequence[Mapping[str, Any]],
     leg: LegContext,
     side: str,
+    *,
+    parsed_restrictions: ParsedRestrictions | None = None,
 ) -> CategoryResult:
     issues: List[str] = []
     status: CategoryStatus = "PASS"
@@ -607,13 +643,26 @@ def evaluate_deice(
         summary = "Unknown deice status"
         issues.append("No deice intel available; confirm if icing conditions likely.")
 
-    note_text = " ".join(
-        str(note.get("body") or note.get("title") or "") for note in operational_notes
-    ).lower()
-    if "deice" in note_text and "out" in note_text:
-        status = _combine_status(status, "CAUTION")
-        summary = "Operational note: deice impacted"
-        issues.append("Operational notes reference deice outages; confirm support.")
+    restrictions = parsed_restrictions
+    if restrictions:
+        if restrictions["deice_unavailable"]:
+            status = _combine_status(status, "CAUTION")
+            summary = "Operational note: deice unavailable"
+        elif restrictions["deice_limited"]:
+            status = _combine_status(status, "CAUTION")
+            summary = "Operational note: deice limited"
+        if restrictions["winter_sensitivity"]:
+            issues.append("Operational notes highlight winter sensitivity.")
+        for note in restrictions["deice_notes"]:
+            issues.append(f"Deice note: {note}")
+    else:
+        note_text = " ".join(
+            str(note.get("body") or note.get("title") or "") for note in operational_notes
+        ).lower()
+        if "deice" in note_text and "out" in note_text:
+            status = _combine_status(status, "CAUTION")
+            summary = "Operational note: deice impacted"
+            issues.append("Operational notes reference deice outages; confirm support.")
 
     if deice_profile.notes:
         issues.append(deice_profile.notes)
@@ -626,6 +675,8 @@ def evaluate_customs(
     leg: LegContext,
     side: str,
     operational_notes: Sequence[Mapping[str, Any]],
+    *,
+    parsed_customs: ParsedCustoms | None = None,
 ) -> CategoryResult:
     issues: List[str] = []
     status: CategoryStatus = "PASS"
@@ -656,11 +707,44 @@ def evaluate_customs(
         if customs_profile.notes:
             issues.append(customs_profile.notes)
 
-    note_text = " ".join(str(note.get("body") or "") for note in operational_notes).lower()
-    if "customs" in note_text and ("closed" in note_text or "limited" in note_text):
-        status = "FAIL"
-        summary = "Customs restricted"
-        issues.append("Operational notes report customs unavailability.")
+    parsed = parsed_customs
+    if parsed:
+        if parsed["canpass_only"]:
+            status = _combine_status(status, "CAUTION")
+            summary = "CANPASS arrival"
+            issues.append("Operational notes: CANPASS-only clearance.")
+        if parsed["customs_prior_notice_hours"]:
+            status = _combine_status(status, "CAUTION")
+            issues.append(
+                f"Customs requires {parsed['customs_prior_notice_hours']} hours prior notice."
+            )
+        if parsed["customs_prior_notice_days"]:
+            status = _combine_status(status, "CAUTION")
+            issues.append(
+                f"Customs requires {parsed['customs_prior_notice_days']} day notice."
+            )
+        if parsed["customs_contact_required"]:
+            status = _combine_status(status, "CAUTION")
+            issues.append("Customs contact required per notes.")
+            issues.extend(parsed["customs_contact_notes"])
+        if parsed["customs_afterhours_available"]:
+            issues.append("Afterhours customs available; verify call-out requirements.")
+            issues.extend(parsed["customs_afterhours_requirements"])
+        if parsed["location_to_clear"]:
+            issues.append(f"Clear customs at {parsed['location_to_clear']}.")
+            issues.extend(parsed["location_notes"])
+        if parsed["pax_requirements"]:
+            status = _combine_status(status, "CAUTION")
+            issues.extend(parsed["pax_requirements"])
+        if parsed["crew_requirements"]:
+            status = _combine_status(status, "CAUTION")
+            issues.extend(parsed["crew_requirements"])
+    else:
+        note_text = " ".join(str(note.get("body") or "") for note in operational_notes).lower()
+        if "customs" in note_text and ("closed" in note_text or "limited" in note_text):
+            status = "FAIL"
+            summary = "Customs restricted"
+            issues.append("Operational notes report customs unavailability.")
 
     return CategoryResult(status=status, summary=summary, issues=issues)
 
