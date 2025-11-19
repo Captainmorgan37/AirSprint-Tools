@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Mapping, MutableSequence, Sequence, Tuple, TypedDict
+from typing import Mapping, Sequence, Tuple, TypedDict
 
 from .schemas import CategoryResult, CategoryStatus
 
@@ -84,7 +84,7 @@ FUEL_KEYWORDS = ("fuel not available", "fuel unavailable", "no fuel")
 DEICE_KEYWORDS = ("deice", "antice", "de-ice")
 NIGHT_KEYWORDS = ("night ops", "no night ops", "night operations", "night landings", "curfew", "sunset")
 RUNWAY_KEYWORDS = ("rwy", "runway", "landings", "departures")
-CUSTOMS_NOTE_KEYWORDS = ("customs", "canpass", "aoe", "cbsa")
+CUSTOMS_NOTE_KEYWORDS = ("customs", "clear", "clearing", "canpass", "aoe", "cbsa")
 
 SLOT_DAYS_OUT_RE = re.compile(r"(\d+)\s*days?\s*out")
 SLOT_HOURS_RE = re.compile(r"(\d+)\s*(?:h|hrs|hours)\s*(?:before|prior)")
@@ -110,16 +110,18 @@ def _combine_status(existing: CategoryStatus, candidate: CategoryStatus) -> Cate
 
 
 def _note_text(note: Mapping[str, object]) -> str:
-    parts: MutableSequence[str] = []
-    for key in ("title", "body"):
+    # FL3XX stores the full body under the "note" key, so prefer that when available.
+    if "note" in note:
+        value = note["note"]
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    for key in ("title", "body", "category", "type"):
         value = note.get(key)
         if isinstance(value, str) and value.strip():
-            parts.append(value.strip())
-    if not parts:
-        category = note.get("category") or note.get("type")
-        if isinstance(category, str) and category.strip():
-            parts.append(category.strip())
-    return "; ".join(parts)
+            return value.strip()
+
+    return ""
 
 
 def _empty_parsed_restrictions() -> ParsedRestrictions:
