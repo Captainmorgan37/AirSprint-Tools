@@ -137,6 +137,7 @@ class AirportSideResult:
     operational_notes: CategoryResult
     parsed_operational_restrictions: ParsedRestrictions
     parsed_customs_notes: ParsedCustoms
+    planned_time_local: Optional[str] = None
     raw_operational_notes: List[str] = field(default_factory=list)
 
     def iter_category_results(self) -> Sequence[Tuple[str, CategoryResult]]:
@@ -162,6 +163,7 @@ class AirportSideResult:
             "operational_notes": self.operational_notes.as_dict(),
             "parsed_operational_restrictions": dict(self.parsed_operational_restrictions),
             "parsed_customs_notes": dict(self.parsed_customs_notes),
+            "planned_time_local": self.planned_time_local,
             "raw_operational_notes": list(self.raw_operational_notes),
         }
 
@@ -272,6 +274,29 @@ def _local_date_string(dt_str: Optional[str], tz_name: Optional[str]) -> Optiona
     else:
         dt = dt.astimezone(pytz.UTC)
     return dt.date().isoformat()
+
+
+def _local_time_string(dt_str: Optional[str], tz_name: Optional[str]) -> Optional[str]:
+    """Return a readable local time string for display purposes."""
+
+    if not dt_str:
+        return None
+
+    try:
+        dt = safe_parse_dt(dt_str)
+    except Exception:
+        return None
+
+    if tz_name:
+        try:
+            tz = pytz.timezone(tz_name)
+            dt = dt.astimezone(tz)
+        except Exception:
+            dt = dt.astimezone(pytz.UTC)
+    else:
+        dt = dt.astimezone(pytz.UTC)
+
+    return dt.strftime("%Y-%m-%d %H:%M %Z") if dt.tzinfo else dt.strftime("%Y-%m-%d %H:%M")
 
 
 def _normalize_datetime(dt_str: Optional[str]) -> Optional[str]:
@@ -532,6 +557,8 @@ def evaluate_airport_feasibility_for_leg(
     arr_tz = tz_provider(arr_icao) if tz_provider else None
     dep_date_local = _local_date_string(leg.get("departure_date_utc"), dep_tz)
     arr_date_local = _local_date_string(leg.get("arrival_date_utc"), arr_tz)
+    dep_time_local = _local_time_string(leg.get("departure_date_utc"), dep_tz)
+    arr_time_local = _local_time_string(leg.get("arrival_date_utc"), arr_tz)
 
     dep_notes = list(fetcher(dep_icao, dep_date_local))
     arr_notes = list(fetcher(arr_icao, arr_date_local))
@@ -551,6 +578,7 @@ def evaluate_airport_feasibility_for_leg(
         operational_notes=dep_notes,
         overflight_result=overflight_result,
         side="DEP",
+        planned_time_local=dep_time_local,
     )
     arrival_side = evaluate_airport_side(
         icao=arr_icao,
@@ -564,6 +592,7 @@ def evaluate_airport_feasibility_for_leg(
         operational_notes=arr_notes,
         overflight_result=overflight_result,
         side="ARR",
+        planned_time_local=arr_time_local,
     )
 
     aircraft_result = _evaluate_aircraft_endurance(leg)
@@ -589,6 +618,7 @@ def evaluate_airport_side(
     operational_notes: Sequence[Mapping[str, Any]],
     overflight_result: CategoryResult,
     side: str,
+    planned_time_local: Optional[str] = None,
 ) -> AirportSideResult:
     customs_texts, operational_texts = split_customs_operational_notes(operational_notes)
     parsed_customs_notes = parse_customs_notes(customs_texts)
@@ -635,6 +665,7 @@ def evaluate_airport_side(
         operational_notes=operational_notes_result,
         parsed_operational_restrictions=parsed_operational_restrictions,
         parsed_customs_notes=parsed_customs_notes,
+        planned_time_local=planned_time_local,
         raw_operational_notes=raw_note_texts,
     )
 
