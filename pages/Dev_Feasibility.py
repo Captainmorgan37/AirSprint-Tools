@@ -563,6 +563,12 @@ def _render_full_quote_result(result: FullFeasibilityResult) -> None:
                 f"{status_icon(aircraft_status)} Aircraft – {aircraft_summary}"
             )
         with st.expander(header, expanded=False):
+            if isinstance(aircraft, Mapping):
+                aircraft_status = aircraft.get("status", "PASS")
+                aircraft_summary = aircraft.get("summary") or aircraft_status
+                st.markdown(
+                    f"{status_icon(aircraft_status)} Aircraft – {aircraft_summary}"
+                )
             _render_aircraft_category(aircraft)
             _render_leg_side("Departure", departure)
             _render_leg_side("Arrival", arrival)
