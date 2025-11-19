@@ -381,7 +381,13 @@ def parse_customs_notes(notes: Sequence[str]) -> ParsedCustoms:
         if "canpass" in lower:
             parsed["canpass_only"] = True
             parsed["canpass_notes"].append(text)
-        if match := re.search(HOURS_RE, lower):
+        for match in re.finditer(HOURS_RE, lower):
+            # Skip phone-number style matches like 760-318-3880 where another
+            # dash-and-digits segment immediately follows the match.
+            trailing = lower[match.end() :]
+            if re.match(r"\s*-\s*\d{2,4}", trailing):
+                continue
+
             start, end = match.groups()
             days = _detect_days(lower)
             if not days:
