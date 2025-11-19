@@ -474,7 +474,7 @@ def build_consecutive_short_rest_rows(df, pilot_col, date_col, rest_before_col, 
     return flagged.sort_values(["Pilot"] + (["DutyDate"] if "DutyDate" in flagged.columns else []))
 
 
-def summarize_min_rest_days(df, pilot_col, date_col, rest_prior_col, short_thresh=11.0):
+def summarize_min_rest_days(df, pilot_col, date_col, rest_prior_col, short_thresh=11.0, lower_bound=10.0):
     work = df[[pilot_col, rest_prior_col]].copy()
     work.columns = ["Pilot", "RestPriorRaw"]
     work["Pilot"] = work["Pilot"].ffill()
@@ -486,7 +486,12 @@ def summarize_min_rest_days(df, pilot_col, date_col, rest_prior_col, short_thres
     else:
         work["DutyDate"] = pd.NaT
 
-    flagged = work[work["RestPriorHours"] < float(short_thresh)].dropna(subset=["Pilot", "RestPriorHours"])
+    min_rest_lower = float(lower_bound)
+    min_rest_upper = float(short_thresh)
+
+    flagged = work[
+        work["RestPriorHours"].between(min_rest_lower, min_rest_upper, inclusive="left")
+    ].dropna(subset=["Pilot", "RestPriorHours"])
 
     summary = pd.DataFrame(columns=["Pilot", "DaysWithMinRest"])
     detail = pd.DataFrame(columns=["Pilot", "DutyDate", "RestPriorHours"])
@@ -819,7 +824,7 @@ with tab_policy:
             to_csv_download(work, "DutyViolation_with_Rest_and_DetailedChecks.csv", key="dl_all")
 
 with tab_min_rest:
-    st.caption("Upload an FTL CSV with a rest prior column to count minimum rest days (< 11 h).")
+    st.caption("Upload an FTL CSV with a rest prior column to count minimum rest days (10.0–10.99 h).")
 
     if ftl_df is None:
         st.info("Upload the **FTL CSV** in the sidebar to calculate minimum rest days.")
@@ -850,9 +855,11 @@ with tab_min_rest:
         elif rest_column is None:
             st.error("No columns available to evaluate rest prior values.")
         else:
-            summary, detail = summarize_min_rest_days(df.copy(), pilot_col, date_col, rest_column, short_thresh=11.0)
+            summary, detail = summarize_min_rest_days(
+                df.copy(), pilot_col, date_col, rest_column, short_thresh=11.0, lower_bound=10.0
+            )
 
-            st.subheader("Days with minimum rest (< 11 h) by pilot")
+            st.subheader("Days with minimum rest (10.0–10.99 h) by pilot")
             if summary.empty:
                 st.success("✅ No minimum rest days detected in the provided period.")
             else:
@@ -862,7 +869,7 @@ with tab_min_rest:
             st.dataframe(summary, use_container_width=True)
             to_csv_download(summary, "FTL_min_rest_days_by_pilot.csv", key="dl_min_rest_summary")
 
-            st.markdown("**Detailed minimum rest days**")
+            st.markdown("**Detailed minimum rest days (10.0–10.99 h)**")
             st.dataframe(detail, use_container_width=True)
             to_csv_download(detail, "FTL_min_rest_day_details.csv", key="dl_min_rest_details")
 
