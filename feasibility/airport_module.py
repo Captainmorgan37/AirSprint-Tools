@@ -24,6 +24,7 @@ from .airport_notes_parser import (
     split_customs_operational_notes,
     summarize_operational_notes,
 )
+from . import checker_aircraft
 from .common import extract_airport_code
 from .data_access import AirportCategoryRecord, CustomsRule, load_airport_categories, load_customs_rules
 from .schemas import CategoryResult, CategoryStatus
@@ -170,9 +171,11 @@ class AirportFeasibilityResult:
     leg_id: str
     departure: AirportSideResult
     arrival: AirportSideResult
+    aircraft: CategoryResult
 
     def iter_all_categories(self) -> Sequence[Tuple[str, CategoryResult]]:
         entries: List[Tuple[str, CategoryResult]] = []
+        entries.append(("Aircraft", self.aircraft))
         for prefix, side in (("Departure", self.departure), ("Arrival", self.arrival)):
             for label, result in side.iter_category_results():
                 entries.append((f"{prefix} {label}", result))
@@ -183,6 +186,7 @@ class AirportFeasibilityResult:
             "leg_id": self.leg_id,
             "departure": self.departure.as_dict(),
             "arrival": self.arrival.as_dict(),
+            "aircraft": self.aircraft.as_dict(),
         }
 
 
@@ -474,6 +478,21 @@ def get_overflight_rules() -> OverflightRules:
     )
 
 
+def _evaluate_aircraft_endurance(leg: LegContext) -> CategoryResult:
+    """Run the aircraft endurance check using leg context inputs."""
+
+    evaluation_payload = {
+        "aircraftType": leg.get("aircraft_type"),
+        "aircraftCategory": leg.get("aircraft_category"),
+        "pax": leg.get("pax"),
+        "blockTime": leg.get("block_time_minutes"),
+        "plannedBlockTime": leg.get("block_time_minutes"),
+        "flightTime": leg.get("flight_time_minutes"),
+    }
+
+    return checker_aircraft.evaluate_aircraft(evaluation_payload)
+
+
 def evaluate_airport_feasibility_for_leg(
     leg: LegContext,
     *,
@@ -547,7 +566,14 @@ def evaluate_airport_feasibility_for_leg(
         side="ARR",
     )
 
-    return AirportFeasibilityResult(leg_id=leg.get("leg_id", ""), departure=departure_side, arrival=arrival_side)
+    aircraft_result = _evaluate_aircraft_endurance(leg)
+
+    return AirportFeasibilityResult(
+        leg_id=leg.get("leg_id", ""),
+        departure=departure_side,
+        arrival=arrival_side,
+        aircraft=aircraft_result,
+    )
 
 
 def evaluate_airport_side(

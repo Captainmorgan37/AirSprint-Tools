@@ -44,6 +44,9 @@ def _build_default_tz_provider() -> Callable[[str], Optional[str]]:
 def _build_leg_contexts(quote: Mapping[str, Any], airport_metadata: AirportMetadataLookup) -> List[LegContext]:
     quote_id = quote.get("id") or quote.get("quoteId") or quote.get("quoteNumber")
     options = build_quote_leg_options(quote, quote_id=str(quote_id) if quote_id is not None else None)
+    aircraft = quote.get("aircraftObj")
+    quote_aircraft_type = _coerce_str(aircraft.get("type") or aircraft.get("model")) if isinstance(aircraft, Mapping) else ""
+    quote_aircraft_category = _coerce_str(aircraft.get("category")) if isinstance(aircraft, Mapping) else ""
     legs: List[LegContext] = []
     for option in options:
         flight = option.get("flight")
@@ -51,6 +54,10 @@ def _build_leg_contexts(quote: Mapping[str, Any], airport_metadata: AirportMetad
             continue
         context = build_leg_context_from_flight(flight, airport_metadata=airport_metadata)
         if context:
+            if not context.get("aircraft_type") and quote_aircraft_type:
+                context["aircraft_type"] = quote_aircraft_type
+            if not context.get("aircraft_category") and quote_aircraft_category:
+                context["aircraft_category"] = quote_aircraft_category
             legs.append(context)
     legs.sort(key=lambda leg: leg.get("departure_date_utc") or "")
     return legs
