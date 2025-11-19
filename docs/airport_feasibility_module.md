@@ -159,6 +159,7 @@ class AirportFeasibilityResult(TypedDict):
     leg_id: str
     departure: AirportSideResult
     arrival: AirportSideResult
+    aircraft: CategoryResult
 
 3. Module Layout
 
