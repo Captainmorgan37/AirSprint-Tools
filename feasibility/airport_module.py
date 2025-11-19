@@ -189,7 +189,7 @@ RUNWAY_REQUIREMENTS_FT: Mapping[str, int] = {
     "ULTRA_LONG_RANGE_JET": 6000,
 }
 
-SLOT_KEYWORDS = ("SLOT", "COORDINATION", "ATC SLOT")
+SLOT_KEYWORDS = ("SLOT", "ATC SLOT")
 PPR_KEYWORDS = ("PPR", "PRIOR PERMISSION")
 
 _RUNWAYS_PATH = Path(__file__).resolve().parents[1] / "runways.csv"
