@@ -168,6 +168,8 @@ def _format_minutes(total_minutes: Optional[int]) -> str:
 
 
 def _format_note_text(note: Any) -> str:
+    if isinstance(note, str):
+        return note.strip()
     if isinstance(note, Mapping):
         for key in ("note", "body", "title", "category", "type"):
             value = note.get(key)
@@ -177,6 +179,210 @@ def _format_note_text(note: Any) -> str:
     if note is None:
         return ""
     return str(note)
+
+
+def _format_hours_entry(entry: Mapping[str, Any]) -> Optional[str]:
+    start = str(entry.get("start") or entry.get("closed_from") or "").strip()
+    end = str(entry.get("end") or entry.get("closed_to") or "").strip()
+    days_value = entry.get("days")
+    days: list[str] = []
+    if isinstance(days_value, Sequence) and not isinstance(days_value, (str, bytes)):
+        for value in days_value:
+            if isinstance(value, str) and value.strip() and value.strip().lower() != "unknown":
+                days.append(value.strip())
+    hours = f"{start}-{end}" if start and end else start or end
+    if days and hours:
+        return f"{'/'.join(days)} {hours}"
+    if hours:
+        return hours
+    if days:
+        return "/".join(days)
+    return None
+
+
+def _format_slot_window(entry: Mapping[str, Any]) -> Optional[str]:
+    days_value = entry.get("days")
+    days: list[str] = []
+    if isinstance(days_value, Sequence) and not isinstance(days_value, (str, bytes)):
+        for value in days_value:
+            if isinstance(value, str) and value.strip():
+                days.append(value.strip())
+    start = str(entry.get("start") or "").strip()
+    end = str(entry.get("end") or "").strip()
+    if not start and not end and not days:
+        return None
+    window = f"{start}-{end}" if start and end else start or end or ""
+    if days and window:
+        return f"{'/'.join(days)} {window}"
+    if days:
+        return "/".join(days)
+    return window or None
+
+
+def _explode_note_text(text: str) -> list[str]:
+    normalized = text.replace("•", "\n")
+    lines: list[str] = []
+    for chunk in normalized.splitlines():
+        cleaned = chunk.strip(" -•\t")
+        if cleaned:
+            lines.append(cleaned)
+    return lines
+
+
+def _collect_entries(values: Any, *, explode: bool = False) -> list[str]:
+    entries: list[str] = []
+    if isinstance(values, Sequence) and not isinstance(values, (str, bytes)):
+        for value in values:
+            if not isinstance(value, str):
+                continue
+            if explode:
+                entries.extend(_explode_note_text(value))
+            else:
+                cleaned = value.strip()
+                if cleaned:
+                    entries.append(cleaned)
+    return entries
+
+
+def _render_bullet_section(title: str, lines: Sequence[str]) -> None:
+    entries = [line.strip() for line in lines if isinstance(line, str) and line.strip()]
+    if not entries:
+        return
+    st.markdown(f"**{title}**")
+    for entry in entries:
+        st.markdown(f"- {entry}")
+
+
+def _render_customs_details(parsed: Mapping[str, Any] | None) -> None:
+    if not isinstance(parsed, Mapping):
+        return
+    if not parsed.get("raw_notes"):
+        return
+    summary_lines: list[str] = []
+    hours_entries: list[str] = []
+    for entry in parsed.get("customs_hours", []):
+        if isinstance(entry, Mapping):
+            formatted = _format_hours_entry(entry)
+            if formatted:
+                hours_entries.append(formatted)
+    if hours_entries:
+        summary_lines.append(f"Hours: {', '.join(hours_entries)} (local)")
+    if parsed.get("customs_afterhours_available"):
+        detail = "After-hours available"
+        requirements = _collect_entries(parsed.get("customs_afterhours_requirements"), explode=True)
+        if requirements:
+            detail += f" — {'; '.join(requirements)}"
+        summary_lines.append(detail)
+    notice_bits: list[str] = []
+    if parsed.get("customs_prior_notice_hours"):
+        notice_bits.append(f"{parsed['customs_prior_notice_hours']}h notice")
+    if parsed.get("customs_prior_notice_days"):
+        notice_bits.append(f"{parsed['customs_prior_notice_days']} day notice")
+    if notice_bits:
+        summary_lines.append(f"Prior notice: {', '.join(notice_bits)}")
+    if parsed.get("canpass_only"):
+        summary_lines.append("CANPASS arrivals only")
+    if parsed.get("location_to_clear"):
+        summary_lines.append(f"Clear at {parsed['location_to_clear']}")
+    contact_notes = _collect_entries(parsed.get("customs_contact_notes"), explode=True)
+    if contact_notes:
+        summary_lines.append("Contact customs before arrival")
+    _render_bullet_section("Customs Intel", summary_lines)
+    _render_bullet_section("Contact Instructions", contact_notes)
+    _render_bullet_section(
+        "Passenger Requirements",
+        _collect_entries(parsed.get("pax_requirements"), explode=True),
+    )
+    _render_bullet_section(
+        "Crew Requirements",
+        _collect_entries(parsed.get("crew_requirements"), explode=True),
+    )
+    _render_bullet_section(
+        "Additional Customs Notes",
+        _collect_entries(parsed.get("general_customs_notes"), explode=True),
+    )
+
+
+def _render_operational_restrictions(parsed: Mapping[str, Any] | None) -> None:
+    if not isinstance(parsed, Mapping):
+        return
+    if not parsed.get("raw_notes"):
+        return
+    summary_lines: list[str] = []
+    if parsed.get("slot_required"):
+        lead: list[str] = []
+        if parsed.get("slot_lead_days"):
+            lead.append(f"{parsed['slot_lead_days']} day lead")
+        if parsed.get("slot_lead_hours"):
+            lead.append(f"{parsed['slot_lead_hours']} hour lead")
+        detail = "Slot required"
+        if lead:
+            detail += f" ({', '.join(lead)})"
+        summary_lines.append(detail)
+    if parsed.get("slot_time_windows"):
+        windows: list[str] = []
+        for entry in parsed.get("slot_time_windows", []):
+            if isinstance(entry, Mapping):
+                formatted = _format_slot_window(entry)
+                if formatted:
+                    windows.append(formatted)
+        if windows:
+            summary_lines.append(f"Slot windows: {', '.join(windows)}")
+    if parsed.get("ppr_required"):
+        lead: list[str] = []
+        if parsed.get("ppr_lead_days"):
+            lead.append(f"{parsed['ppr_lead_days']} day notice")
+        if parsed.get("ppr_lead_hours"):
+            lead.append(f"{parsed['ppr_lead_hours']} hour notice")
+        detail = "PPR required"
+        if lead:
+            detail += f" ({', '.join(lead)})"
+        summary_lines.append(detail)
+    if parsed.get("deice_unavailable"):
+        summary_lines.append("Deice NOT available per notes")
+    elif parsed.get("deice_limited"):
+        summary_lines.append("Deice limited in notes")
+    if parsed.get("winter_sensitivity"):
+        summary_lines.append("Winter sensitivity / contamination risk")
+    if parsed.get("fuel_available") is False:
+        summary_lines.append("Fuel unavailable per notes")
+    if parsed.get("night_ops_allowed") is False:
+        summary_lines.append("Night operations prohibited")
+    if parsed.get("curfew"):
+        curfew = parsed.get("curfew")
+        if isinstance(curfew, Mapping):
+            start = curfew.get("from") or curfew.get("start") or curfew.get("closed_from")
+            end = curfew.get("to") or curfew.get("end") or curfew.get("closed_to")
+            window = f"{start}-{end}" if start and end else start or end or "in effect"
+            summary_lines.append(f"Curfew: {window}")
+        else:
+            summary_lines.append("Curfew in effect")
+    hours_entries: list[str] = []
+    for entry in parsed.get("hours_of_operation", []):
+        if isinstance(entry, Mapping):
+            formatted = _format_hours_entry(entry)
+            if formatted:
+                hours_entries.append(formatted)
+    if hours_entries:
+        summary_lines.append(f"Hours: {', '.join(hours_entries)}")
+    _render_bullet_section("Operational Intel", summary_lines)
+    _render_bullet_section("Deice Notes", _collect_entries(parsed.get("deice_notes"), explode=True))
+    _render_bullet_section("Winter Notes", _collect_entries(parsed.get("winter_notes"), explode=True))
+    _render_bullet_section("Slot Notes", _collect_entries(parsed.get("slot_notes"), explode=True))
+    _render_bullet_section("PPR Notes", _collect_entries(parsed.get("ppr_notes"), explode=True))
+    _render_bullet_section("Hours / Curfew Notes", _collect_entries(parsed.get("hour_notes"), explode=True))
+    _render_bullet_section(
+        "Runway Limits",
+        _collect_entries(parsed.get("runway_limitations"), explode=True),
+    )
+    _render_bullet_section(
+        "Aircraft Type Limits",
+        _collect_entries(parsed.get("aircraft_type_limits"), explode=True),
+    )
+    _render_bullet_section(
+        "Other Operational Restrictions",
+        _collect_entries(parsed.get("generic_restrictions"), explode=True),
+    )
 
 
 def _render_category_block(label: str, category: Mapping[str, Any]) -> None:
@@ -198,8 +404,12 @@ def _render_leg_side(label: str, side: Mapping[str, Any]) -> None:
         category = side.get(key) if isinstance(side, Mapping) else None
         if isinstance(category, Mapping):
             _render_category_block(display, category)
+    parsed_customs = side.get("parsed_customs_notes") if isinstance(side, Mapping) else None
+    _render_customs_details(parsed_customs if isinstance(parsed_customs, Mapping) else None)
+    parsed_ops = side.get("parsed_operational_restrictions") if isinstance(side, Mapping) else None
+    _render_operational_restrictions(parsed_ops if isinstance(parsed_ops, Mapping) else None)
     raw_notes = side.get("raw_operational_notes") if isinstance(side, Mapping) else None
-    if raw_notes:
+    if isinstance(raw_notes, Sequence) and not isinstance(raw_notes, (str, bytes)) and raw_notes:
         with st.expander(f"{label} {icao} raw notes"):
             for entry in raw_notes:
                 text = _format_note_text(entry)

@@ -128,7 +128,7 @@ def _combine_status(existing: CategoryStatus, candidate: CategoryStatus) -> Cate
     return candidate if _STATUS_PRIORITY[candidate] > _STATUS_PRIORITY[existing] else existing
 
 
-def _note_text(note: Mapping[str, object]) -> str:
+def note_text(note: Mapping[str, object]) -> str:
     """Extract the human-readable text body from an FL3XX airport note."""
 
     value = note.get("note")
@@ -230,7 +230,7 @@ def split_customs_operational_notes(
     customs: list[str] = []
     operational: list[str] = []
     for note in notes:
-        text = _note_text(note)
+        text = note_text(note)
         if not text:
             continue
         lower = text.lower()
