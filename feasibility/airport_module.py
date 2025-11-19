@@ -55,6 +55,7 @@ class LegContext(TypedDict, total=False):
 
 
 class OperationalNote(TypedDict, total=False):
+    note: Optional[str]
     category: Optional[str]
     type: Optional[str]
     title: Optional[str]
@@ -629,7 +630,7 @@ def evaluate_suitability(
 
     closure_keywords = ("closed", "closure", "no ga", "curfew")
     for note in operational_notes:
-        body = " ".join(str(note.get(key) or "") for key in ("title", "body")).lower()
+        body = " ".join(str(note.get(key) or "") for key in ("note", "title", "body")).lower()
         if any(keyword in body for keyword in closure_keywords):
             status = "FAIL"
             summary = "Operational closure in effect"
@@ -673,7 +674,8 @@ def evaluate_deice(
             issues.append(f"Deice note: {note}")
     else:
         note_text = " ".join(
-            str(note.get("body") or note.get("title") or "") for note in operational_notes
+            str(note.get("note") or note.get("body") or note.get("title") or "")
+            for note in operational_notes
         ).lower()
         if "deice" in note_text and "out" in note_text:
             status = _combine_status(status, "CAUTION")
@@ -813,7 +815,10 @@ def evaluate_customs(
             issues.extend(parsed["crew_requirements"])
         summary = _build_customs_summary(summary, parsed)
     else:
-        note_text = " ".join(str(note.get("body") or "") for note in operational_notes).lower()
+        note_text = " ".join(
+            str(note.get("note") or note.get("body") or note.get("title") or "")
+            for note in operational_notes
+        ).lower()
         if "customs" in note_text and ("closed" in note_text or "limited" in note_text):
             status = "FAIL"
             summary = "Customs restricted"
