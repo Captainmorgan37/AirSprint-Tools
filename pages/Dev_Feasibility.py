@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Mapping, Optional, cast
+from typing import Any, Dict, List, Mapping, Optional, Sequence, cast
 
 import streamlit as st
 
@@ -33,6 +33,31 @@ st.write(
     standardized summary you can paste into OS notes.
     """
 )
+
+STATUS_EMOJI = {"PASS": "✅", "CAUTION": "⚠️", "FAIL": "❌"}
+SECTION_ORDER = [
+    "suitability",
+    "deice",
+    "customs",
+    "slot_ppr",
+    "osa_ssa",
+    "overflight",
+    "operational_notes",
+]
+SECTION_LABELS = {
+    "suitability": "Suitability",
+    "deice": "Deice",
+    "customs": "Customs",
+    "slot_ppr": "Slot / PPR",
+    "osa_ssa": "OSA / SSA",
+    "overflight": "Overflight",
+    "operational_notes": "Other Operational Notes",
+}
+KEY_ISSUE_SECTIONS = {"customs", "deice", "overflight"}
+
+
+def status_icon(status: str) -> str:
+    return STATUS_EMOJI.get(status, "❔")
 
 
 @st.cache_data(show_spinner=False)
@@ -116,28 +141,78 @@ def _format_minutes(total_minutes: Optional[int]) -> str:
     return f"{hours:d}h {minutes:02d}m"
 
 
+def _format_note_text(note: Any) -> str:
+    if isinstance(note, Mapping):
+        for key in ("note", "body", "title", "category", "type"):
+            value = note.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return str(note)
+    if note is None:
+        return ""
+    return str(note)
+
+
+def _render_category_block(label: str, category: Mapping[str, Any]) -> None:
+    status = str(category.get("status", "PASS"))
+    summary = category.get("summary") or status
+    st.markdown(f"**{label}:** {status_icon(status)} {summary}")
+    issues = [str(issue) for issue in category.get("issues", []) if issue]
+    if issues:
+        with st.expander(f"{label} details", expanded=status != "PASS"):
+            for issue in issues:
+                st.markdown(f"- {issue}")
+
+
 def _render_leg_side(label: str, side: Mapping[str, Any]) -> None:
-    st.markdown(f"**{label} {side.get('icao', '???')}**")
-    category_labels = {
-        "suitability": "Suitability",
-        "deice": "Deice",
-        "customs": "Customs",
-        "slot_ppr": "Slot / PPR",
-        "osa_ssa": "OSA / SSA",
-        "overflight": "Overflight",
-        "operational_notes": "Operational Notes",
-    }
-    for key, display in category_labels.items():
+    icao = side.get("icao", "???") if isinstance(side, Mapping) else "???"
+    st.markdown(f"**{label} {icao}**")
+    for key in SECTION_ORDER:
+        display = SECTION_LABELS.get(key, key.title())
         category = side.get(key) if isinstance(side, Mapping) else None
-        if not isinstance(category, Mapping):
-            continue
-        status = category.get("status", "PASS")
-        summary = category.get("summary") or status
-        issues = category.get("issues") or []
-        details = summary
-        if issues:
-            details = f"{details} — {', '.join(str(item) for item in issues)}"
-        st.write(f"- {display}: {details} ({status})")
+        if isinstance(category, Mapping):
+            _render_category_block(display, category)
+    raw_notes = side.get("raw_operational_notes") if isinstance(side, Mapping) else None
+    if raw_notes:
+        with st.expander(f"{label} {icao} raw notes"):
+            for entry in raw_notes:
+                text = _format_note_text(entry)
+                if text:
+                    st.markdown(f"- {text}")
+
+
+def _collect_key_issues(result: Mapping[str, Any]) -> List[str]:
+    issues: List[str] = []
+    duty = result.get("duty") if isinstance(result, Mapping) else None
+    if isinstance(duty, Mapping):
+        duty_status = duty.get("status", "PASS")
+        if duty_status in {"CAUTION", "FAIL"}:
+            summary = duty.get("summary") or f"Duty {duty_status.title()}"
+            issues.append(f"Duty: {summary}")
+
+    legs = result.get("legs") if isinstance(result, Mapping) else None
+    if isinstance(legs, Sequence):
+        for index, leg in enumerate(legs, start=1):
+            if not isinstance(leg, Mapping):
+                continue
+            for side_name in ("departure", "arrival"):
+                side = leg.get(side_name)
+                if not isinstance(side, Mapping):
+                    continue
+                icao = side.get("icao", "???")
+                for key in SECTION_ORDER:
+                    category = side.get(key)
+                    if not isinstance(category, Mapping):
+                        continue
+                    status = category.get("status", "PASS")
+                    if status == "PASS":
+                        continue
+                    display = SECTION_LABELS.get(key, key.title())
+                    summary = category.get("summary") or status
+                    label = f"{side_name.title()} {icao} {display}"
+                    if status == "FAIL" or (status == "CAUTION" and key in KEY_ISSUE_SECTIONS):
+                        issues.append(f"{label}: {summary}")
+    return issues
 
 
 def _render_full_quote_result(result: FullFeasibilityResult) -> None:
@@ -157,14 +232,18 @@ def _render_full_quote_result(result: FullFeasibilityResult) -> None:
         formatted = summary.strip().replace("\n", "  \n")
         st.markdown(formatted)
 
-    if result.get("issues"):
-        st.markdown("**Key Issues**")
-        st.markdown("\n".join(f"- {issue}" for issue in result.get("issues", [])))
+    key_issues = _collect_key_issues(result)
+    st.subheader("Key Issues")
+    if key_issues:
+        for issue in key_issues:
+            st.markdown(f"- {issue}")
+    else:
+        st.caption("No customs, deice, duty, or permit cautions detected.")
 
     with st.expander("Duty Day Evaluation", expanded=duty.get("status") != "PASS"):
         status = duty.get("status", "PASS")
         col1, col2, col3 = st.columns(3)
-        col1.metric("Duty Status", status)
+        col1.metric("Duty Status", f"{status_icon(status)} {status}")
         col2.metric("Total Duty", _format_minutes(duty.get("total_duty")))
         col3.metric("Turn Segments", len(duty.get("turn_times", [])))
         st.write(f"- Start: {duty.get('duty_start_local') or 'Unknown'}")
@@ -260,9 +339,6 @@ with booking_tab:
 
 stored_result = st.session_state.get("feasibility_last_result")
 full_quote_result = st.session_state.get("feasibility_last_full_quote_result")
-
-STATUS_EMOJI = {"PASS": "✅", "CAUTION": "⚠️", "FAIL": "❌"}
-
 
 def _render_category(name: str, category) -> None:
     emoji = STATUS_EMOJI.get(category.status, "")

@@ -110,6 +110,12 @@ class OverflightRules:
     permit_lead_days: Mapping[str, int]
 
 
+OSA_SSA_PROFILE_OVERRIDES: Mapping[str, Dict[str, object]] = {
+    "CYEG": {"region": "CANADA_DOMESTIC", "requires_jepp": False},
+    "KPSP": {"region": "SSA", "requires_jepp": False},
+}
+
+
 @dataclass
 class AirportSideResult:
     icao: str
@@ -393,9 +399,19 @@ def _build_customs_profile(icao: str, customs_rules: Mapping[str, CustomsRule]) 
 
 def _build_osa_ssa_profile(icao: str, airport_categories: Mapping[str, AirportCategoryRecord]) -> OsaSsaProfile:
     category_record = airport_categories.get(icao)
+    override = OSA_SSA_PROFILE_OVERRIDES.get(icao.upper())
     region = (category_record.category if category_record else "DOMESTIC") or "DOMESTIC"
+    if override and isinstance(override.get("region"), str):
+        region = str(override["region"]).strip() or region
     region_upper = region.upper()
-    requires_jepp = region_upper in {"OSA", "SSA"}
+    requires_override = None
+    if override is not None:
+        for key in ("requires_jepp", "requires_jeppesen"):
+            value = override.get(key)
+            if isinstance(value, bool):
+                requires_override = value
+                break
+    requires_jepp = bool(requires_override) if requires_override is not None else False
     return OsaSsaProfile(icao=icao, region=region_upper, requires_jepp=requires_jepp)
 
 
@@ -670,6 +686,62 @@ def evaluate_deice(
     return CategoryResult(status=status, summary=summary, issues=issues)
 
 
+def _format_customs_hours_entry(entry: Mapping[str, Any]) -> Optional[str]:
+    start = str(entry.get("start") or "").strip()
+    end = str(entry.get("end") or "").strip()
+    days_value = entry.get("days")
+    day_parts: List[str] = []
+    if isinstance(days_value, (list, tuple, set)):
+        for value in days_value:
+            if isinstance(value, str):
+                cleaned = value.strip()
+                if cleaned and cleaned.lower() != "unknown":
+                    day_parts.append(cleaned)
+    hours = f"{start}-{end}" if start and end else start or end
+    if day_parts and hours:
+        return f"{'/'.join(day_parts)} {hours}"
+    if hours:
+        return hours
+    if day_parts:
+        return "/".join(day_parts)
+    return None
+
+
+def _build_customs_summary(base_summary: str, parsed: Optional[ParsedCustoms]) -> str:
+    if not parsed:
+        return base_summary
+
+    details: List[str] = []
+    if parsed["customs_hours"]:
+        hours_entry = parsed["customs_hours"][0]
+        formatted = _format_customs_hours_entry(hours_entry)
+        if formatted:
+            details.append(formatted)
+
+    notice_requirements: List[str] = []
+    if parsed["customs_prior_notice_hours"]:
+        notice_requirements.append(f"{parsed['customs_prior_notice_hours']}h notice")
+    if parsed["customs_prior_notice_days"]:
+        notice_requirements.append(f"{parsed['customs_prior_notice_days']} day notice")
+
+    notice_text = " and ".join(notice_requirements)
+    if parsed["customs_afterhours_available"]:
+        detail = "After-hours possible"
+        if notice_text:
+            detail += f" with {notice_text}"
+        details.append(detail)
+    elif notice_text:
+        details.append(f"Requires {notice_text}")
+
+    if not details:
+        return base_summary
+
+    detail_text = "; ".join(details)
+    if base_summary.lower().startswith("customs available"):
+        return f"{base_summary} {detail_text}".strip()
+    return f"{base_summary} — {detail_text}"
+
+
 def evaluate_customs(
     customs_profile: Optional[CustomsProfile],
     leg: LegContext,
@@ -739,6 +811,7 @@ def evaluate_customs(
         if parsed["crew_requirements"]:
             status = _combine_status(status, "CAUTION")
             issues.extend(parsed["crew_requirements"])
+        summary = _build_customs_summary(summary, parsed)
     else:
         note_text = " ".join(str(note.get("body") or "") for note in operational_notes).lower()
         if "customs" in note_text and ("closed" in note_text or "limited" in note_text):
@@ -795,12 +868,14 @@ def evaluate_osa_ssa(
 ) -> CategoryResult:
     issues: List[str] = []
     status: CategoryStatus = "PASS"
-    summary = osa_ssa_profile.region.title()
+    summary = f"Routing classified as {osa_ssa_profile.region}"
 
     if osa_ssa_profile.requires_jepp:
         status = "CAUTION"
         summary = f"{osa_ssa_profile.region} — Jeppesen required"
         issues.append("Jeppesen ITP task required for this leg.")
+    else:
+        summary = f"Routing classified as {osa_ssa_profile.region}. Jeppesen not required by profile."
 
     return CategoryResult(status=status, summary=summary, issues=issues)
 
