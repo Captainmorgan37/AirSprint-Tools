@@ -473,6 +473,48 @@ def build_consecutive_short_rest_rows(df, pilot_col, date_col, rest_before_col, 
             flagged[col] = flagged[col].round(2)
     return flagged.sort_values(["Pilot"] + (["DutyDate"] if "DutyDate" in flagged.columns else []))
 
+
+def summarize_min_rest_days(df, pilot_col, date_col, rest_prior_col, short_thresh=11.0, lower_bound=10.0):
+    work = df[[pilot_col, rest_prior_col]].copy()
+    work.columns = ["Pilot", "RestPriorRaw"]
+    work["Pilot"] = work["Pilot"].ffill()
+
+    work["RestPriorHours"] = work["RestPriorRaw"].map(parse_duration_to_hours)
+
+    if date_col:
+        work["DutyDate"] = _normalize_dates(pd.to_datetime(df[date_col], errors="coerce", dayfirst=True))
+    else:
+        work["DutyDate"] = pd.NaT
+
+    min_rest_lower = float(lower_bound)
+    min_rest_upper = float(short_thresh)
+
+    flagged = work[
+        work["RestPriorHours"].between(min_rest_lower, min_rest_upper, inclusive="left")
+    ].dropna(subset=["Pilot", "RestPriorHours"])
+
+    summary = pd.DataFrame(columns=["Pilot", "DaysWithMinRest"])
+    detail = pd.DataFrame(columns=["Pilot", "DutyDate", "RestPriorHours"])
+
+    if flagged.empty:
+        return summary, detail
+
+    if date_col:
+        flagged = flagged.dropna(subset=["DutyDate"])
+        if flagged.empty:
+            return summary, detail
+
+        detail = flagged.groupby(["Pilot", "DutyDate"], as_index=False)["RestPriorHours"].min()
+        summary = detail.groupby("Pilot", as_index=False).agg(DaysWithMinRest=("DutyDate", "nunique"))
+    else:
+        summary = flagged.groupby("Pilot", as_index=False).agg(DaysWithMinRest=("RestPriorHours", "count"))
+        detail = flagged.groupby("Pilot", as_index=False).agg(RestPriorHours=("RestPriorHours", "min"))
+
+    if "RestPriorHours" in detail.columns:
+        detail["RestPriorHours"] = detail["RestPriorHours"].round(2)
+
+    return summary, detail
+
 def coverage_table(df, flag_col_name):
     cov = df.groupby("Pilot").agg(
         FirstDate=("Date", "min"),
@@ -491,16 +533,24 @@ st.sidebar.header("Uploads")
 ftl_file = st.sidebar.file_uploader("FTL CSV (for Duty & Short Rest checks)", type=["csv"], key="ftl_csv")
 dv_file = st.sidebar.file_uploader("Duty Violation CSV (for 7d/30d Policy + detailed checks)", type=["csv"], key="dv_csv")
 
+ftl_df = try_read_csv(ftl_file) if ftl_file else None
+dv_df = try_read_csv(dv_file) if dv_file else None
+
 # -----------------------------
 # Tabs
 # -----------------------------
-tab_results, tab_policy, tab_debug = st.tabs(["Results (FTL)", "7d/30d Policy (Duty Violation)", "Debug"])
+tab_results, tab_policy, tab_min_rest, tab_debug = st.tabs([
+    "Results (FTL)",
+    "7d/30d Policy (Duty Violation)",
+    "Min Rest Counter",
+    "Debug",
+])
 
 with tab_results:
-    if ftl_file is None:
+    if ftl_df is None:
         st.info("Upload the **FTL CSV** in the sidebar to run Duty Streaks and Short Rest checks.")
     else:
-        df = try_read_csv(ftl_file)
+        df = ftl_df
         pilot_col, date_col = infer_common_columns(df.copy())
         begin_cols, _ = infer_begin_end_columns(df.copy(), date_col=date_col)
 
@@ -572,10 +622,10 @@ with tab_results:
                     to_csv_download(rest_pairs, "FTL_consecutive_min_rest_summary.csv", key="dl_rest_consecutive")
 
 with tab_policy:
-    if dv_file is None:
+    if dv_df is None:
         st.info("Upload the **Duty Violation CSV** in the sidebar to run the 7d/30d policy screen and detailed checks.")
     else:
-        dv = try_read_csv(dv_file)
+        dv = dv_df
         meta = infer_policy_columns(dv.copy())
 
         # Column mapping expander — hide Rest Before columns
@@ -772,6 +822,56 @@ with tab_policy:
 
             # Full export
             to_csv_download(work, "DutyViolation_with_Rest_and_DetailedChecks.csv", key="dl_all")
+
+with tab_min_rest:
+    st.caption("Upload an FTL CSV with a rest prior column to count minimum rest days (10.0–10.99 h).")
+
+    if ftl_df is None:
+        st.info("Upload the **FTL CSV** in the sidebar to calculate minimum rest days.")
+    else:
+        df = ftl_df
+        pilot_col, date_col = infer_common_columns(df.copy())
+        rest_before_col, _ = infer_rest_pair_columns_ftl(df.copy())
+
+        st.markdown("**Rest prior column**")
+        rest_options = list(df.columns)
+        default_index = 0
+        if rest_before_col in rest_options:
+            default_index = rest_options.index(rest_before_col)
+        else:
+            rest_like = [i for i, name in enumerate(rest_options) if re.search(r"rest", str(name), re.I)]
+            if rest_like:
+                default_index = rest_like[0]
+
+        rest_column = st.selectbox(
+            "Select the column that contains rest prior values",
+            options=rest_options,
+            index=default_index if rest_options else None,
+            key="rest_prior_column",
+        ) if rest_options else None
+
+        if not (pilot_col and date_col):
+            st.error("Could not identify the Pilot and Date columns in the FTL CSV.")
+        elif rest_column is None:
+            st.error("No columns available to evaluate rest prior values.")
+        else:
+            summary, detail = summarize_min_rest_days(
+                df.copy(), pilot_col, date_col, rest_column, short_thresh=11.0, lower_bound=10.0
+            )
+
+            st.subheader("Days with minimum rest (10.0–10.99 h) by pilot")
+            if summary.empty:
+                st.success("✅ No minimum rest days detected in the provided period.")
+            else:
+                st.error(
+                    f"⚠️ Minimum rest triggered for {summary['DaysWithMinRest'].sum()} day(s) across {len(summary)} pilot(s)."
+                )
+            st.dataframe(summary, use_container_width=True)
+            to_csv_download(summary, "FTL_min_rest_days_by_pilot.csv", key="dl_min_rest_summary")
+
+            st.markdown("**Detailed minimum rest days (10.0–10.99 h)**")
+            st.dataframe(detail, use_container_width=True)
+            to_csv_download(detail, "FTL_min_rest_day_details.csv", key="dl_min_rest_details")
 
 with tab_debug:
     st.caption("If you want coverage/normalized tables in this version's Debug tab, I can add them.")
