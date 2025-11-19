@@ -7,7 +7,6 @@ import streamlit as st
 from flight_leg_utils import FlightDataError, build_fl3xx_api_config
 from feasibility import (
     FeasibilityResult,
-    evaluate_flight,
     run_feasibility_for_booking,
     run_feasibility_phase1,
 )
@@ -99,15 +98,6 @@ def _load_quote_options(quote_id: str) -> list[Dict[str, Any]]:
     st.session_state["feasibility_quote_payload"] = payload
     st.success(f"Loaded {len(options)} leg(s) for quote {quote_id}.")
     return options
-
-
-def _run_quote_leg(flight: Mapping[str, Any]) -> Optional[FeasibilityResult]:
-    with st.spinner("Running feasibility checks for selected quote leg…"):
-        try:
-            return evaluate_flight(flight)
-        except Exception as exc:  # pragma: no cover - Streamlit safety net
-            st.exception(exc)
-            return None
 
 
 def _run_full_quote_day(quote: Mapping[str, Any]) -> Optional[FullFeasibilityResult]:
@@ -205,7 +195,11 @@ quote_tab, booking_tab = st.tabs(["Quote ID", "Booking Identifier"])
 
 with quote_tab:
     st.subheader("Search via Quote ID")
-    st.caption("Use this to evaluate feasibility before a booking exists.")
+    st.caption(
+        "Use this to evaluate feasibility before a booking exists. The dev engine always runs"
+        " every leg in the quote so you consistently get duty-day coverage; expand the legs"
+        " in the results below for per-segment breakdowns."
+    )
 
     with st.form("quote-form", clear_on_submit=False):
         quote_input = st.text_input("Quote ID", placeholder="e.g. 3621613").strip()
@@ -215,34 +209,18 @@ with quote_tab:
         options = _load_quote_options(quote_input)
         if options:
             st.session_state["feasibility_quote_options"] = options
-            st.session_state["feasibility_quote_leg_index"] = 0
 
     quote_options = st.session_state.get("feasibility_quote_options", [])
     quote_payload = st.session_state.get("feasibility_quote_payload")
 
     if quote_options:
-        option_indices = list(range(len(quote_options)))
-        default_index = min(
-            st.session_state.get("feasibility_quote_leg_index", 0),
-            len(option_indices) - 1,
-        )
-        selected_index = st.selectbox(
-            "Select quote leg",
-            option_indices,
-            format_func=lambda idx: quote_options[idx]["label"],
-            index=default_index,
-            key="feasibility_quote_leg_index",
-        )
-        selected_option = quote_options[selected_index]
-        leg_info = selected_option.get("leg", {})
-        pax = leg_info.get("pax") or "n/a"
-        block = leg_info.get("blockTime") or leg_info.get("flightTime") or "n/a"
-        st.caption(f"PAX: {pax} · Block: {block} minutes")
-
-        if st.button("Run Feasibility for Selected Quote Leg", key="run-quote"):
-            result = _run_quote_leg(selected_option["flight"])
-            if result:
-                st.session_state["feasibility_last_result"] = result
+        st.markdown("**Loaded Legs**")
+        for option in quote_options:
+            leg_info = option.get("leg", {}) if isinstance(option, Mapping) else {}
+            label = option.get("label", "Leg") if isinstance(option, Mapping) else "Leg"
+            pax = leg_info.get("pax") or "n/a"
+            block = leg_info.get("blockTime") or leg_info.get("flightTime") or "n/a"
+            st.caption(f"{label}: PAX {pax} · Block {block} minutes")
     else:
         st.info("Load a quote to view available legs for feasibility analysis.")
 
@@ -258,7 +236,7 @@ with quote_tab:
         st.info("Load a quote to enable multi-leg feasibility checks.")
 
     run_full_quote = st.button(
-        "Run Feasibility for Full Quote Day",
+        "Run Feasibility for Quote (All Legs)",
         key="run-full-quote",
         type="primary",
         disabled=not quote_loaded,
@@ -315,7 +293,7 @@ if stored_result and isinstance(stored_result, FeasibilityResult):
         with st.expander("Source flight payload"):
             st.json(stored_result.flight)
 else:
-    st.info("Select a quote leg or submit a booking identifier to generate a feasibility report.")
+    st.info("Load a quote or submit a booking identifier to generate a feasibility report.")
 
 if isinstance(full_quote_result, Mapping):
     _render_full_quote_result(cast(FullFeasibilityResult, full_quote_result))
