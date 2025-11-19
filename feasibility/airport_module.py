@@ -18,6 +18,7 @@ from flight_leg_utils import load_airport_metadata_lookup, safe_parse_dt
 from .airport_notes_parser import (
     ParsedCustoms,
     ParsedRestrictions,
+    note_text,
     parse_customs_notes,
     parse_operational_restrictions,
     split_customs_operational_notes,
@@ -129,7 +130,7 @@ class AirportSideResult:
     operational_notes: CategoryResult
     parsed_operational_restrictions: ParsedRestrictions
     parsed_customs_notes: ParsedCustoms
-    raw_operational_notes: List[Mapping[str, Any]] = field(default_factory=list)
+    raw_operational_notes: List[str] = field(default_factory=list)
 
     def iter_category_results(self) -> Sequence[Tuple[str, CategoryResult]]:
         return (
@@ -554,6 +555,11 @@ def evaluate_airport_side(
     customs_texts, operational_texts = split_customs_operational_notes(operational_notes)
     parsed_customs_notes = parse_customs_notes(customs_texts)
     parsed_operational_restrictions = parse_operational_restrictions(operational_texts)
+    raw_note_texts: List[str] = []
+    for entry in operational_notes:
+        text = note_text(entry)
+        if text:
+            raw_note_texts.append(text)
 
     suitability = evaluate_suitability(airport_profile, leg, operational_notes, side)
     deice = evaluate_deice(
@@ -590,7 +596,7 @@ def evaluate_airport_side(
         operational_notes=operational_notes_result,
         parsed_operational_restrictions=parsed_operational_restrictions,
         parsed_customs_notes=parsed_customs_notes,
-        raw_operational_notes=list(operational_notes),
+        raw_operational_notes=raw_note_texts,
     )
 
 
