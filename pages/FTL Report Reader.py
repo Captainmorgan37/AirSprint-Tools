@@ -53,32 +53,79 @@ st.markdown(
 # Helpers
 # -----------------------------
 def parse_duration_to_hours(val):
-    if pd.isna(val): return np.nan
+    if pd.isna(val):
+        return np.nan
+
+    # ---------------------------------------------------------
+    # Excel datetime duration fix
+    # FL3XX sometimes encodes durations (e.g. "30:02") as a
+    # timestamp (e.g. 1900-01-02 06:02:00).
+    # This block extracts the *duration* from that timestamp.
+    # ---------------------------------------------------------
+    try:
+        # Detect raw datetime-like objects (numpy, pandas, python)
+        if isinstance(val, (pd.Timestamp, datetime)) or \
+           ("datetime" in str(type(val)).lower()):
+            dt = pd.to_datetime(val, errors="coerce")
+            if pd.notna(dt):
+                # Excel stores durations as "time of day" plus day rollover
+                hours = dt.hour + dt.minute / 60 + dt.second / 3600
+
+                # If day > 1, Excel has rolled over past midnight
+                # so each additional day = +24 hours
+                if dt.day > 1:
+                    hours += (dt.day - 1) * 24
+
+                return hours
+    except Exception:
+        pass
+
+    # ---------------------------------------------------------
+    # Normal string-based duration parsing
+    # ---------------------------------------------------------
     s = str(val).strip()
-    if s == "": return np.nan
-    # Remove parenthetical annotations such as "(split duty)" that can appear
-    # alongside the duration values so they don't interfere with parsing.
+    if s == "":
+        return np.nan
+
+    # Remove annotations like "(split duty)"
     s = re.sub(r"\([^)]*\)", "", s)
+
+    # Normalize common formats
     s = s.replace("hours", ":").replace("hour", ":").replace("H", ":").replace("h", ":")
     s = s.replace(" ", "").replace("::", ":").replace(".", ":")
+
+    # Match HH:MM or HHH:MM:SS
     m = re.match(r"^(\d{1,3}):(\d{1,2})(?::(\d{1,2}))?$", s)
     if m:
-        h=int(m.group(1)); mi=int(m.group(2)); se=int(m.group(3)) if m.group(3) else 0
+        h = int(m.group(1))
+        mi = int(m.group(2))
+        se = int(m.group(3)) if m.group(3) else 0
         return h + mi/60 + se/3600
+
+    # Match "45m" or "45 min"
     m2 = re.match(r"^(\d+)\s*(m|min)$", s, flags=re.I)
-    if m2: return int(m2.group(1))/60.0
-    if re.match(r"^\d+(\.\d+)?$", s): return float(s)
+    if m2:
+        return int(m2.group(1)) / 60.0
+
+    # Pure number like "12.5"
+    if re.match(r"^\d+(\.\d+)?$", s):
+        return float(s)
+
+    # Match formats like "12h 30m"
     h = re.search(r"(\d+)\s*h", s, flags=re.I)
     mi = re.search(r"(\d+)\s*m", s, flags=re.I)
     if h or mi:
-        hours=int(h.group(1)) if h else 0
-        minutes=int(mi.group(1)) if mi else 0
-        return hours + minutes/60
+        hours = int(h.group(1)) if h else 0
+        minutes = int(mi.group(1)) if mi else 0
+        return hours + minutes / 60
+
+    # Last-resort timedelta parser
     try:
         td = pd.to_timedelta(s)
-        return td.total_seconds()/3600.0
+        return td.total_seconds() / 3600.0
     except Exception:
         return np.nan
+
 
 def try_read_csv(uploaded_file):
     try:
