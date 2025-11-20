@@ -921,54 +921,139 @@ with tab_policy:
             to_csv_download(work, "DutyViolation_with_Rest_and_DetailedChecks.csv", key="dl_all")
 
 with tab_min_rest:
-    st.caption("Upload an FTL CSV with a rest prior column to count minimum rest days (10.0–10.99 h).")
+    st.header("12+ hr Duty Day Counter (Using Rest Marker as Day Boundary)")
 
     if ftl_df is None:
-        st.info("Upload the **FTL CSV** in the sidebar to calculate minimum rest days.")
+        st.info("Upload the FTL CSV to compute 12+ hr duty days.")
     else:
-        df = ftl_df
+        df = ftl_df.copy()
+
+        # --------------------------------------
+        # Column auto-detect
+        # --------------------------------------
         pilot_col, date_col = infer_common_columns(df.copy())
-        rest_before_col, _ = infer_rest_pair_columns_ftl(df.copy())
+        duty_col = infer_duty_column(df.copy())
+        rest_marker_col = infer_duty_day_boundary_column(df.copy())
+        begin_cols, _ = infer_begin_end_columns(df.copy(), date_col=date_col)
 
-        st.markdown("**Rest prior column**")
-        rest_options = list(df.columns)
-        default_index = 0
-        if rest_before_col in rest_options:
-            default_index = rest_options.index(rest_before_col)
-        else:
-            rest_like = [i for i, name in enumerate(rest_options) if re.search(r"rest", str(name), re.I)]
-            if rest_like:
-                default_index = rest_like[0]
+        st.subheader("Column Mapping")
+        c1, c2, c3, c4 = st.columns(4)
 
-        rest_column = st.selectbox(
-            "Select the column that contains rest prior values",
-            options=rest_options,
-            index=default_index if rest_options else None,
-            key="rest_prior_column",
-        ) if rest_options else None
-
-        if not (pilot_col and date_col):
-            st.error("Could not identify the Pilot and Date columns in the FTL CSV.")
-        elif rest_column is None:
-            st.error("No columns available to evaluate rest prior values.")
-        else:
-            summary, detail = summarize_min_rest_days(
-                df.copy(), pilot_col, date_col, rest_column, short_thresh=11.0, lower_bound=10.0
+        with c1:
+            pilot_col = st.selectbox(
+                "Pilot column",
+                df.columns,
+                index=list(df.columns).index(pilot_col) if pilot_col in df.columns else 0
+            )
+        with c2:
+            date_col = st.selectbox(
+                "Date column",
+                df.columns,
+                index=list(df.columns).index(date_col) if date_col in df.columns else 0
+            )
+        with c3:
+            duty_col = st.selectbox(
+                "Duty length column",
+                df.columns,
+                index=list(df.columns).index(duty_col) if duty_col in df.columns else 0
+            )
+        with c4:
+            rest_marker_col = st.selectbox(
+                "Rest-marker column (end of duty)",
+                df.columns,
+                index=list(df.columns).index(rest_marker_col) if rest_marker_col in df.columns else 0
             )
 
-            st.subheader("Days with minimum rest (10.0–10.99 h) by pilot")
-            if summary.empty:
-                st.success("✅ No minimum rest days detected in the provided period.")
-            else:
-                st.error(
-                    f"⚠️ Minimum rest triggered for {summary['DaysWithMinRest'].sum()} day(s) across {len(summary)} pilot(s)."
-                )
-            st.dataframe(summary, use_container_width=True)
-            to_csv_download(summary, "FTL_min_rest_days_by_pilot.csv", key="dl_min_rest_summary")
+        # --------------------------------------
+        # Rebuild duty days using rest marker
+        # --------------------------------------
+        work = df.copy()
+        work[pilot_col] = work[pilot_col].ffill()
 
-            st.markdown("**Detailed minimum rest days (10.0–10.99 h)**")
-            st.dataframe(detail, use_container_width=True)
-            to_csv_download(detail, "FTL_min_rest_day_details.csv", key="dl_min_rest_details")
+        # Parse duty hours
+        work["DutyHours"] = work[duty_col].map(parse_duration_to_hours)
+
+        # Parse base date and begin columns
+        date_series = _coalesce_datetime_columns(work, date_col, begin_cols)
+        date_series = _normalize_dates(date_series)
+        work["DutyDate"] = date_series
+
+        # Rest marker extraction
+        work["BoundaryRest"] = work[rest_marker_col].astype(str).str.contains("rest", case=False, na=False)
+
+        # --------------------------------------
+        # Build duty blocks per pilot
+        # --------------------------------------
+        records = []
+        for pilot, sub in work.groupby(pilot_col):
+            sub = sub.sort_values(["DutyDate", "__row_order"] if "__row_order" in sub.columns else "DutyDate")
+
+            current_date = None
+            collected_hours = []
+
+            for _, row in sub.iterrows():
+                ddate = row["DutyDate"]
+                if pd.isna(ddate):
+                    continue
+
+                if current_date is None:
+                    current_date = ddate
+
+                if not pd.isna(row["DutyHours"]):
+                    collected_hours.append(row["DutyHours"])
+
+                # If boundary found => finalize duty day
+                if row["BoundaryRest"]:
+                    if collected_hours:
+                        records.append({
+                            "Pilot": pilot,
+                            "Date": current_date,
+                            "DutyHours": max(collected_hours)
+                        })
+                    current_date = None
+                    collected_hours = []
+
+            # Final open block (no rest marked)
+            if current_date is not None and collected_hours:
+                records.append({
+                    "Pilot": pilot,
+                    "Date": current_date,
+                    "DutyHours": max(collected_hours)
+                })
+
+        duty_days = pd.DataFrame(records)
+
+        if duty_days.empty:
+            st.warning("No interpretable duty days found using the selected columns.")
+        else:
+            duty_days["Date"] = duty_days["Date"].dt.date
+            duty_days["DutyHours"] = duty_days["DutyHours"].round(2)
+            duty_days["LongDuty"] = duty_days["DutyHours"] >= 12.0
+
+            long_only = duty_days[duty_days["LongDuty"]]
+
+            st.subheader("Summary — Days with Duty ≥ 12.0 hr")
+            if long_only.empty:
+                st.success("No 12+ hr duty days detected in this period.")
+            else:
+                summary = long_only.groupby("Pilot").agg(
+                    Days=("Date", "nunique"),
+                    AvgHours=("DutyHours", "mean"),
+                    MaxHours=("DutyHours", "max")
+                ).reset_index()
+
+                summary["AvgHours"] = summary["AvgHours"].round(2)
+                summary["MaxHours"] = summary["MaxHours"].round(2)
+
+                st.error(f"⚠️ {summary['Days'].sum()} long duty days across {len(summary)} pilots")
+                st.dataframe(summary, use_container_width=True)
+
+                to_csv_download(summary, "FTL_12hr_duty_summary.csv", key="dl_12hr_summary")
+
+            st.subheader("Detail — Each 12+ hr Duty Day")
+            st.dataframe(long_only, use_container_width=True)
+            to_csv_download(long_only, "FTL_12hr_duty_details.csv", key="dl_12hr_details")
+
 
 with tab_debug:
     st.caption("If you want coverage/normalized tables in this version's Debug tab, I can add them.")
