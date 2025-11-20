@@ -108,6 +108,28 @@ def _get_visibility_highlight(value) -> Optional[str]:
     return None
 
 
+def _get_wind_highlight(value) -> Optional[str]:
+    if value in (None, ""):
+        return None
+
+    try:
+        text = str(value)
+    except Exception:
+        return None
+
+    speed_matches = re.findall(r"\b(\d+)\s*KTS?\b", text, flags=re.IGNORECASE)
+    gust_matches = re.findall(r"\bG\s*(\d+)(?:\s*KTS?)?\b", text, flags=re.IGNORECASE)
+
+    try:
+        speeds = [int(val) for val in (*speed_matches, *gust_matches)]
+    except ValueError:
+        return None
+
+    if any(speed >= 30 for speed in speeds):
+        return "red"
+    return None
+
+
 def _parse_ceiling_value(value) -> Optional[float]:
     if value in (None, "", [], "M"):
         return None
@@ -295,6 +317,8 @@ def _determine_highlight_level(label: str, value: Any) -> Optional[str]:
     highlight_level: Optional[str] = None
     if "visibility" in label_lower:
         highlight_level = _get_visibility_highlight(value)
+    if not highlight_level and "wind" in label_lower:
+        highlight_level = _get_wind_highlight(value)
     if not highlight_level and ("ceiling" in label_lower or "cloud" in label_lower):
         highlight_level = _get_ceiling_highlight(value)
     if not highlight_level and "weather" in label_lower and _should_highlight_weather(value):
@@ -368,5 +392,6 @@ __all__ = [
     "_determine_highlight_level",
     "_combine_highlight_levels",
     "_format_clouds_value",
+    "_get_wind_highlight",
 ]
 
