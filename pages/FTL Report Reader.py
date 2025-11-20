@@ -1262,4 +1262,19 @@ with tab_ft_exceed:
 
 
 with tab_debug:
-    st.caption("If you want coverage/normalized tables in this version's Debug tab, I can add them.")
+    st.header("FTL Debug — Inspect Raw Columns E–O")
+    
+    if ftl_df is not None:
+        df = ftl_df.copy()
+    
+        # Show the raw columns E through O
+        detail = df.iloc[:, 4:15].copy()  # Columns E–O
+        detail["raw_name"] = df["Name"]   # Add raw name for context
+    
+        st.write("### First 50 rows (Columns E–O + raw Name)")
+        st.dataframe(detail.head(50), use_container_width=True)
+    
+        # Show rows where column O is non-empty
+        st.write("### Rows where Column O (Flight Time) is non-empty")
+        mask_ft = df.iloc[:, 14].astype(str).str.strip() != ""
+        st.dataframe(df[mask_ft].iloc[:, :15], use_container_width=True)
