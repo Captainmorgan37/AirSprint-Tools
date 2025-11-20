@@ -554,11 +554,12 @@ dv_df = try_read_csv(dv_file) if dv_file else None
 # -----------------------------
 # Tabs
 # -----------------------------
-tab_results, tab_rest_duty, tab_policy, tab_min_rest, tab_debug = st.tabs([
+tab_results, tab_rest_duty, tab_policy, tab_min_rest, tab_ft_exceed, tab_debug = st.tabs([
     "Results (FTL)",
     "Rest Days 12+ hr Duty (FTL)",
     "7d/30d Policy (Duty Violation)",
-    "Min Rest Counter",
+    "Total 12+ Hour Duty Days",
+    "Flight Time Threshold Checker",
     "Debug",
 ])
 
