@@ -1262,6 +1262,7 @@ with tab_ft_exceed:
 
 
 with tab_debug:
+    st.write("Debug tab is working.")
     st.header("FTL Debug — Inspect Raw Columns E–O")
 
     # Load the same FTL CSV as the other tabs
