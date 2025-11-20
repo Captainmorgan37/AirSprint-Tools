@@ -607,7 +607,7 @@ tab_results, tab_rest_duty, tab_policy, tab_min_rest, tab_ft_exceed, tab_debug =
     "7d/30d Policy (Duty Violation)",
     "Total 12+ Hour Duty Days",
     "Flight Time Threshold Checker",
-    "Debug",
+    "Debug"
 ])
 
 with tab_results:
