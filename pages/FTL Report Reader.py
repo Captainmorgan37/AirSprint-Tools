@@ -1143,11 +1143,9 @@ with tab_min_rest:
         st.dataframe(detail, use_container_width=True)
         to_csv_download(detail, "FTL_12hr_duty_details.csv", key="dl_12hr_details")
 
-# ---------------------------------------------
+# ============================================================
 # TAB: Flight Time Threshold Checker
-# ---------------------------------------------
-tab_ft_exceed = st.tabs(["Flight Time Threshold Checker"])[0]
-
+# ============================================================
 with tab_ft_exceed:
     st.header("Flight Time Threshold Checker")
 
@@ -1157,19 +1155,17 @@ with tab_ft_exceed:
 
     df = ftl_df.copy()
 
-    # Required column names
-    pilot_col = "Name"        # Confirmed by you
-    flight_time_col = None    # Will find column O
+    # ---------------------------------------------------------
+    # Column mapping
+    # ---------------------------------------------------------
+    pilot_col = "Name"
 
-    # -----------------------------------------------------
-    # Identify the Flight Time column (Column O)
-    # -----------------------------------------------------
-    # Column O is the 15th column (0-indexed → index 14)
-    if len(df.columns) >= 15:
-        flight_time_col = df.columns[14]  # Column O
-    else:
-        st.error("Could not locate Column O (Flight Time). The uploaded FTL file may not match the expected format.")
+    # Column O should contain Flight Time totals
+    if len(df.columns) < 15:
+        st.error("Could not locate Column O (Flight Time). The FTL file format may be incorrect.")
         st.stop()
+
+    flight_time_col = df.columns[14]  # 0-indexed → Column O
 
     st.subheader("Column Mapping")
     c1, c2 = st.columns(2)
@@ -1186,9 +1182,9 @@ with tab_ft_exceed:
             index=list(df.columns).index(flight_time_col) if flight_time_col in df.columns else 0
         )
 
-    # -----------------------------------------------------
+    # ---------------------------------------------------------
     # Threshold selector
-    # -----------------------------------------------------
+    # ---------------------------------------------------------
     threshold = st.number_input(
         "Minimum Flight Time to Flag (hours)",
         min_value=0.0,
@@ -1198,52 +1194,47 @@ with tab_ft_exceed:
         format="%.2f"
     )
 
-    # -----------------------------------------------------
-    # Identify summary rows (end-of-pilot blocks)
-    #
-    # Logic:
-    # A pilot block ends when Name becomes NaN/empty
-    # AND flight time column has a numeric value
-    # -----------------------------------------------------
+    # ---------------------------------------------------------
+    # Preprocess
+    # ---------------------------------------------------------
+    # Forward-fill the pilot names (FL3XX leaves blanks under each pilot)
     df["PilotName"] = df[pilot_col].ffill()
 
-    # Parse flight time
+    # Parse durations (robust Excel fixes included)
     df["FlightTimeHours"] = df[flight_time_col].map(parse_duration_to_hours)
 
-    # A summary row:
-    # - Name column is blank
-    # - FlightTimeHours is not NaN
-    # - Next row has a new pilot name or file ends
-    # Identify summary rows based on real FL3XX structure:
-    # - Name is NOT blank
+    # ---------------------------------------------------------
+    # IDENTIFY SUMMARY ROWS
+    # Correct logic:
     # - Flight Time column has a value
-    # - Columns E–N are blank (these hold leg-level data normally)
-    blank_cols = df.columns[4:14]  # E through N
-    
+    # - All flight-leg columns E–N are blank (columns 4 through 13)
+    # ---------------------------------------------------------
+    detail_cols = df.columns[4:14]  # E through N inclusive
+
     df["IsSummaryRow"] = (
         df["FlightTimeHours"].notna() &
-        df[blank_cols].astype(str).apply(lambda row: all(row.str.strip() == ""), axis=1)
+        df[detail_cols].astype(str).apply(lambda row: all(x.strip() == "" for x in row), axis=1)
     )
 
-    # Extract summary rows
     summary_rows = df[df["IsSummaryRow"]].copy()
 
     if summary_rows.empty:
         st.warning("No pilot summary rows detected. Check whether column O contains total flight time entries.")
         st.stop()
 
-    # -----------------------------------------------------
-    # Clean up pilot blocks
-    # -----------------------------------------------------
+    # ---------------------------------------------------------
+    # Build clean summary table
+    # ---------------------------------------------------------
     summary_rows = summary_rows[["PilotName", "FlightTimeHours"]].copy()
     summary_rows["FlightTimeHours"] = summary_rows["FlightTimeHours"].round(2)
 
-    # -----------------------------------------------------
-    # Flag pilots exceeding threshold
-    # -----------------------------------------------------
+    # ---------------------------------------------------------
+    # Pilots exceeding threshold
+    # ---------------------------------------------------------
     exceed = summary_rows[summary_rows["FlightTimeHours"] >= threshold].copy()
 
     st.subheader("Pilots Exceeding Flight Time Threshold")
+
     if exceed.empty:
         st.success(f"No pilots exceeded {threshold:.2f} hours of flight time.")
     else:
@@ -1256,9 +1247,9 @@ with tab_ft_exceed:
             key="dl_ft_exceed"
         )
 
-    # -----------------------------------------------------
-    # Detail table (all pilots)
-    # -----------------------------------------------------
+    # ---------------------------------------------------------
+    # Full summary
+    # ---------------------------------------------------------
     st.subheader("All Pilot Flight Time Totals")
     st.dataframe(summary_rows, use_container_width=True)
 
@@ -1267,6 +1258,7 @@ with tab_ft_exceed:
         "FTL_flight_time_totals_all_pilots.csv",
         key="dl_ft_all"
     )
+
 
 
 with tab_debug:
