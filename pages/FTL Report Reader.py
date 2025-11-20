@@ -659,11 +659,22 @@ with tab_rest_duty:
                     index=columns.index(rest_default) if rest_default in columns else 0,
                 )
             with col2:
+                # Prefer explicit FL3XX name if present
+                preferred_duty = None
+                for col in df.columns:
+                    if re.search(r"flight\s*duty\s*period.*\(act\)", col, re.I):
+                        preferred_duty = col
+                        break
+                
+                # If found, override autodetected duty_col for the default index
+                default_duty = preferred_duty or duty_col
+                
                 duty_col = st.selectbox(
                     "Duty length column (hours)",
-                    columns,
-                    index=columns.index(duty_default) if duty_default in columns else 0,
+                    df.columns,
+                    index=list(df.columns).index(default_duty) if default_duty in df.columns else 0
                 )
+
             with col3:
                 crew_col = st.selectbox(
                     "Crewmember column",
@@ -1084,6 +1095,124 @@ with tab_min_rest:
         st.dataframe(detail, use_container_width=True)
         to_csv_download(detail, "FTL_12hr_duty_details.csv", key="dl_12hr_details")
 
+# ---------------------------------------------
+# TAB: Flight Time Threshold Checker
+# ---------------------------------------------
+tab_ft_exceed = st.tabs(["Flight Time Threshold Checker"])[0]
+
+with tab_ft_exceed:
+    st.header("Flight Time Threshold Checker")
+
+    if ftl_df is None:
+        st.info("Upload the FTL CSV in the sidebar to run this check.")
+        st.stop()
+
+    df = ftl_df.copy()
+
+    # Required column names
+    pilot_col = "Name"        # Confirmed by you
+    flight_time_col = None    # Will find column O
+
+    # -----------------------------------------------------
+    # Identify the Flight Time column (Column O)
+    # -----------------------------------------------------
+    # Column O is the 15th column (0-indexed → index 14)
+    if len(df.columns) >= 15:
+        flight_time_col = df.columns[14]  # Column O
+    else:
+        st.error("Could not locate Column O (Flight Time). The uploaded FTL file may not match the expected format.")
+        st.stop()
+
+    st.subheader("Column Mapping")
+    c1, c2 = st.columns(2)
+    with c1:
+        pilot_col = st.selectbox(
+            "Pilot / Name column",
+            df.columns,
+            index=list(df.columns).index(pilot_col) if pilot_col in df.columns else 0
+        )
+    with c2:
+        flight_time_col = st.selectbox(
+            "Flight Time column (Column O)",
+            df.columns,
+            index=list(df.columns).index(flight_time_col) if flight_time_col in df.columns else 0
+        )
+
+    # -----------------------------------------------------
+    # Threshold selector
+    # -----------------------------------------------------
+    threshold = st.number_input(
+        "Minimum Flight Time to Flag (hours)",
+        min_value=0.0,
+        max_value=200.0,
+        value=64.0,
+        step=0.5,
+        format="%.2f"
+    )
+
+    # -----------------------------------------------------
+    # Identify summary rows (end-of-pilot blocks)
+    #
+    # Logic:
+    # A pilot block ends when Name becomes NaN/empty
+    # AND flight time column has a numeric value
+    # -----------------------------------------------------
+    df["PilotName"] = df[pilot_col].ffill()
+
+    # Parse flight time
+    df["FlightTimeHours"] = df[flight_time_col].map(parse_duration_to_hours)
+
+    # A summary row:
+    # - Name column is blank
+    # - FlightTimeHours is not NaN
+    # - Next row has a new pilot name or file ends
+    df["IsSummaryRow"] = (
+        df[pilot_col].astype(str).str.strip().eq("") &
+        df["FlightTimeHours"].notna()
+    )
+
+    # Extract summary rows
+    summary_rows = df[df["IsSummaryRow"]].copy()
+
+    if summary_rows.empty:
+        st.warning("No pilot summary rows detected. Check whether column O contains total flight time entries.")
+        st.stop()
+
+    # -----------------------------------------------------
+    # Clean up pilot blocks
+    # -----------------------------------------------------
+    summary_rows = summary_rows[["PilotName", "FlightTimeHours"]].copy()
+    summary_rows["FlightTimeHours"] = summary_rows["FlightTimeHours"].round(2)
+
+    # -----------------------------------------------------
+    # Flag pilots exceeding threshold
+    # -----------------------------------------------------
+    exceed = summary_rows[summary_rows["FlightTimeHours"] >= threshold].copy()
+
+    st.subheader("Pilots Exceeding Flight Time Threshold")
+    if exceed.empty:
+        st.success(f"No pilots exceeded {threshold:.2f} hours of flight time.")
+    else:
+        st.error(f"⚠️ {len(exceed)} pilot(s) exceeded {threshold:.2f} hours.")
+        st.dataframe(exceed, use_container_width=True)
+
+        to_csv_download(
+            exceed,
+            f"FTL_flight_time_exceeding_{threshold:.2f}_hours.csv",
+            key="dl_ft_exceed"
+        )
+
+    # -----------------------------------------------------
+    # Detail table (all pilots)
+    # -----------------------------------------------------
+    st.subheader("All Pilot Flight Time Totals")
+    st.dataframe(summary_rows, use_container_width=True)
+
+    to_csv_download(
+        summary_rows,
+        "FTL_flight_time_totals_all_pilots.csv",
+        key="dl_ft_all"
+    )
 
 
 with tab_debug:
