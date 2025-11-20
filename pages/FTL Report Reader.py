@@ -1263,18 +1263,32 @@ with tab_ft_exceed:
 
 with tab_debug:
     st.header("FTL Debug — Inspect Raw Columns E–O")
-    
-    if ftl_df is not None:
-        df = ftl_df.copy()
-    
-        # Show the raw columns E through O
-        detail = df.iloc[:, 4:15].copy()  # Columns E–O
-        detail["raw_name"] = df["Name"]   # Add raw name for context
-    
-        st.write("### First 50 rows (Columns E–O + raw Name)")
-        st.dataframe(detail.head(50), use_container_width=True)
-    
-        # Show rows where column O is non-empty
-        st.write("### Rows where Column O (Flight Time) is non-empty")
-        mask_ft = df.iloc[:, 14].astype(str).str.strip() != ""
-        st.dataframe(df[mask_ft].iloc[:, :15], use_container_width=True)
+
+    # Load the same FTL CSV as the other tabs
+    df = st.session_state.get("ftl_df")
+
+    if df is None:
+        st.info("Upload the FTL CSV to inspect its raw structure.")
+        st.stop()
+
+    df = df.copy()
+
+    # ------------------------------------------------
+    # Show raw columns E–O with Name for reference
+    # ------------------------------------------------
+    st.write("### First 50 rows (Columns E–O + raw Name)")
+
+    detail = df.iloc[:, 4:15].copy()   # Columns E through O
+    detail["raw_name"] = df.iloc[:, 0] # Column A (Name)
+
+    st.dataframe(detail.head(50), use_container_width=True)
+
+    # ------------------------------------------------
+    # Show rows where Column O contains flight time
+    # ------------------------------------------------
+    st.write("### Rows where Column O (Flight Time) is non-empty")
+
+    col_O = df.columns[14]  # Column O explicitly
+
+    mask_ft = df[col_O].astype(str).str.strip() != ""
+    st.dataframe(df[mask_ft].iloc[:, :15], use_container_width=True)
