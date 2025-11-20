@@ -1178,10 +1178,9 @@ with tab_ft_exceed:
     # ---------------------------------------------------------
     detail_cols = df.columns[4:14]  # E through N inclusive
 
-    df["IsSummaryRow"] = (
-        df["FlightTimeHours"].notna() &
-        df[detail_cols].astype(str).apply(lambda row: all(x.strip() == "" for x in row), axis=1)
-    )
+    detail_blank = df[detail_cols].applymap(lambda x: pd.isna(x) or str(x).strip() == "")
+
+    df["IsSummaryRow"] = df["FlightTimeHours"].notna() & detail_blank.all(axis=1)
 
     summary_rows = df[df["IsSummaryRow"]].copy()
 
