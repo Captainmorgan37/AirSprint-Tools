@@ -598,6 +598,15 @@ dv_file = st.sidebar.file_uploader("Duty Violation CSV (for 7d/30d Policy + deta
 ftl_df = try_read_csv(ftl_file) if ftl_file else None
 dv_df = try_read_csv(dv_file) if dv_file else None
 
+# Store uploaded dataframes so all tabs (including Debug) can access them
+if ftl_df is not None:
+    st.session_state["ftl_df"] = ftl_df
+
+if dv_df is not None:
+    st.session_state["dv_df"] = dv_df
+
+
+
 # -----------------------------
 # Tabs
 # -----------------------------
