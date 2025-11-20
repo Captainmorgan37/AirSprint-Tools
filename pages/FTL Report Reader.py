@@ -929,7 +929,7 @@ with tab_min_rest:
         df = ftl_df.copy()
 
         # --------------------------------------
-        # Column auto-detect
+        # Auto-detect columns
         # --------------------------------------
         pilot_col, date_col = infer_common_columns(df.copy())
         duty_col = infer_duty_column(df.copy())
@@ -959,34 +959,37 @@ with tab_min_rest:
             )
         with c4:
             rest_marker_col = st.selectbox(
-                "Rest-marker column (end of duty)",
+                "Rest-marker column (indicates END of a duty day)",
                 df.columns,
                 index=list(df.columns).index(rest_marker_col) if rest_marker_col in df.columns else 0
             )
 
         # --------------------------------------
-        # Rebuild duty days using rest marker
+        # Parse values
         # --------------------------------------
         work = df.copy()
         work[pilot_col] = work[pilot_col].ffill()
 
-        # Parse duty hours
+        # Duty hours
         work["DutyHours"] = work[duty_col].map(parse_duration_to_hours)
 
-        # Parse base date and begin columns
+        # Build a date series combining the date column + begin/report times
         date_series = _coalesce_datetime_columns(work, date_col, begin_cols)
         date_series = _normalize_dates(date_series)
         work["DutyDate"] = date_series
 
-        # Rest marker extraction
+        # Boundary detection
         work["BoundaryRest"] = work[rest_marker_col].astype(str).str.contains("rest", case=False, na=False)
 
+        # Row ordering for grouping
+        work["__row_order"] = np.arange(len(work))
+
         # --------------------------------------
-        # Build duty blocks per pilot
+        # Reconstruct duty days using the rest boundary
         # --------------------------------------
         records = []
         for pilot, sub in work.groupby(pilot_col):
-            sub = sub.sort_values(["DutyDate", "__row_order"] if "__row_order" in sub.columns else "DutyDate")
+            sub = sub.sort_values(["DutyDate", "__row_order"])
 
             current_date = None
             collected_hours = []
@@ -1002,7 +1005,7 @@ with tab_min_rest:
                 if not pd.isna(row["DutyHours"]):
                     collected_hours.append(row["DutyHours"])
 
-                # If boundary found => finalize duty day
+                # When boundary line hits → close out duty day
                 if row["BoundaryRest"]:
                     if collected_hours:
                         records.append({
@@ -1013,7 +1016,7 @@ with tab_min_rest:
                     current_date = None
                     collected_hours = []
 
-            # Final open block (no rest marked)
+            # End-of-file open block (if no final rest cell)
             if current_date is not None and collected_hours:
                 records.append({
                     "Pilot": pilot,
@@ -1024,35 +1027,63 @@ with tab_min_rest:
         duty_days = pd.DataFrame(records)
 
         if duty_days.empty:
-            st.warning("No interpretable duty days found using the selected columns.")
-        else:
-            duty_days["Date"] = duty_days["Date"].dt.date
-            duty_days["DutyHours"] = duty_days["DutyHours"].round(2)
-            duty_days["LongDuty"] = duty_days["DutyHours"] >= 12.0
+            st.warning("No valid duty days could be reconstructed with the selected columns.")
+            st.stop()
 
-            long_only = duty_days[duty_days["LongDuty"]]
+        # Normalize and filter long duty days
+        duty_days["Date"] = duty_days["Date"].dt.date
+        duty_days["DutyHours"] = duty_days["DutyHours"].round(2)
+        duty_days["LongDuty"] = duty_days["DutyHours"] >= 12.0
 
-            st.subheader("Summary — Days with Duty ≥ 12.0 hr")
-            if long_only.empty:
-                st.success("No 12+ hr duty days detected in this period.")
-            else:
-                summary = long_only.groupby("Pilot").agg(
+        long_only = duty_days[duty_days["LongDuty"]].copy()
+
+        # --------------------------------------
+        # Deduplicate: one row per (Pilot, Date), keeping the FINAL/MAX duty hours
+        # --------------------------------------
+        detail = (
+            long_only.sort_values(["Pilot", "Date", "DutyHours"], ascending=[True, True, False])
+                     .groupby(["Pilot", "Date"], as_index=False)
+                     .first()
+        )
+
+        # --------------------------------------
+        # Summary built from DEDUPLICATED rows
+        # --------------------------------------
+        summary = (
+            detail.groupby("Pilot")
+                .agg(
                     Days=("Date", "nunique"),
                     AvgHours=("DutyHours", "mean"),
                     MaxHours=("DutyHours", "max")
-                ).reset_index()
+                )
+                .reset_index()
+        )
 
-                summary["AvgHours"] = summary["AvgHours"].round(2)
-                summary["MaxHours"] = summary["MaxHours"].round(2)
+        summary["AvgHours"] = summary["AvgHours"].round(2)
+        summary["MaxHours"] = summary["MaxHours"].round(2)
 
-                st.error(f"⚠️ {summary['Days'].sum()} long duty days across {len(summary)} pilots")
-                st.dataframe(summary, use_container_width=True)
+        # --------------------------------------
+        # Display Summary
+        # --------------------------------------
+        st.subheader("Summary — Days with Duty ≥ 12.0 hr")
 
-                to_csv_download(summary, "FTL_12hr_duty_summary.csv", key="dl_12hr_summary")
+        if summary.empty:
+            st.success("No pilots have 12+ hr duty days in this period.")
+        else:
+            total_days = summary["Days"].sum()
+            st.error(f"⚠️ {total_days} long duty days across {len(summary)} pilots")
 
-            st.subheader("Detail — Each 12+ hr Duty Day")
-            st.dataframe(long_only, use_container_width=True)
-            to_csv_download(long_only, "FTL_12hr_duty_details.csv", key="dl_12hr_details")
+        st.dataframe(summary, use_container_width=True)
+        to_csv_download(summary, "FTL_12hr_duty_summary.csv", key="dl_12hr_summary")
+
+        # --------------------------------------
+        # Display Detail
+        # --------------------------------------
+        st.subheader("Detail — Each 12+ hr Duty Day (deduplicated)")
+
+        st.dataframe(detail, use_container_width=True)
+        to_csv_download(detail, "FTL_12hr_duty_details.csv", key="dl_12hr_details")
+
 
 
 with tab_debug:
