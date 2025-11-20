@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Mapping, Optional, cast
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, cast
 
 import streamlit as st
 
 from flight_leg_utils import FlightDataError, build_fl3xx_api_config
 from feasibility import (
     FeasibilityResult,
-    evaluate_flight,
     run_feasibility_for_booking,
     run_feasibility_phase1,
 )
+from feasibility.operational_notes import build_operational_notes_fetcher
 from feasibility.lookup import BookingLookupError
 from feasibility.quote_lookup import (
     QuoteLookupError,
@@ -35,6 +35,31 @@ st.write(
     """
 )
 
+STATUS_EMOJI = {"PASS": "✅", "CAUTION": "⚠️", "FAIL": "❌"}
+SECTION_ORDER = [
+    "suitability",
+    "deice",
+    "customs",
+    "slot_ppr",
+    "osa_ssa",
+    "overflight",
+    "operational_notes",
+]
+SECTION_LABELS = {
+    "suitability": "Suitability",
+    "deice": "Deice",
+    "customs": "Customs",
+    "slot_ppr": "Slot / PPR",
+    "osa_ssa": "OSA / SSA",
+    "overflight": "Overflight",
+    "operational_notes": "Other Operational Notes",
+}
+KEY_ISSUE_SECTIONS = {"customs", "deice", "overflight"}
+
+
+def status_icon(status: str) -> str:
+    return STATUS_EMOJI.get(status, "❔")
+
 
 @st.cache_data(show_spinner=False)
 def _load_fl3xx_settings() -> Dict[str, Any]:
@@ -49,6 +74,25 @@ def _load_fl3xx_settings() -> Dict[str, Any]:
     return {}
 
 
+def _build_operational_notes_fetcher() -> Optional[
+    Callable[[str, Optional[str]], Sequence[Mapping[str, Any]]]
+]:
+    config = st.session_state.get("feasibility_fl3xx_config")
+    if config is None:
+        settings = _load_fl3xx_settings()
+        if not settings:
+            return None
+        try:
+            config = build_fl3xx_api_config(dict(settings))
+        except FlightDataError:
+            return None
+        st.session_state["feasibility_fl3xx_config"] = config
+    try:
+        return build_operational_notes_fetcher(config)
+    except Exception:
+        return None
+
+
 def _run_feasibility(booking_identifier: str) -> Optional[FeasibilityResult]:
     if not booking_identifier:
         st.warning("Enter a booking identifier to continue.")
@@ -60,6 +104,7 @@ def _run_feasibility(booking_identifier: str) -> Optional[FeasibilityResult]:
     except FlightDataError as exc:
         st.error(str(exc))
         return None
+    st.session_state["feasibility_fl3xx_config"] = config
 
     cache = st.session_state.setdefault("feasibility_lookup_cache", {})
     with st.spinner("Fetching flight and running feasibility checks…"):
@@ -85,6 +130,7 @@ def _load_quote_options(quote_id: str) -> list[Dict[str, Any]]:
     except FlightDataError as exc:
         st.error(str(exc))
         return []
+    st.session_state["feasibility_fl3xx_config"] = config
 
     with st.spinner("Fetching quote and legs from FL3XX…"):
         try:
@@ -101,19 +147,14 @@ def _load_quote_options(quote_id: str) -> list[Dict[str, Any]]:
     return options
 
 
-def _run_quote_leg(flight: Mapping[str, Any]) -> Optional[FeasibilityResult]:
-    with st.spinner("Running feasibility checks for selected quote leg…"):
-        try:
-            return evaluate_flight(flight)
-        except Exception as exc:  # pragma: no cover - Streamlit safety net
-            st.exception(exc)
-            return None
-
-
 def _run_full_quote_day(quote: Mapping[str, Any]) -> Optional[FullFeasibilityResult]:
+    request_payload: Dict[str, Any] = {"quote": quote}
+    fetcher = _build_operational_notes_fetcher()
+    if fetcher:
+        request_payload["operational_notes_fetcher"] = fetcher
     with st.spinner("Running feasibility checks for entire quote day…"):
         try:
-            return run_feasibility_phase1({"quote": quote})
+            return run_feasibility_phase1(request_payload)
         except Exception as exc:  # pragma: no cover - UI safeguard
             st.exception(exc)
             return None
@@ -126,28 +167,344 @@ def _format_minutes(total_minutes: Optional[int]) -> str:
     return f"{hours:d}h {minutes:02d}m"
 
 
-def _render_leg_side(label: str, side: Mapping[str, Any]) -> None:
-    st.markdown(f"**{label} {side.get('icao', '???')}**")
-    category_labels = {
-        "suitability": "Suitability",
-        "deice": "Deice",
-        "customs": "Customs",
-        "slot_ppr": "Slot / PPR",
-        "osa_ssa": "OSA / SSA",
-        "overflight": "Overflight",
-        "operational_notes": "Operational Notes",
-    }
-    for key, display in category_labels.items():
-        category = side.get(key) if isinstance(side, Mapping) else None
-        if not isinstance(category, Mapping):
+def _format_note_text(note: Any) -> str:
+    if isinstance(note, str):
+        return note.strip()
+    if isinstance(note, Mapping):
+        for key in ("note", "body", "title", "category", "type"):
+            value = note.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return str(note)
+    if note is None:
+        return ""
+    return str(note)
+
+
+def _format_hours_entry(entry: Mapping[str, Any]) -> Optional[str]:
+    start = str(entry.get("start") or entry.get("closed_from") or "").strip()
+    end = str(entry.get("end") or entry.get("closed_to") or "").strip()
+    days_value = entry.get("days")
+    days: list[str] = []
+    if isinstance(days_value, Sequence) and not isinstance(days_value, (str, bytes)):
+        for value in days_value:
+            if isinstance(value, str) and value.strip() and value.strip().lower() != "unknown":
+                days.append(value.strip())
+    hours = f"{start}-{end}" if start and end else start or end
+    if days and hours:
+        return f"{'/'.join(days)} {hours}"
+    if hours:
+        return hours
+    if days:
+        return "/".join(days)
+    return None
+
+
+def _format_slot_window(entry: Mapping[str, Any]) -> Optional[str]:
+    days_value = entry.get("days")
+    days: list[str] = []
+    if isinstance(days_value, Sequence) and not isinstance(days_value, (str, bytes)):
+        for value in days_value:
+            if isinstance(value, str) and value.strip():
+                days.append(value.strip())
+    start = str(entry.get("start") or "").strip()
+    end = str(entry.get("end") or "").strip()
+    if not start and not end and not days:
+        return None
+    window = f"{start}-{end}" if start and end else start or end or ""
+    if days and window:
+        return f"{'/'.join(days)} {window}"
+    if days:
+        return "/".join(days)
+    return window or None
+
+
+def _explode_note_text(text: str) -> list[str]:
+    normalized = text.replace("•", "\n")
+    lines: list[str] = []
+    for chunk in normalized.splitlines():
+        cleaned = chunk.strip(" -•\t")
+        if cleaned:
+            lines.append(cleaned)
+    return lines
+
+
+def _normalize_entry(entry: str) -> str:
+    return " ".join(entry.split()).casefold()
+
+
+def _collect_entries(values: Any, *, explode: bool = False) -> list[str]:
+    entries: list[str] = []
+    seen: set[str] = set()
+    if isinstance(values, Sequence) and not isinstance(values, (str, bytes)):
+        for value in values:
+            if not isinstance(value, str):
+                continue
+            if explode:
+                exploded = _explode_note_text(value)
+                for entry in exploded:
+                    key = _normalize_entry(entry)
+                    if key and key not in seen:
+                        seen.add(key)
+                        entries.append(entry)
+            else:
+                cleaned = value.strip()
+                key = _normalize_entry(cleaned)
+                if cleaned and key not in seen:
+                    seen.add(key)
+                    entries.append(cleaned)
+    return entries
+
+
+def _render_bullet_section(title: str, lines: Sequence[str]) -> None:
+    entries: list[str] = []
+    seen: set[str] = set()
+    for line in lines:
+        if not isinstance(line, str):
             continue
-        status = category.get("status", "PASS")
-        summary = category.get("summary") or status
-        issues = category.get("issues") or []
-        details = summary
+        cleaned = line.strip()
+        key = _normalize_entry(cleaned)
+        if not cleaned or key in seen:
+            continue
+        seen.add(key)
+        entries.append(cleaned)
+    if not entries:
+        return
+    st.markdown(f"**{title}**")
+    for entry in entries:
+        st.markdown(f"- {entry}")
+
+
+def _render_customs_details(
+    parsed: Mapping[str, Any] | None, *, planned_time_local: Optional[str] = None
+) -> None:
+    if not isinstance(parsed, Mapping):
+        return
+    if not parsed.get("raw_notes"):
+        return
+    summary_lines: list[str] = []
+    if planned_time_local:
+        summary_lines.append(f"Planned arrival: {planned_time_local}")
+    hours_entries: list[str] = []
+    for entry in parsed.get("customs_hours", []):
+        if isinstance(entry, Mapping):
+            formatted = _format_hours_entry(entry)
+            if formatted:
+                hours_entries.append(formatted)
+    if hours_entries:
+        summary_lines.append(f"Hours: {', '.join(hours_entries)} (local)")
+    if parsed.get("customs_afterhours_available"):
+        detail = "After-hours available"
+        requirements = _collect_entries(parsed.get("customs_afterhours_requirements"), explode=True)
+        if requirements:
+            detail += f" — {'; '.join(requirements)}"
+        summary_lines.append(detail)
+    notice_bits: list[str] = []
+    if parsed.get("customs_prior_notice_hours"):
+        notice_bits.append(f"{parsed['customs_prior_notice_hours']}h notice")
+    if parsed.get("customs_prior_notice_days"):
+        notice_bits.append(f"{parsed['customs_prior_notice_days']} day notice")
+    if notice_bits:
+        summary_lines.append(f"Prior notice: {', '.join(notice_bits)}")
+    if parsed.get("canpass_only"):
+        summary_lines.append("CANPASS arrivals only")
+    if parsed.get("location_to_clear"):
+        summary_lines.append(f"Clear at {parsed['location_to_clear']}")
+    contact_notes = _collect_entries(parsed.get("customs_contact_notes"), explode=True)
+    if contact_notes:
+        summary_lines.append("Contact customs before arrival")
+    _render_bullet_section("Customs Intel", summary_lines)
+    _render_bullet_section("Contact Instructions", contact_notes)
+    _render_bullet_section(
+        "Passenger Requirements",
+        _collect_entries(parsed.get("pax_requirements"), explode=True),
+    )
+    _render_bullet_section(
+        "Crew Requirements",
+        _collect_entries(parsed.get("crew_requirements"), explode=True),
+    )
+    _render_bullet_section(
+        "Additional Customs Notes",
+        _collect_entries(parsed.get("general_customs_notes"), explode=True),
+    )
+
+
+def _render_operational_restrictions(parsed: Mapping[str, Any] | None) -> None:
+    if not isinstance(parsed, Mapping):
+        return
+    if not parsed.get("raw_notes"):
+        return
+    summary_lines: list[str] = []
+    if parsed.get("slot_required"):
+        lead: list[str] = []
+        if parsed.get("slot_lead_days"):
+            lead.append(f"{parsed['slot_lead_days']} day lead")
+        if parsed.get("slot_lead_hours"):
+            lead.append(f"{parsed['slot_lead_hours']} hour lead")
+        detail = "Slot required"
+        if lead:
+            detail += f" ({', '.join(lead)})"
+        summary_lines.append(detail)
+    if parsed.get("slot_time_windows"):
+        windows: list[str] = []
+        for entry in parsed.get("slot_time_windows", []):
+            if isinstance(entry, Mapping):
+                formatted = _format_slot_window(entry)
+                if formatted:
+                    windows.append(formatted)
+        if windows:
+            summary_lines.append(f"Slot windows: {', '.join(windows)}")
+    if parsed.get("ppr_required"):
+        lead: list[str] = []
+        if parsed.get("ppr_lead_days"):
+            lead.append(f"{parsed['ppr_lead_days']} day notice")
+        if parsed.get("ppr_lead_hours"):
+            lead.append(f"{parsed['ppr_lead_hours']} hour notice")
+        detail = "PPR required"
+        if lead:
+            detail += f" ({', '.join(lead)})"
+        summary_lines.append(detail)
+    if parsed.get("deice_unavailable"):
+        summary_lines.append("Deice NOT available per notes")
+    elif parsed.get("deice_limited"):
+        summary_lines.append("Deice limited in notes")
+    if parsed.get("winter_sensitivity"):
+        summary_lines.append("Winter sensitivity / contamination risk")
+    if parsed.get("fuel_available") is False:
+        summary_lines.append("Fuel unavailable per notes")
+    if parsed.get("night_ops_allowed") is False:
+        summary_lines.append("Night operations prohibited")
+    if parsed.get("curfew"):
+        curfew = parsed.get("curfew")
+        if isinstance(curfew, Mapping):
+            start = curfew.get("from") or curfew.get("start") or curfew.get("closed_from")
+            end = curfew.get("to") or curfew.get("end") or curfew.get("closed_to")
+            window = f"{start}-{end}" if start and end else start or end or "in effect"
+            summary_lines.append(f"Curfew: {window}")
+        else:
+            summary_lines.append("Curfew in effect")
+    hours_entries: list[str] = []
+    for entry in parsed.get("hours_of_operation", []):
+        if isinstance(entry, Mapping):
+            formatted = _format_hours_entry(entry)
+            if formatted:
+                hours_entries.append(formatted)
+    if hours_entries:
+        summary_lines.append(f"Hours: {', '.join(hours_entries)}")
+    _render_bullet_section("Operational Intel", summary_lines)
+    _render_bullet_section("Deice Notes", _collect_entries(parsed.get("deice_notes"), explode=True))
+    _render_bullet_section("Winter Notes", _collect_entries(parsed.get("winter_notes"), explode=True))
+    _render_bullet_section("Slot Notes", _collect_entries(parsed.get("slot_notes"), explode=True))
+    _render_bullet_section("PPR Notes", _collect_entries(parsed.get("ppr_notes"), explode=True))
+    _render_bullet_section("Hours / Curfew Notes", _collect_entries(parsed.get("hour_notes"), explode=True))
+    _render_bullet_section(
+        "Runway Limits",
+        _collect_entries(parsed.get("runway_limitations"), explode=True),
+    )
+    _render_bullet_section(
+        "Aircraft Type Limits",
+        _collect_entries(parsed.get("aircraft_type_limits"), explode=True),
+    )
+    _render_bullet_section(
+        "Other Operational Restrictions",
+        _collect_entries(parsed.get("generic_restrictions"), explode=True),
+    )
+
+
+def _render_category_block(label: str, category: Mapping[str, Any]) -> None:
+    status = str(category.get("status", "PASS"))
+    summary = category.get("summary") or status
+    st.markdown(f"**{label}:** {status_icon(status)} {summary}")
+    issues = [str(issue) for issue in category.get("issues", []) if issue]
+    if issues:
+        with st.expander(f"{label} details", expanded=status != "PASS"):
+            for issue in issues:
+                st.markdown(f"- {issue}")
+
+
+def _render_aircraft_category(category: Mapping[str, Any] | None) -> None:
+    if not isinstance(category, Mapping):
+        return
+    status = str(category.get("status", "PASS"))
+    summary = category.get("summary") or status
+    header = f"{status_icon(status)} Aircraft – {summary}"
+    issues = [str(issue) for issue in category.get("issues", []) if issue]
+    with st.expander(header, expanded=status != "PASS"):
+        st.write(f"Status: **{status}**")
         if issues:
-            details = f"{details} — {', '.join(str(item) for item in issues)}"
-        st.write(f"- {display}: {details} ({status})")
+            for issue in issues:
+                st.markdown(f"- {issue}")
+        else:
+            st.write("No issues recorded.")
+
+
+def _render_leg_side(label: str, side: Mapping[str, Any]) -> None:
+    icao = side.get("icao", "???") if isinstance(side, Mapping) else "???"
+    st.markdown(f"**{label} {icao}**")
+    planned_time_local = None
+    if label.lower() == "arrival" and isinstance(side, Mapping):
+        planned_value = side.get("planned_time_local")
+        if planned_value:
+            planned_time_local = str(planned_value)
+    for key in SECTION_ORDER:
+        display = SECTION_LABELS.get(key, key.title())
+        category = side.get(key) if isinstance(side, Mapping) else None
+        if isinstance(category, Mapping):
+            _render_category_block(display, category)
+    parsed_customs = side.get("parsed_customs_notes") if isinstance(side, Mapping) else None
+    _render_customs_details(
+        parsed_customs if isinstance(parsed_customs, Mapping) else None,
+        planned_time_local=planned_time_local,
+    )
+    parsed_ops = side.get("parsed_operational_restrictions") if isinstance(side, Mapping) else None
+    _render_operational_restrictions(parsed_ops if isinstance(parsed_ops, Mapping) else None)
+    raw_notes = side.get("raw_operational_notes") if isinstance(side, Mapping) else None
+    if isinstance(raw_notes, Sequence) and not isinstance(raw_notes, (str, bytes)) and raw_notes:
+        with st.expander(f"{label} {icao} raw notes"):
+            for entry in raw_notes:
+                text = _format_note_text(entry)
+                if text:
+                    st.markdown(f"- {text}")
+
+
+def _collect_key_issues(result: Mapping[str, Any]) -> List[str]:
+    issues: List[str] = []
+    duty = result.get("duty") if isinstance(result, Mapping) else None
+    if isinstance(duty, Mapping):
+        duty_status = duty.get("status", "PASS")
+        if duty_status in {"CAUTION", "FAIL"}:
+            summary = duty.get("summary") or f"Duty {duty_status.title()}"
+            issues.append(f"Duty: {summary}")
+
+    legs = result.get("legs") if isinstance(result, Mapping) else None
+    if isinstance(legs, Sequence):
+        for index, leg in enumerate(legs, start=1):
+            if not isinstance(leg, Mapping):
+                continue
+            aircraft = leg.get("aircraft")
+            if isinstance(aircraft, Mapping):
+                status = aircraft.get("status", "PASS")
+                if status in {"CAUTION", "FAIL"}:
+                    summary = aircraft.get("summary") or status
+                    issues.append(f"Leg {index} Aircraft: {summary}")
+            for side_name in ("departure", "arrival"):
+                side = leg.get(side_name)
+                if not isinstance(side, Mapping):
+                    continue
+                icao = side.get("icao", "???")
+                for key in SECTION_ORDER:
+                    category = side.get(key)
+                    if not isinstance(category, Mapping):
+                        continue
+                    status = category.get("status", "PASS")
+                    if status == "PASS":
+                        continue
+                    display = SECTION_LABELS.get(key, key.title())
+                    summary = category.get("summary") or status
+                    label = f"{side_name.title()} {icao} {display}"
+                    if status == "FAIL" or (status == "CAUTION" and key in KEY_ISSUE_SECTIONS):
+                        issues.append(f"{label}: {summary}")
+    return issues
 
 
 def _render_full_quote_result(result: FullFeasibilityResult) -> None:
@@ -167,14 +524,18 @@ def _render_full_quote_result(result: FullFeasibilityResult) -> None:
         formatted = summary.strip().replace("\n", "  \n")
         st.markdown(formatted)
 
-    if result.get("issues"):
-        st.markdown("**Key Issues**")
-        st.markdown("\n".join(f"- {issue}" for issue in result.get("issues", [])))
+    key_issues = _collect_key_issues(result)
+    st.subheader("Key Issues")
+    if key_issues:
+        for issue in key_issues:
+            st.markdown(f"- {issue}")
+    else:
+        st.caption("No customs, deice, duty, or permit cautions detected.")
 
     with st.expander("Duty Day Evaluation", expanded=duty.get("status") != "PASS"):
         status = duty.get("status", "PASS")
         col1, col2, col3 = st.columns(3)
-        col1.metric("Duty Status", status)
+        col1.metric("Duty Status", f"{status_icon(status)} {status}")
         col2.metric("Total Duty", _format_minutes(duty.get("total_duty")))
         col3.metric("Turn Segments", len(duty.get("turn_times", [])))
         st.write(f"- Start: {duty.get('duty_start_local') or 'Unknown'}")
@@ -191,10 +552,24 @@ def _render_full_quote_result(result: FullFeasibilityResult) -> None:
     for index, leg in enumerate(legs, start=1):
         departure = leg.get("departure", {}) if isinstance(leg, Mapping) else {}
         arrival = leg.get("arrival", {}) if isinstance(leg, Mapping) else {}
+        aircraft = leg.get("aircraft") if isinstance(leg, Mapping) else None
         dep_code = departure.get("icao", "???")
         arr_code = arrival.get("icao", "???")
         header = f"Leg {index}: {dep_code} → {arr_code}"
+        if isinstance(aircraft, Mapping):
+            aircraft_status = aircraft.get("status", "PASS")
+            aircraft_summary = aircraft.get("summary") or aircraft_status
+            st.markdown(
+                f"{status_icon(aircraft_status)} Aircraft – {aircraft_summary}"
+            )
         with st.expander(header, expanded=False):
+            if isinstance(aircraft, Mapping):
+                aircraft_status = aircraft.get("status", "PASS")
+                aircraft_summary = aircraft.get("summary") or aircraft_status
+                st.markdown(
+                    f"{status_icon(aircraft_status)} Aircraft – {aircraft_summary}"
+                )
+            _render_aircraft_category(aircraft)
             _render_leg_side("Departure", departure)
             _render_leg_side("Arrival", arrival)
 
@@ -205,7 +580,11 @@ quote_tab, booking_tab = st.tabs(["Quote ID", "Booking Identifier"])
 
 with quote_tab:
     st.subheader("Search via Quote ID")
-    st.caption("Use this to evaluate feasibility before a booking exists.")
+    st.caption(
+        "Use this to evaluate feasibility before a booking exists. The dev engine always runs"
+        " every leg in the quote so you consistently get duty-day coverage; expand the legs"
+        " in the results below for per-segment breakdowns."
+    )
 
     with st.form("quote-form", clear_on_submit=False):
         quote_input = st.text_input("Quote ID", placeholder="e.g. 3621613").strip()
@@ -215,34 +594,18 @@ with quote_tab:
         options = _load_quote_options(quote_input)
         if options:
             st.session_state["feasibility_quote_options"] = options
-            st.session_state["feasibility_quote_leg_index"] = 0
 
     quote_options = st.session_state.get("feasibility_quote_options", [])
     quote_payload = st.session_state.get("feasibility_quote_payload")
 
     if quote_options:
-        option_indices = list(range(len(quote_options)))
-        default_index = min(
-            st.session_state.get("feasibility_quote_leg_index", 0),
-            len(option_indices) - 1,
-        )
-        selected_index = st.selectbox(
-            "Select quote leg",
-            option_indices,
-            format_func=lambda idx: quote_options[idx]["label"],
-            index=default_index,
-            key="feasibility_quote_leg_index",
-        )
-        selected_option = quote_options[selected_index]
-        leg_info = selected_option.get("leg", {})
-        pax = leg_info.get("pax") or "n/a"
-        block = leg_info.get("blockTime") or leg_info.get("flightTime") or "n/a"
-        st.caption(f"PAX: {pax} · Block: {block} minutes")
-
-        if st.button("Run Feasibility for Selected Quote Leg", key="run-quote"):
-            result = _run_quote_leg(selected_option["flight"])
-            if result:
-                st.session_state["feasibility_last_result"] = result
+        st.markdown("**Loaded Legs**")
+        for option in quote_options:
+            leg_info = option.get("leg", {}) if isinstance(option, Mapping) else {}
+            label = option.get("label", "Leg") if isinstance(option, Mapping) else "Leg"
+            pax = leg_info.get("pax") or "n/a"
+            block = leg_info.get("blockTime") or leg_info.get("flightTime") or "n/a"
+            st.caption(f"{label}: PAX {pax} · Block {block} minutes")
     else:
         st.info("Load a quote to view available legs for feasibility analysis.")
 
@@ -258,7 +621,7 @@ with quote_tab:
         st.info("Load a quote to enable multi-leg feasibility checks.")
 
     run_full_quote = st.button(
-        "Run Feasibility for Full Quote Day",
+        "Run Feasibility for Quote (All Legs)",
         key="run-full-quote",
         type="primary",
         disabled=not quote_loaded,
@@ -282,9 +645,6 @@ with booking_tab:
 
 stored_result = st.session_state.get("feasibility_last_result")
 full_quote_result = st.session_state.get("feasibility_last_full_quote_result")
-
-STATUS_EMOJI = {"PASS": "✅", "CAUTION": "⚠️", "FAIL": "❌"}
-
 
 def _render_category(name: str, category) -> None:
     emoji = STATUS_EMOJI.get(category.status, "")
@@ -315,7 +675,7 @@ if stored_result and isinstance(stored_result, FeasibilityResult):
         with st.expander("Source flight payload"):
             st.json(stored_result.flight)
 else:
-    st.info("Select a quote leg or submit a booking identifier to generate a feasibility report.")
+    st.info("Load a quote or submit a booking identifier to generate a feasibility report.")
 
 if isinstance(full_quote_result, Mapping):
     _render_full_quote_result(cast(FullFeasibilityResult, full_quote_result))

@@ -57,6 +57,32 @@ def test_phase1_engine_runs_for_entire_quote() -> None:
     assert result["duty"]["status"] == "PASS"
 
 
+def test_aircraft_endurance_is_evaluated_for_each_leg() -> None:
+    quote = {
+        "bookingIdentifier": "ACFT1",
+        "aircraftObj": {"type": "Citation CJ3+", "category": "LIGHT_JET"},
+        "legs": [
+            {
+                "id": "LEG-1",
+                "departureAirport": "CYYC",
+                "arrivalAirport": "KDEN",
+                "departureDateUTC": "2025-11-19T15:00:00Z",
+                "arrivalDateUTC": "2025-11-19T19:00:00Z",
+                "pax": 8,
+                "blockTime": 240,
+            }
+        ],
+    }
+
+    result = run_feasibility_phase1({"quote": quote, "tz_provider": _tz_provider})
+
+    leg = result["legs"][0]
+    assert leg["aircraft"]["status"] == "FAIL"
+    assert "exceeds pax endurance" in leg["aircraft"]["summary"]
+    assert result["overall_status"] == "FAIL"
+    assert any("Aircraft" in issue for issue in result["issues"])
+
+
 def test_duty_module_flags_extended_day_and_split_window() -> None:
     legs = [
         {

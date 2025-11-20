@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from flight_leg_utils import load_airport_metadata_lookup
 
 from deice_info_helper import has_deice_available
 
+from .airport_module import (
+    AirportFeasibilityResult,
+    build_leg_context_from_flight,
+    evaluate_airport_feasibility_for_leg,
+)
 from .common import (
     OSA_CATEGORY,
     OSA_MIN_GROUND_MINUTES,
@@ -19,7 +23,7 @@ from .common import (
     get_country_for_airport,
 )
 from .data_access import CustomsRule, load_customs_rules
-from .schemas import CategoryResult, CategoryStatus
+from .schemas import CategoryResult, CategoryStatus, combine_statuses
 
 _ALERT_PRIORITY: Mapping[CategoryStatus, int] = {"PASS": 0, "CAUTION": 1, "FAIL": 2}
 
@@ -112,6 +116,22 @@ def evaluate_airport(
 ) -> CategoryResult:
     lookup = airport_lookup or load_airport_metadata_lookup()
     customs = customs_rules or load_customs_rules()
+
+    tz_provider = _get_tz_from_lookup(lookup)
+    leg_context = build_leg_context_from_flight(flight, airport_metadata=lookup)
+    module_result: Optional[AirportFeasibilityResult] = None
+    if leg_context:
+        try:
+            module_result = evaluate_airport_feasibility_for_leg(
+                leg_context,
+                tz_provider=tz_provider,
+                airport_metadata=lookup,
+                customs_rules=customs,
+            )
+        except Exception:
+            module_result = None
+    if module_result:
+        return _summarize_airport_feasibility(module_result)
 
     dep = extract_airport_code(flight, arrival=False)
     arr = extract_airport_code(flight, arrival=True)

@@ -696,12 +696,73 @@ def _format_period_window(period: Dict[str, Any]) -> str:
     return f"{start_text} – {end_text}"
 
 
+def _format_detail_entry(
+    entry: Mapping[str, Any]
+) -> Optional[Tuple[str, str, Optional[str]]]:
+    label = entry.get("label")
+    if label is None:
+        return None
+
+    value = entry.get("value")
+    value_html = entry.get("value_html")
+    explicit_highlight = entry.get("highlight")
+    label_lower = str(label).lower()
+
+    display_highlight = explicit_highlight
+    detection_highlight = explicit_highlight
+
+    if value_html is not None:
+        value_text = value_html
+        detection_highlight = explicit_highlight or _determine_highlight_level(label, value)
+        display_highlight = detection_highlight
+        if display_highlight == "blue":
+            display_highlight = None
+    elif "cloud" in label_lower:
+        value_text = _format_clouds_value(value)
+        detection_highlight = explicit_highlight or _get_ceiling_highlight(value)
+        display_highlight = detection_highlight
+    else:
+        value_text = html.escape(str(value)) if value is not None else ""
+        detection_highlight = explicit_highlight or _determine_highlight_level(label, value)
+        display_highlight = detection_highlight
+
+    if display_highlight:
+        value_text = _wrap_highlight_html(value_text, display_highlight)
+
+    return str(label), value_text, detection_highlight
+
+
+def _collect_highlight_entries(
+    summary_items: Iterable[Mapping[str, Any]]
+) -> Tuple[List[Tuple[str, str]], List[Dict[str, Any]]]:
+    details: List[Tuple[str, str]] = []
+    highlights: List[Dict[str, Any]] = []
+    for entry in summary_items:
+        formatted = _format_detail_entry(entry)
+        if formatted is None:
+            continue
+        label, value_text, detection_highlight = formatted
+        details.append((label, value_text))
+        if detection_highlight:
+            highlights.append(
+                {
+                    "label": label,
+                    "value": value_text,
+                    "highlight": detection_highlight,
+                }
+            )
+    return details, highlights
+
+
 def _build_taf_html(
     report: Optional[Dict[str, Any]],
     period: Optional[Dict[str, Any]],
     arrival_dt: Optional[datetime],
     airport_code: Optional[str],
     deice_status: Optional[str],
+    *,
+    prior_period: Optional[Dict[str, Any]] = None,
+    prior_arrival_dt: Optional[datetime] = None,
 ) -> str:
     if report is None:
         return "<div class='taf taf-missing'>No TAF segment matched the arrival window.</div>"
@@ -771,6 +832,17 @@ def _build_taf_html(
         airport_code,
         deice_status=deice_status,
     )
+    details, highlights = _collect_highlight_entries(summary_items)
+
+    prior_highlights: List[Dict[str, Any]] = []
+    if prior_period is not None and (arrival_dt is not None or prior_arrival_dt is not None):
+        prior_summary = _summarise_period(
+            prior_period,
+            prior_arrival_dt or arrival_dt,
+            airport_code,
+            deice_status=deice_status,
+        )
+        _, prior_highlights = _collect_highlight_entries(prior_summary)
 
     lines: List[str] = []
     if fallback_banner:
@@ -779,33 +851,31 @@ def _build_taf_html(
     if warning_html:
         lines.append(warning_html)
     details_html = ""
-    if summary_items:
-        detail_entries: List[str] = []
-        for entry in summary_items:
-            label = entry.get("label")
-            value = entry.get("value")
-            value_html = entry.get("value_html")
-            if label is None:
-                continue
-            label_lower = label.lower()
-            explicit_highlight = entry.get("highlight")
-            if value_html is not None:
-                value_text = value_html
-                highlight_level = explicit_highlight or _determine_highlight_level(label, value)
-                if highlight_level == "blue":
-                    highlight_level = None
-            elif "cloud" in label_lower:
-                value_text = _format_clouds_value(value)
-                highlight_level = explicit_highlight
-            else:
-                value_text = html.escape(str(value)) if value is not None else ""
-                highlight_level = explicit_highlight or _determine_highlight_level(label, value)
-            if highlight_level:
-                value_text = _wrap_highlight_html(value_text, highlight_level)
-            detail_entries.append(
-                f"<li><strong>{html.escape(label)}:</strong> {value_text}</li>"
-            )
+    if details:
+        detail_entries = [
+            f"<li><strong>{html.escape(label)}:</strong> {value}</li>" for label, value in details
+        ]
         details_html = "<ul>" + "".join(detail_entries) + "</ul>"
+
+    prior_only_highlights: List[str] = []
+    if prior_highlights:
+        current_keys = {item["label"].lower() for item in highlights}
+        for entry in prior_highlights:
+            label = entry.get("label")
+            if not label:
+                continue
+            if label.lower() in current_keys:
+                continue
+            prior_only_highlights.append(
+                f"<li><strong>{html.escape(label)}:</strong> {entry['value']}</li>"
+            )
+
+    if prior_only_highlights:
+        prior_html = "<ul>" + "".join(prior_only_highlights) + "</ul>"
+        lines.append(
+            "<div class='taf-warning'>⚠️ Highlights within 1 hour before arrival:"
+            f" {prior_html}</div>"
+        )
     issue_display = report.get("issue_time_display") or ""
     issue_html = (
         f"<div style='font-size:0.75rem;color:#94a3b8;margin-top:0.3rem;'>"
@@ -1019,6 +1089,11 @@ for flight in processed_flights:
     report, period = _select_forecast_period(station_reports, flight["arr_dt_utc"])
     flight["taf_report"] = report
     flight["taf_period"] = period
+    prior_period: Optional[Dict[str, Any]] = None
+    if flight.get("arr_dt_utc"):
+        prior_dt = flight["arr_dt_utc"] - timedelta(hours=1)
+        _, prior_period = _select_forecast_period(station_reports, prior_dt)
+    flight["taf_prior_period"] = prior_period
 
 processed_flights.sort(
     key=lambda item: (
@@ -1071,6 +1146,12 @@ for tail in sorted(flights_by_tail.keys(), key=_tail_order_key):
             flight.get("arr_dt_utc"),
             flight.get("arrival_airport"),
             flight.get("deice_status_code"),
+            prior_period=flight.get("taf_prior_period"),
+            prior_arrival_dt=(
+                flight.get("arr_dt_utc") - timedelta(hours=1)
+                if flight.get("arr_dt_utc")
+                else None
+            ),
         )
         cards.append(_build_flight_card(flight, taf_html))
     st.markdown(f"<div class='flight-row'>{''.join(cards)}</div>", unsafe_allow_html=True)

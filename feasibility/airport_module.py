@@ -5,7 +5,7 @@ from __future__ import annotations
 import csv
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, TypedDict
@@ -15,7 +15,16 @@ import pytz
 from deice_info_helper import DeiceRecord, get_deice_record
 from flight_leg_utils import load_airport_metadata_lookup, safe_parse_dt
 
-from .airport_notes_parser import summarize_operational_notes
+from .airport_notes_parser import (
+    ParsedCustoms,
+    ParsedRestrictions,
+    note_text,
+    parse_customs_notes,
+    parse_operational_restrictions,
+    split_customs_operational_notes,
+    summarize_operational_notes,
+)
+from . import checker_aircraft
 from .common import extract_airport_code
 from .data_access import AirportCategoryRecord, CustomsRule, load_airport_categories, load_customs_rules
 from .schemas import CategoryResult, CategoryStatus
@@ -48,6 +57,7 @@ class LegContext(TypedDict, total=False):
 
 
 class OperationalNote(TypedDict, total=False):
+    note: Optional[str]
     category: Optional[str]
     type: Optional[str]
     title: Optional[str]
@@ -72,6 +82,8 @@ class DeiceProfile:
     icao: str
     deice_available: Optional[bool]
     notes: Optional[str]
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -103,6 +115,16 @@ class OverflightRules:
     permit_lead_days: Mapping[str, int]
 
 
+OSA_SSA_PROFILE_OVERRIDES: Mapping[str, Dict[str, object]] = {
+    "CYEG": {"region": "CANADA_DOMESTIC", "requires_jepp": False},
+    "KPSP": {"region": "SSA", "requires_jepp": False},
+}
+
+KLAS_REFERENCE_LATITUDE = 36.0800439
+DEICE_SEASON_START = (10, 1)  # October 1
+DEICE_SEASON_END = (4, 30)  # April 30
+
+
 @dataclass
 class AirportSideResult:
     icao: str
@@ -113,7 +135,10 @@ class AirportSideResult:
     osa_ssa: CategoryResult
     overflight: CategoryResult
     operational_notes: CategoryResult
-    raw_operational_notes: List[Mapping[str, Any]] = field(default_factory=list)
+    parsed_operational_restrictions: ParsedRestrictions
+    parsed_customs_notes: ParsedCustoms
+    planned_time_local: Optional[str] = None
+    raw_operational_notes: List[str] = field(default_factory=list)
 
     def iter_category_results(self) -> Sequence[Tuple[str, CategoryResult]]:
         return (
@@ -136,6 +161,9 @@ class AirportSideResult:
             "osa_ssa": self.osa_ssa.as_dict(),
             "overflight": self.overflight.as_dict(),
             "operational_notes": self.operational_notes.as_dict(),
+            "parsed_operational_restrictions": dict(self.parsed_operational_restrictions),
+            "parsed_customs_notes": dict(self.parsed_customs_notes),
+            "planned_time_local": self.planned_time_local,
             "raw_operational_notes": list(self.raw_operational_notes),
         }
 
@@ -145,9 +173,11 @@ class AirportFeasibilityResult:
     leg_id: str
     departure: AirportSideResult
     arrival: AirportSideResult
+    aircraft: CategoryResult
 
     def iter_all_categories(self) -> Sequence[Tuple[str, CategoryResult]]:
         entries: List[Tuple[str, CategoryResult]] = []
+        entries.append(("Aircraft", self.aircraft))
         for prefix, side in (("Departure", self.departure), ("Arrival", self.arrival)):
             for label, result in side.iter_category_results():
                 entries.append((f"{prefix} {label}", result))
@@ -158,6 +188,7 @@ class AirportFeasibilityResult:
             "leg_id": self.leg_id,
             "departure": self.departure.as_dict(),
             "arrival": self.arrival.as_dict(),
+            "aircraft": self.aircraft.as_dict(),
         }
 
 
@@ -170,7 +201,7 @@ RUNWAY_REQUIREMENTS_FT: Mapping[str, int] = {
     "ULTRA_LONG_RANGE_JET": 6000,
 }
 
-SLOT_KEYWORDS = ("SLOT", "COORDINATION", "ATC SLOT")
+SLOT_KEYWORDS = ("SLOT", "ATC SLOT")
 PPR_KEYWORDS = ("PPR", "PRIOR PERMISSION")
 
 _RUNWAYS_PATH = Path(__file__).resolve().parents[1] / "runways.csv"
@@ -243,6 +274,29 @@ def _local_date_string(dt_str: Optional[str], tz_name: Optional[str]) -> Optiona
     else:
         dt = dt.astimezone(pytz.UTC)
     return dt.date().isoformat()
+
+
+def _local_time_string(dt_str: Optional[str], tz_name: Optional[str]) -> Optional[str]:
+    """Return a readable local time string for display purposes."""
+
+    if not dt_str:
+        return None
+
+    try:
+        dt = safe_parse_dt(dt_str)
+    except Exception:
+        return None
+
+    if tz_name:
+        try:
+            tz = pytz.timezone(tz_name)
+            dt = dt.astimezone(tz)
+        except Exception:
+            dt = dt.astimezone(pytz.UTC)
+    else:
+        dt = dt.astimezone(pytz.UTC)
+
+    return dt.strftime("%Y-%m-%d %H:%M %Z") if dt.tzinfo else dt.strftime("%Y-%m-%d %H:%M")
 
 
 def _normalize_datetime(dt_str: Optional[str]) -> Optional[str]:
@@ -370,7 +424,13 @@ def _build_deice_profile(icao: str) -> DeiceProfile:
     record: Optional[DeiceRecord] = get_deice_record(icao=icao)
     if not record:
         return DeiceProfile(icao=icao, deice_available=None, notes=None)
-    return DeiceProfile(icao=icao, deice_available=record.has_deice, notes=record.deice_info)
+    return DeiceProfile(
+        icao=icao,
+        deice_available=record.has_deice,
+        notes=record.deice_info,
+        latitude=record.latitude,
+        longitude=record.longitude,
+    )
 
 
 def _build_customs_profile(icao: str, customs_rules: Mapping[str, CustomsRule]) -> Optional[CustomsProfile]:
@@ -382,9 +442,19 @@ def _build_customs_profile(icao: str, customs_rules: Mapping[str, CustomsRule]) 
 
 def _build_osa_ssa_profile(icao: str, airport_categories: Mapping[str, AirportCategoryRecord]) -> OsaSsaProfile:
     category_record = airport_categories.get(icao)
+    override = OSA_SSA_PROFILE_OVERRIDES.get(icao.upper())
     region = (category_record.category if category_record else "DOMESTIC") or "DOMESTIC"
+    if override and isinstance(override.get("region"), str):
+        region = str(override["region"]).strip() or region
     region_upper = region.upper()
-    requires_jepp = region_upper in {"OSA", "SSA"}
+    requires_override = None
+    if override is not None:
+        for key in ("requires_jepp", "requires_jeppesen"):
+            value = override.get(key)
+            if isinstance(value, bool):
+                requires_override = value
+                break
+    requires_jepp = bool(requires_override) if requires_override is not None else False
     return OsaSsaProfile(icao=icao, region=region_upper, requires_jepp=requires_jepp)
 
 
@@ -433,6 +503,21 @@ def get_overflight_rules() -> OverflightRules:
     )
 
 
+def _evaluate_aircraft_endurance(leg: LegContext) -> CategoryResult:
+    """Run the aircraft endurance check using leg context inputs."""
+
+    evaluation_payload = {
+        "aircraftType": leg.get("aircraft_type"),
+        "aircraftCategory": leg.get("aircraft_category"),
+        "pax": leg.get("pax"),
+        "blockTime": leg.get("block_time_minutes"),
+        "plannedBlockTime": leg.get("block_time_minutes"),
+        "flightTime": leg.get("flight_time_minutes"),
+    }
+
+    return checker_aircraft.evaluate_aircraft(evaluation_payload)
+
+
 def evaluate_airport_feasibility_for_leg(
     leg: LegContext,
     *,
@@ -472,6 +557,8 @@ def evaluate_airport_feasibility_for_leg(
     arr_tz = tz_provider(arr_icao) if tz_provider else None
     dep_date_local = _local_date_string(leg.get("departure_date_utc"), dep_tz)
     arr_date_local = _local_date_string(leg.get("arrival_date_utc"), arr_tz)
+    dep_time_local = _local_time_string(leg.get("departure_date_utc"), dep_tz)
+    arr_time_local = _local_time_string(leg.get("arrival_date_utc"), arr_tz)
 
     dep_notes = list(fetcher(dep_icao, dep_date_local))
     arr_notes = list(fetcher(arr_icao, arr_date_local))
@@ -491,6 +578,7 @@ def evaluate_airport_feasibility_for_leg(
         operational_notes=dep_notes,
         overflight_result=overflight_result,
         side="DEP",
+        planned_time_local=dep_time_local,
     )
     arrival_side = evaluate_airport_side(
         icao=arr_icao,
@@ -504,9 +592,17 @@ def evaluate_airport_feasibility_for_leg(
         operational_notes=arr_notes,
         overflight_result=overflight_result,
         side="ARR",
+        planned_time_local=arr_time_local,
     )
 
-    return AirportFeasibilityResult(leg_id=leg.get("leg_id", ""), departure=departure_side, arrival=arrival_side)
+    aircraft_result = _evaluate_aircraft_endurance(leg)
+
+    return AirportFeasibilityResult(
+        leg_id=leg.get("leg_id", ""),
+        departure=departure_side,
+        arrival=arrival_side,
+        aircraft=aircraft_result,
+    )
 
 
 def evaluate_airport_side(
@@ -522,13 +618,41 @@ def evaluate_airport_side(
     operational_notes: Sequence[Mapping[str, Any]],
     overflight_result: CategoryResult,
     side: str,
+    planned_time_local: Optional[str] = None,
 ) -> AirportSideResult:
+    customs_texts, operational_texts = split_customs_operational_notes(operational_notes)
+    parsed_customs_notes = parse_customs_notes(customs_texts)
+    parsed_operational_restrictions = parse_operational_restrictions(operational_texts)
+    raw_note_texts: List[str] = []
+    for entry in operational_notes:
+        text = note_text(entry)
+        if text:
+            raw_note_texts.append(text)
+
     suitability = evaluate_suitability(airport_profile, leg, operational_notes, side)
-    deice = evaluate_deice(deice_profile, operational_notes, leg, side)
-    customs = evaluate_customs(customs_profile, leg, side, operational_notes)
+    deice = evaluate_deice(
+        deice_profile,
+        operational_notes,
+        leg,
+        side,
+        date_local=date_local,
+        parsed_restrictions=parsed_operational_restrictions,
+    )
+    customs = evaluate_customs(
+        customs_profile,
+        leg,
+        side,
+        operational_notes,
+        parsed_customs=parsed_customs_notes,
+    )
     slot_ppr = evaluate_slot_ppr(slot_ppr_profile, leg, side, date_local)
     osa_ssa = evaluate_osa_ssa(osa_ssa_profile, leg, side)
-    operational_notes_result = summarize_operational_notes(icao, operational_notes)
+    operational_notes_result = summarize_operational_notes(
+        icao,
+        operational_notes,
+        parsed_operational_restrictions,
+        parsed_customs_notes,
+    )
 
     return AirportSideResult(
         icao=icao,
@@ -539,7 +663,10 @@ def evaluate_airport_side(
         osa_ssa=osa_ssa,
         overflight=overflight_result,
         operational_notes=operational_notes_result,
-        raw_operational_notes=list(operational_notes),
+        parsed_operational_restrictions=parsed_operational_restrictions,
+        parsed_customs_notes=parsed_customs_notes,
+        planned_time_local=planned_time_local,
+        raw_operational_notes=raw_note_texts,
     )
 
 
@@ -579,7 +706,7 @@ def evaluate_suitability(
 
     closure_keywords = ("closed", "closure", "no ga", "curfew")
     for note in operational_notes:
-        body = " ".join(str(note.get(key) or "") for key in ("title", "body")).lower()
+        body = " ".join(str(note.get(key) or "") for key in ("note", "title", "body")).lower()
         if any(keyword in body for keyword in closure_keywords):
             status = "FAIL"
             summary = "Operational closure in effect"
@@ -589,15 +716,49 @@ def evaluate_suitability(
     return CategoryResult(status=status, summary=summary, issues=issues)
 
 
+def _parse_iso_date(value: Optional[str]) -> Optional[date]:
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(value)
+    except Exception:
+        return None
+
+
+def _is_warm_weather_airport(latitude: Optional[float]) -> bool:
+    return latitude is not None and latitude <= KLAS_REFERENCE_LATITUDE
+
+
+def _is_within_deice_season(date_local: Optional[str]) -> bool:
+    parsed = _parse_iso_date(date_local)
+    if not parsed:
+        return True
+    month_day = (parsed.month, parsed.day)
+    return month_day >= DEICE_SEASON_START or month_day <= DEICE_SEASON_END
+
+
 def evaluate_deice(
     deice_profile: DeiceProfile,
     operational_notes: Sequence[Mapping[str, Any]],
     leg: LegContext,
     side: str,
+    *,
+    date_local: Optional[str] = None,
+    parsed_restrictions: ParsedRestrictions | None = None,
 ) -> CategoryResult:
     issues: List[str] = []
     status: CategoryStatus = "PASS"
     summary = "Deice available"
+
+    if _is_warm_weather_airport(deice_profile.latitude):
+        return CategoryResult(
+            status="PASS", summary="Deice not required (warm region)", issues=[]
+        )
+
+    if not _is_within_deice_season(date_local):
+        return CategoryResult(
+            status="PASS", summary="Deice not required (out of season)", issues=[]
+        )
 
     if deice_profile.deice_available is False:
         status = "CAUTION"
@@ -607,13 +768,27 @@ def evaluate_deice(
         summary = "Unknown deice status"
         issues.append("No deice intel available; confirm if icing conditions likely.")
 
-    note_text = " ".join(
-        str(note.get("body") or note.get("title") or "") for note in operational_notes
-    ).lower()
-    if "deice" in note_text and "out" in note_text:
-        status = _combine_status(status, "CAUTION")
-        summary = "Operational note: deice impacted"
-        issues.append("Operational notes reference deice outages; confirm support.")
+    restrictions = parsed_restrictions
+    if restrictions:
+        if restrictions["deice_unavailable"]:
+            status = _combine_status(status, "CAUTION")
+            summary = "Operational note: deice unavailable"
+        elif restrictions["deice_limited"]:
+            status = _combine_status(status, "CAUTION")
+            summary = "Operational note: deice limited"
+        if restrictions["winter_sensitivity"]:
+            issues.append("Operational notes highlight winter sensitivity.")
+        for note in restrictions["deice_notes"]:
+            issues.append(f"Deice note: {note}")
+    else:
+        note_text = " ".join(
+            str(note.get("note") or note.get("body") or note.get("title") or "")
+            for note in operational_notes
+        ).lower()
+        if "deice" in note_text and "out" in note_text:
+            status = _combine_status(status, "CAUTION")
+            summary = "Operational note: deice impacted"
+            issues.append("Operational notes reference deice outages; confirm support.")
 
     if deice_profile.notes:
         issues.append(deice_profile.notes)
@@ -621,11 +796,69 @@ def evaluate_deice(
     return CategoryResult(status=status, summary=summary, issues=issues)
 
 
+def _format_customs_hours_entry(entry: Mapping[str, Any]) -> Optional[str]:
+    start = str(entry.get("start") or "").strip()
+    end = str(entry.get("end") or "").strip()
+    days_value = entry.get("days")
+    day_parts: List[str] = []
+    if isinstance(days_value, (list, tuple, set)):
+        for value in days_value:
+            if isinstance(value, str):
+                cleaned = value.strip()
+                if cleaned and cleaned.lower() != "unknown":
+                    day_parts.append(cleaned)
+    hours = f"{start}-{end}" if start and end else start or end
+    if day_parts and hours:
+        return f"{'/'.join(day_parts)} {hours}"
+    if hours:
+        return hours
+    if day_parts:
+        return "/".join(day_parts)
+    return None
+
+
+def _build_customs_summary(base_summary: str, parsed: Optional[ParsedCustoms]) -> str:
+    if not parsed:
+        return base_summary
+
+    details: List[str] = []
+    if parsed["customs_hours"]:
+        hours_entry = parsed["customs_hours"][0]
+        formatted = _format_customs_hours_entry(hours_entry)
+        if formatted:
+            details.append(formatted)
+
+    notice_requirements: List[str] = []
+    if parsed["customs_prior_notice_hours"]:
+        notice_requirements.append(f"{parsed['customs_prior_notice_hours']}h notice")
+    if parsed["customs_prior_notice_days"]:
+        notice_requirements.append(f"{parsed['customs_prior_notice_days']} day notice")
+
+    notice_text = " and ".join(notice_requirements)
+    if parsed["customs_afterhours_available"]:
+        detail = "After-hours possible"
+        if notice_text:
+            detail += f" with {notice_text}"
+        details.append(detail)
+    elif notice_text:
+        details.append(f"Requires {notice_text}")
+
+    if not details:
+        return base_summary
+
+    detail_text = "; ".join(details)
+    if base_summary.lower().startswith("customs available"):
+        return f"{base_summary} {detail_text}".strip()
+    return f"{base_summary} — {detail_text}"
+
+
 def evaluate_customs(
     customs_profile: Optional[CustomsProfile],
     leg: LegContext,
     side: str,
     operational_notes: Sequence[Mapping[str, Any]],
+    *,
+    parsed_customs: ParsedCustoms | None = None,
 ) -> CategoryResult:
     issues: List[str] = []
     status: CategoryStatus = "PASS"
@@ -656,11 +889,48 @@ def evaluate_customs(
         if customs_profile.notes:
             issues.append(customs_profile.notes)
 
-    note_text = " ".join(str(note.get("body") or "") for note in operational_notes).lower()
-    if "customs" in note_text and ("closed" in note_text or "limited" in note_text):
-        status = "FAIL"
-        summary = "Customs restricted"
-        issues.append("Operational notes report customs unavailability.")
+    parsed = parsed_customs
+    if parsed:
+        if parsed["canpass_only"]:
+            status = _combine_status(status, "CAUTION")
+            summary = "CANPASS arrival"
+            issues.append("Operational notes: CANPASS-only clearance.")
+        if parsed["customs_prior_notice_hours"]:
+            status = _combine_status(status, "CAUTION")
+            issues.append(
+                f"Customs requires {parsed['customs_prior_notice_hours']} hours prior notice."
+            )
+        if parsed["customs_prior_notice_days"]:
+            status = _combine_status(status, "CAUTION")
+            issues.append(
+                f"Customs requires {parsed['customs_prior_notice_days']} day notice."
+            )
+        if parsed["customs_contact_required"]:
+            status = _combine_status(status, "CAUTION")
+            issues.append("Customs contact required per notes.")
+            issues.extend(parsed["customs_contact_notes"])
+        if parsed["customs_afterhours_available"]:
+            issues.append("Afterhours customs available; verify call-out requirements.")
+            issues.extend(parsed["customs_afterhours_requirements"])
+        if parsed["location_to_clear"]:
+            issues.append(f"Clear customs at {parsed['location_to_clear']}.")
+            issues.extend(parsed["location_notes"])
+        if parsed["pax_requirements"]:
+            status = _combine_status(status, "CAUTION")
+            issues.extend(parsed["pax_requirements"])
+        if parsed["crew_requirements"]:
+            status = _combine_status(status, "CAUTION")
+            issues.extend(parsed["crew_requirements"])
+        summary = _build_customs_summary(summary, parsed)
+    else:
+        note_text = " ".join(
+            str(note.get("note") or note.get("body") or note.get("title") or "")
+            for note in operational_notes
+        ).lower()
+        if "customs" in note_text and ("closed" in note_text or "limited" in note_text):
+            status = "FAIL"
+            summary = "Customs restricted"
+            issues.append("Operational notes report customs unavailability.")
 
     return CategoryResult(status=status, summary=summary, issues=issues)
 
@@ -671,6 +941,13 @@ def evaluate_slot_ppr(
     side: str,
     date_local: Optional[str],
 ) -> CategoryResult:
+    slot_booking_windows_days = {
+        "CYYZ": 10,
+        "CYUL": 10,
+        "CYYC": 10,
+        "CYVR": 3,
+    }
+
     issues: List[str] = []
     status: CategoryStatus = "PASS"
     summary = "No slot/PPR requirement"
@@ -681,9 +958,18 @@ def evaluate_slot_ppr(
     if target_dt:
         hours_until_event = (target_dt - now).total_seconds() / 3600
 
+    def _within_booking_window() -> bool:
+        icao = slot_ppr_profile.icao.upper()
+        booking_window_days = slot_booking_windows_days.get(icao)
+        if booking_window_days is None:
+            return True
+        if hours_until_event is None:
+            return False
+        return hours_until_event <= booking_window_days * 24
+
     def _check_requirement(required: bool, label: str, lead_days: Optional[int]) -> None:
         nonlocal status, summary
-        if not required:
+        if not required or not _within_booking_window():
             return
         required_summary = f"{label} required"
         summary = required_summary
@@ -711,12 +997,14 @@ def evaluate_osa_ssa(
 ) -> CategoryResult:
     issues: List[str] = []
     status: CategoryStatus = "PASS"
-    summary = osa_ssa_profile.region.title()
+    summary = f"Routing classified as {osa_ssa_profile.region}"
 
     if osa_ssa_profile.requires_jepp:
         status = "CAUTION"
         summary = f"{osa_ssa_profile.region} — Jeppesen required"
         issues.append("Jeppesen ITP task required for this leg.")
+    else:
+        summary = f"Routing classified as {osa_ssa_profile.region}. Jeppesen not required by profile."
 
     return CategoryResult(status=status, summary=summary, issues=issues)
 
