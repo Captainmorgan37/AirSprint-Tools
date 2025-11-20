@@ -7,6 +7,7 @@ from arrival_weather_utils import (
     _combine_highlight_levels,
     _get_ceiling_highlight,
     _get_visibility_highlight,
+    _get_wind_highlight,
     _has_freezing_precip,
     _has_wintry_precip,
     _build_weather_value_html,
@@ -38,6 +39,16 @@ def test_parse_visibility_handles_mixed_fractions():
 
 def test_visibility_highlight_uses_combined_value():
     assert _get_visibility_highlight("2 1/2SM") == "yellow"
+
+
+def test_wind_highlight_triggers_on_speed_or_gust():
+    assert _get_wind_highlight("180 30kt") == "red"
+    assert _get_wind_highlight("Wind 220 20kt G30") == "red"
+
+
+def test_wind_highlight_ignores_lower_values():
+    assert _get_wind_highlight("140 12kt") is None
+    assert _get_wind_highlight("Wind Calm") is None
 
 
 def test_detects_freezing_precip_tokens():
