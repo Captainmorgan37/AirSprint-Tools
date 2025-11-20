@@ -612,9 +612,9 @@ if dv_df is not None:
 # -----------------------------
 tab_results, tab_rest_duty, tab_policy, tab_min_rest, tab_ft_exceed, tab_debug = st.tabs([
     "Results (FTL)",
-    "Rest Days 12+ hr Duty (FTL)",
+    "Rest Periods Under 11 Hours (FTL)",
     "7d/30d Policy (Duty Violation)",
-    "Total 12+ Hour Duty Days",
+    "Total 12+ Hour Duty Days (FTL)",
     "Flight Time Threshold Checker",
     "Debug"
 ])
@@ -695,96 +695,54 @@ with tab_results:
                     to_csv_download(rest_pairs, "FTL_consecutive_min_rest_summary.csv", key="dl_rest_consecutive")
 
 with tab_rest_duty:
+    st.caption("Upload an FTL CSV with a rest prior column to count minimum rest days (10.0–10.99 h).")
+
     if ftl_df is None:
-        st.info("Upload the **FTL CSV** in the sidebar to count 12+ hour duty days on rows marked as Rest.")
+        st.info("Upload the **FTL CSV** in the sidebar to calculate minimum rest days.")
     else:
-        df = ftl_df.copy()
-        columns = list(df.columns)
-        if not columns:
-            st.error("No columns detected in the uploaded FTL CSV.")
+        df = ftl_df
+        pilot_col, date_col = infer_common_columns(df.copy())
+        rest_before_col, _ = infer_rest_pair_columns_ftl(df.copy())
+
+        st.markdown("**Rest prior column**")
+        rest_options = list(df.columns)
+        default_index = 0
+        if rest_before_col in rest_options:
+            default_index = rest_options.index(rest_before_col)
         else:
-            rest_default = pick_column(columns, ["rest"], "L")
-            duty_default = pick_column(columns, ["duty length", "duty", "duty time"], "Y")
-            crew_default = pick_column(columns, ["crew", "pilot", "name", "employee", "user"])
+            rest_like = [i for i, name in enumerate(rest_options) if re.search(r"rest", str(name), re.I)]
+            if rest_like:
+                default_index = rest_like[0]
 
-            st.subheader("Column mapping")
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                rest_col = st.selectbox(
-                    "Rest indicator column (expects value 'Rest')",
-                    columns,
-                    index=columns.index(rest_default) if rest_default in columns else 0,
-                )
-            with col2:
-                # Prefer explicit FL3XX name if present
-                preferred_duty = None
-                for col in df.columns:
-                    if re.search(r"flight\s*duty\s*period.*\(act\)", col, re.I):
-                        preferred_duty = col
-                        break
-                
-                # If found, override autodetected duty_col for the default index
-                default_duty = preferred_duty or duty_col
-                
-                duty_col = st.selectbox(
-                    "Duty length column (hours)",
-                    df.columns,
-                    index=list(df.columns).index(default_duty) if default_duty in df.columns else 0
-                )
+        rest_column = st.selectbox(
+            "Select the column that contains rest prior values",
+            options=rest_options,
+            index=default_index if rest_options else None,
+            key="rest_prior_column",
+        ) if rest_options else None
 
-            with col3:
-                crew_col = st.selectbox(
-                    "Crewmember column",
-                    columns,
-                    index=columns.index(crew_default) if crew_default in columns else 0,
-                )
-
-            work = df.copy()
-            work["__rest_marker"] = work[rest_col].astype(str).str.strip().str.lower()
-            work["__duty_hours"] = work[duty_col].map(parse_duration_to_hours)
-
-            rest_rows = work[work["__rest_marker"] == "rest"].copy()
-            rest_rows = rest_rows.dropna(subset=[crew_col])
-            rest_rows["__duty_hours"] = rest_rows["__duty_hours"].round(2)
-            long_duty_rows = rest_rows[rest_rows["__duty_hours"] >= 12.0]
-
-            st.markdown("**Rest days with 12+ hour duty (duty length ≥ 12.0 on rows where Rest column equals 'Rest')**")
-            st.caption(
-                "Defaults assume Rest is column L and Duty Length is column Y from the FTL export."
+        if not (pilot_col and date_col):
+            st.error("Could not identify the Pilot and Date columns in the FTL CSV.")
+        elif rest_column is None:
+            st.error("No columns available to evaluate rest prior values.")
+        else:
+            summary, detail = summarize_min_rest_days(
+                df.copy(), pilot_col, date_col, rest_column, short_thresh=11.0, lower_bound=10.0
             )
 
-            if rest_rows.empty:
-                st.info("No rows marked as Rest were found in the selected Rest column.")
-            elif long_duty_rows.empty:
-                st.success("No 12+ hour duty days found on rows marked as Rest.")
+            st.subheader("Days with minimum rest (10.0–10.99 h) by pilot")
+            if summary.empty:
+                st.success("✅ No minimum rest days detected in the provided period.")
             else:
-                summary = (
-                    long_duty_rows.groupby(crew_col)["__duty_hours"]
-                    .agg(Count="size", AverageHours="mean", MaxHours="max")
-                    .reset_index()
-                    .rename(columns={crew_col: "Crewmember"})
+                st.error(
+                    f"⚠️ Minimum rest triggered for {summary['DaysWithMinRest'].sum()} day(s) across {len(summary)} pilot(s)."
                 )
-                for col in ["AverageHours", "MaxHours"]:
-                    summary[col] = summary[col].round(2)
+            st.dataframe(summary, use_container_width=True)
+            to_csv_download(summary, "FTL_min_rest_days_by_pilot.csv", key="dl_min_rest_summary")
 
-                st.dataframe(summary, use_container_width=True)
-                to_csv_download(summary, "FTL_rest_days_12hr_summary.csv", key="dl_rest_12hr_summary")
-
-                with st.expander("Matching duty days (rows)", expanded=False):
-                    display_cols = [crew_col, rest_col, duty_col]
-                    extra_cols = [
-                        c
-                        for c in long_duty_rows.columns
-                        if c
-                        not in {crew_col, rest_col, duty_col, "__rest_marker", "__duty_hours"}
-                    ]
-                    display_cols += extra_cols
-                    st.dataframe(long_duty_rows[display_cols], use_container_width=True)
-                    to_csv_download(
-                        long_duty_rows[display_cols],
-                        "FTL_rest_days_12hr_detail.csv",
-                        key="dl_rest_12hr_detail",
-                    )
+            st.markdown("**Detailed minimum rest days (10.0–10.99 h)**")
+            st.dataframe(detail, use_container_width=True)
+            to_csv_download(detail, "FTL_min_rest_day_details.csv", key="dl_min_rest_details")
 
 with tab_policy:
     if dv_df is None:
