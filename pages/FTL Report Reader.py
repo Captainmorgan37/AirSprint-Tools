@@ -1214,9 +1214,15 @@ with tab_ft_exceed:
     # - Name column is blank
     # - FlightTimeHours is not NaN
     # - Next row has a new pilot name or file ends
+    # Identify summary rows based on real FL3XX structure:
+    # - Name is NOT blank
+    # - Flight Time column has a value
+    # - Columns E–N are blank (these hold leg-level data normally)
+    blank_cols = df.columns[4:14]  # E through N
+    
     df["IsSummaryRow"] = (
-        df[pilot_col].astype(str).str.strip().eq("") &
-        df["FlightTimeHours"].notna()
+        df["FlightTimeHours"].notna() &
+        df[blank_cols].astype(str).apply(lambda row: all(row.str.strip() == ""), axis=1)
     )
 
     # Extract summary rows
