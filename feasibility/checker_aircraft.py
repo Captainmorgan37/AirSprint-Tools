@@ -148,7 +148,7 @@ _AIRCRAFT_KEYWORD_ALIASES = (
     ("PRAETOR", "PRAETOR 500"),
     ("LEGACY", "LEGACY 450", "E545"),
     ("CJ3", "CITATION CJ3+", "C25B"),
-    ("CJ2", "CITATION CJ2+", "C24A"),
+    ("CJ2", "CITATION CJ2+", "C25A"),
     ("CJ4", "CITATION CJ4"),
 )
 
