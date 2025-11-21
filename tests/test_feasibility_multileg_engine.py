@@ -99,6 +99,42 @@ def test_phase1_engine_uses_pax_details_fetcher() -> None:
     assert details["paxBreakdown"]["Female"] == 1
 
 
+def test_phase1_engine_prefers_flight_id_when_fetching_pax_details() -> None:
+    quote = {
+        "bookingIdentifier": "NESTED-ID",
+        "legs": [
+            {
+                "id": "LEG-WRAPPER",
+                "flight": {"id": "FLIGHT-123"},
+                "departureAirport": "CYYC",
+                "arrivalAirport": "CYVR",
+                "departureDateUTC": "2025-11-19T15:00:00Z",
+                "arrivalDateUTC": "2025-11-19T17:00:00Z",
+                "pax": 1,
+                "blockTime": 120,
+            }
+        ],
+    }
+
+    fetched_ids: list[str] = []
+
+    def _fetcher(flight_id: str) -> Dict[str, Any]:
+        fetched_ids.append(flight_id)
+        return {
+            "pax": {
+                "tickets": [
+                    {"paxType": "ADULT", "paxUser": {"gender": "Male"}},
+                ]
+            }
+        }
+
+    run_feasibility_phase1(
+        {"quote": quote, "tz_provider": _tz_provider, "pax_details_fetcher": _fetcher}
+    )
+
+    assert fetched_ids == ["FLIGHT-123"]
+
+
 def test_aircraft_endurance_is_evaluated_for_each_leg() -> None:
     quote = {
         "bookingIdentifier": "ACFT1",
