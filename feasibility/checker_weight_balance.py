@@ -79,22 +79,56 @@ def _normalize_aircraft_type(name: Optional[str]) -> Optional[str]:
     return text
 
 
-def _average_adult_weight(season: str) -> float:
-    weights = STD_WEIGHTS.get(season, STD_WEIGHTS["Winter"])
-    return (weights.get("Male", 0) + weights.get("Female", 0)) / 2 or 0
+def _normalize_gender_label(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    cleaned = str(value).strip().lower()
+    if cleaned.startswith("f"):
+        return "Female"
+    if cleaned.startswith("m"):
+        return "Male"
+    return None
 
 
-def _standard_pax_weight(season: str, pax_type: str, gender: Optional[str]) -> float:
+def _extract_label(value: Any, *keys: str) -> Optional[str]:
+    """Return a non-empty string from ``value`` or selected mapping keys."""
+
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    if isinstance(value, Mapping):
+        for key in keys:
+            candidate = value.get(key)
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate.strip()
+    return None
+
+
+def _pax_category(ticket: Mapping[str, Any]) -> str:
+    pax_type_raw = (
+        _extract_label(ticket.get("paxType"), "code", "type", "name", "label")
+        or _extract_label(ticket.get("type"))
+        or _extract_label(ticket.get("pax_type"))
+        or "ADULT"
+    )
+    pax_type = pax_type_raw.upper()
+    if "INFANT" in pax_type:
+        return "Infant"
+    if "CHILD" in pax_type:
+        return "Child"
+
+    pax_user = ticket.get("paxUser") if isinstance(ticket.get("paxUser"), Mapping) else {}
+    gender_raw = (
+        _extract_label(ticket.get("gender"))
+        or _extract_label(pax_user.get("gender"))
+        or _extract_label(pax_user.get("sex"))
+    )
+    gender_label = _normalize_gender_label(gender_raw) or _normalize_gender_label(pax_type)
+    return gender_label or "Male"
+
+
+def _standard_pax_weight(season: str, category: str) -> float:
     weights = STD_WEIGHTS.get(season, STD_WEIGHTS["Winter"])
-    pax_type_upper = pax_type.upper()
-    if pax_type_upper == "INFANT":
-        return float(weights["Infant"])
-    if pax_type_upper == "CHILD":
-        return float(weights["Child"])
-    gender_clean = (gender or "").strip().title()
-    if gender_clean in weights:
-        return float(weights[gender_clean])
-    return float(_average_adult_weight(season))
+    return float(weights.get(category, weights["Male"]))
 
 
 def _iter_tickets(payload: Mapping[str, Any]) -> Iterable[Mapping[str, Any]]:
@@ -118,20 +152,24 @@ def _iter_cargo(payload: Mapping[str, Any]) -> Iterable[Mapping[str, Any]]:
                 yield entry
 
 
-def _extract_ticket_stats(ticket: Mapping[str, Any], season: str) -> float:
-    pax_type = str(ticket.get("paxType") or ticket.get("type") or "ADULT").upper()
+def _extract_ticket_stats(ticket: Mapping[str, Any], season: str) -> tuple[float, str]:
+    category = _pax_category(ticket)
+
     pax_user = ticket.get("paxUser") if isinstance(ticket.get("paxUser"), Mapping) else {}
-    gender = pax_user.get("gender") if isinstance(pax_user, Mapping) else None
 
     explicit_weight = _coerce_number(
         ticket.get("bodyWeight")
         or ticket.get("weight")
         or (pax_user.get("bodyWeight") if isinstance(pax_user, Mapping) else None)
     )
-    base_weight = explicit_weight if explicit_weight is not None else _standard_pax_weight(season, pax_type, gender)
+    base_weight = (
+        explicit_weight
+        if explicit_weight is not None
+        else _standard_pax_weight(season, category)
+    )
 
     luggage_weight = _coerce_number(ticket.get("luggageWeight") or ticket.get("luggage_weight")) or 0
-    return base_weight + luggage_weight
+    return base_weight + luggage_weight, category
 
 
 def _detect_high_risk_items(cargo_entries: Iterable[Mapping[str, Any]]) -> bool:
@@ -167,7 +205,13 @@ def evaluate_weight_balance(
 
     tickets = list(_iter_tickets(pax_payload))
     pax_count = len(tickets)
-    pax_weight = sum(_extract_ticket_stats(ticket, season_label) for ticket in tickets)
+    pax_breakdown: MutableMapping[str, int] = {"Male": 0, "Female": 0, "Child": 0, "Infant": 0}
+
+    pax_weight = 0.0
+    for ticket in tickets:
+        ticket_weight, category = _extract_ticket_stats(ticket, season_label)
+        pax_weight += ticket_weight
+        pax_breakdown[category] = pax_breakdown.get(category, 0) + 1
 
     cargo_entries = list(_iter_cargo(pax_payload))
     cargo_weights = [
@@ -188,6 +232,7 @@ def evaluate_weight_balance(
             "totalPayload": round(total_payload, 2),
             "paxCount": pax_count,
             "maxAllowed": None,
+            "paxBreakdown": dict(pax_breakdown),
         }
     )
 
