@@ -104,26 +104,31 @@ def _extract_label(value: Any, *keys: str) -> Optional[str]:
 
 
 def _pax_category(ticket: Mapping[str, Any]) -> str:
-    pax_type_raw = (
-        _extract_label(ticket.get("paxType"), "code", "type", "name", "label")
-        or _extract_label(ticket.get("type"))
-        or _extract_label(ticket.get("pax_type"))
-        or "ADULT"
-    )
-    pax_type = pax_type_raw.upper()
-    if "INFANT" in pax_type:
-        return "Infant"
-    if "CHILD" in pax_type:
-        return "Child"
+    # 1. Look at paxType first – FL3XX already encodes gender here
+    raw_type = ticket.get("paxType") or ticket.get("type") or ""
+    raw_type = str(raw_type).strip().upper()
 
-    pax_user = ticket.get("paxUser") if isinstance(ticket.get("paxUser"), Mapping) else {}
-    gender_raw = (
-        _extract_label(ticket.get("gender"))
-        or _extract_label(pax_user.get("gender"))
-        or _extract_label(pax_user.get("sex"))
-    )
-    gender_label = _normalize_gender_label(gender_raw) or _normalize_gender_label(pax_type)
-    return gender_label or "Male"
+    if "INFANT" in raw_type:
+        return "Infant"
+    if "CHILD" in raw_type:
+        return "Child"
+    if raw_type in ("MALE", "FEMALE"):
+        return raw_type.title()
+
+    # 2. Look inside paxUser.gender
+    pax_user = ticket.get("paxUser", {})
+    if isinstance(pax_user, Mapping):
+        gender = pax_user.get("gender") or pax_user.get("sex")
+        if isinstance(gender, str) and gender.strip():
+            g = gender.strip().lower()
+            if g.startswith("m"):
+                return "Male"
+            if g.startswith("f"):
+                return "Female"
+
+    # 3. Fallback (rare)
+    return "Male"
+
 
 
 def _standard_pax_weight(season: str, category: str) -> float:
