@@ -208,7 +208,8 @@ def evaluate_weight_balance(
             details=dict(details),
         )
     
-    print("PAX DEBUG: Keys received =", list(pax_payload.keys()))
+    pax_keys = list(pax_payload.keys()) if isinstance(pax_payload, Mapping) else []
+    print("PAX DEBUG: Keys received =", pax_keys)
     print("PAX DEBUG FULL:", pax_payload)
 
     tickets = list(_iter_tickets(pax_payload))
