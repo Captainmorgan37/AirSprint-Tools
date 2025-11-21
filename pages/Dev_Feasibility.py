@@ -656,6 +656,41 @@ def _render_category(name: str, category) -> None:
         else:
             st.write("No issues recorded.")
 
+        if name == "weightBalance":
+            _render_weight_balance_details(category)
+
+
+def _render_weight_balance_details(category) -> None:
+    details = getattr(category, "details", None)
+    if not isinstance(details, Mapping):
+        return
+
+    payload = {
+        "Season": details.get("season"),
+        "PAX Weight": details.get("paxWeight"),
+        "Cargo Weight": details.get("cargoWeight"),
+        "Total Payload": details.get("totalPayload"),
+        "Max Allowed": details.get("maxAllowed"),
+        "PAX Count": details.get("paxCount"),
+    }
+
+    metrics = [
+        ("Season", payload["Season"]),
+        ("PAX Weight", payload["PAX Weight"]),
+        ("Cargo Weight", payload["Cargo Weight"]),
+        ("Total Payload", payload["Total Payload"]),
+        ("Max Allowed", payload["Max Allowed"]),
+        ("PAX Count", payload["PAX Count"]),
+    ]
+
+    cols = st.columns(3)
+    for idx, (label, value) in enumerate(metrics):
+        col = cols[idx % 3]
+        if value is None:
+            col.metric(label, "n/a")
+        else:
+            col.metric(label, value)
+
 
 if stored_result and isinstance(stored_result, FeasibilityResult):
     overall_emoji = STATUS_EMOJI.get(stored_result.overall_status, "")
