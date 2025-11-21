@@ -15,7 +15,7 @@ def _build_simple_quote() -> Dict[str, Any]:
     return {
         "bookingIdentifier": "PIURB",
         "bookingid": 987,
-        "aircraftObj": {"type": "Legacy 450", "category": "SUPER_MIDSIZE_JET"},
+        "aircraftObj": {"type": "CJ3", "category": "LIGHT_JET"},
         "salesPerson": {"firstName": "Alex", "lastName": "Smith"},
         "legs": [
             {
@@ -55,6 +55,7 @@ def test_phase1_engine_runs_for_entire_quote() -> None:
     assert len(result["legs"]) == 2
     assert result["duty"]["total_duty"] == 270
     assert result["duty"]["status"] == "PASS"
+    assert all(leg["weightBalance"]["status"] == "PASS" for leg in result["legs"])
 
 
 def test_aircraft_endurance_is_evaluated_for_each_leg() -> None:
@@ -79,6 +80,8 @@ def test_aircraft_endurance_is_evaluated_for_each_leg() -> None:
     leg = result["legs"][0]
     assert leg["aircraft"]["status"] == "FAIL"
     assert "exceeds pax endurance" in leg["aircraft"]["summary"]
+    assert leg["weightBalance"]["status"] == "FAIL"
+    assert "Overweight" in "".join(leg["weightBalance"].get("issues", []))
     assert result["overall_status"] == "FAIL"
     assert any("Aircraft" in issue for issue in result["issues"])
 
