@@ -715,6 +715,15 @@ def _render_weight_balance_details(category) -> None:
         else:
             col.metric(label, value)
 
+    breakdown = details.get("paxBreakdown") if isinstance(details, Mapping) else None
+    if isinstance(breakdown, Mapping) and breakdown:
+        st.markdown("**Passenger Weights Applied**")
+        cols = st.columns(4)
+        for idx, label in enumerate(["Male", "Female", "Child", "Infant"]):
+            col = cols[idx]
+            count = breakdown.get(label, 0)
+            col.metric(label, count)
+
 
 if stored_result and isinstance(stored_result, FeasibilityResult):
     overall_emoji = STATUS_EMOJI.get(stored_result.overall_status, "")
