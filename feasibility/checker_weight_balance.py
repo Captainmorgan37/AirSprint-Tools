@@ -90,15 +90,38 @@ def _normalize_gender_label(value: Optional[str]) -> Optional[str]:
     return None
 
 
+def _extract_label(value: Any, *keys: str) -> Optional[str]:
+    """Return a non-empty string from ``value`` or selected mapping keys."""
+
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    if isinstance(value, Mapping):
+        for key in keys:
+            candidate = value.get(key)
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate.strip()
+    return None
+
+
 def _pax_category(ticket: Mapping[str, Any]) -> str:
-    pax_type = str(ticket.get("paxType") or ticket.get("type") or "ADULT").upper()
-    if pax_type == "INFANT":
+    pax_type_raw = (
+        _extract_label(ticket.get("paxType"), "code", "type", "name", "label")
+        or _extract_label(ticket.get("type"))
+        or _extract_label(ticket.get("pax_type"))
+        or "ADULT"
+    )
+    pax_type = pax_type_raw.upper()
+    if "INFANT" in pax_type:
         return "Infant"
-    if pax_type == "CHILD":
+    if "CHILD" in pax_type:
         return "Child"
 
     pax_user = ticket.get("paxUser") if isinstance(ticket.get("paxUser"), Mapping) else {}
-    gender_raw = ticket.get("gender") or (pax_user.get("gender") if isinstance(pax_user, Mapping) else None)
+    gender_raw = (
+        _extract_label(ticket.get("gender"))
+        or _extract_label(pax_user.get("gender"))
+        or _extract_label(pax_user.get("sex"))
+    )
     gender_label = _normalize_gender_label(gender_raw) or _normalize_gender_label(pax_type)
     return gender_label or "Male"
 
