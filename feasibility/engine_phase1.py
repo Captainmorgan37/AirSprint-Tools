@@ -18,6 +18,8 @@ from .duty_module import evaluate_generic_duty_day
 from .models import DayContext, FeasibilityRequest, FullFeasibilityResult
 from .quote_lookup import build_quote_leg_options
 from .schemas import CategoryStatus, combine_statuses
+from fl3xx_api import fetch_flight_pax_details
+
 
 
 def _coerce_str(value: Any) -> str:
