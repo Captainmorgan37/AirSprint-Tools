@@ -9,9 +9,9 @@ from .schemas import CategoryResult
 
 
 MAX_PAX_CARGO = {
-    "CJ2": {"Summer": 1086, "Winter": 1034},
-    "CJ3": {"Summer": 1602, "Winter": 1550},
-    "Embraer": {"Summer": 2116, "Winter": 2104},
+    "C25A": {"Summer": 1086, "Winter": 1034},
+    "C25B": {"Summer": 1602, "Winter": 1550},
+    "E545": {"Summer": 2116, "Winter": 2104},
 }
 
 
