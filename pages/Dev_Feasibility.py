@@ -5,6 +5,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, cast
 import streamlit as st
 
 from flight_leg_utils import FlightDataError, build_fl3xx_api_config
+from fl3xx_api import fetch_flight_pax_details
 from feasibility import (
     FeasibilityResult,
     run_feasibility_for_booking,
@@ -93,6 +94,24 @@ def _build_operational_notes_fetcher() -> Optional[
         return None
 
 
+def _build_pax_details_fetcher() -> Optional[Callable[[str], Mapping[str, Any]]]:
+    config = st.session_state.get("feasibility_fl3xx_config")
+    if config is None:
+        settings = _load_fl3xx_settings()
+        if not settings:
+            return None
+        try:
+            config = build_fl3xx_api_config(dict(settings))
+        except FlightDataError:
+            return None
+        st.session_state["feasibility_fl3xx_config"] = config
+
+    def fetcher(flight_id: str) -> Mapping[str, Any]:
+        return fetch_flight_pax_details(config, flight_id)
+
+    return fetcher
+
+
 def _run_feasibility(booking_identifier: str) -> Optional[FeasibilityResult]:
     if not booking_identifier:
         st.warning("Enter a booking identifier to continue.")
@@ -152,6 +171,9 @@ def _run_full_quote_day(quote: Mapping[str, Any]) -> Optional[FullFeasibilityRes
     fetcher = _build_operational_notes_fetcher()
     if fetcher:
         request_payload["operational_notes_fetcher"] = fetcher
+    pax_fetcher = _build_pax_details_fetcher()
+    if pax_fetcher:
+        request_payload["pax_details_fetcher"] = pax_fetcher
     with st.spinner("Running feasibility checks for entire quote day…"):
         try:
             return run_feasibility_phase1(request_payload)
