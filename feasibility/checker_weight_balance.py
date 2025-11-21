@@ -74,6 +74,8 @@ def _normalize_aircraft_type(name: Optional[str]) -> Optional[str]:
     if not text:
         return None
     upper_text = text.upper()
+    if "CJ3" in upper_text:
+        return "C25B"
     for key in MAX_PAX_CARGO:
         if key.upper() in upper_text:
             return key
