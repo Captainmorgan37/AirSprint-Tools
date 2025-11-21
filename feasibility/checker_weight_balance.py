@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 from datetime import datetime
 from typing import Any, Iterable, Mapping, MutableMapping, Optional
 
@@ -208,8 +209,16 @@ def evaluate_weight_balance(
             details=dict(details),
         )
     
-    print("PAX DEBUG: Keys received =", list(pax_payload.keys()))
+    pax_keys = list(pax_payload.keys()) if isinstance(pax_payload, Mapping) else []
+    print("PAX DEBUG: Keys received =", pax_keys)
     print("PAX DEBUG FULL:", pax_payload)
+
+    streamlit_available = importlib.util.find_spec("streamlit") is not None
+    if streamlit_available:
+        import streamlit as st
+
+        st.write("🔍 FULL PAX PAYLOAD STRUCTURE")
+        st.json(pax_payload)
 
     tickets = list(_iter_tickets(pax_payload))
     pax_count = len(tickets)
@@ -241,6 +250,7 @@ def evaluate_weight_balance(
             "paxCount": pax_count,
             "maxAllowed": None,
             "paxBreakdown": dict(pax_breakdown),
+            "paxPayloadKeys": pax_keys,
         }
     )
 
