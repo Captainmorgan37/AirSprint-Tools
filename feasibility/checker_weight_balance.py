@@ -99,7 +99,7 @@ def _pax_category(ticket: Mapping[str, Any]) -> str:
 
     pax_user = ticket.get("paxUser") if isinstance(ticket.get("paxUser"), Mapping) else {}
     gender_raw = ticket.get("gender") or (pax_user.get("gender") if isinstance(pax_user, Mapping) else None)
-    gender_label = _normalize_gender_label(gender_raw)
+    gender_label = _normalize_gender_label(gender_raw) or _normalize_gender_label(pax_type)
     return gender_label or "Male"
 
 
