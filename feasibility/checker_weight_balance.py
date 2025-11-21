@@ -207,7 +207,8 @@ def evaluate_weight_balance(
             issues=["Could not retrieve pax/cargo details."],
             details=dict(details),
         )
-
+    
+    st.write("DEBUG PAX PAYLOAD:", pax_payload)
     tickets = list(_iter_tickets(pax_payload))
     pax_count = len(tickets)
     pax_breakdown: MutableMapping[str, int] = {"Male": 0, "Female": 0, "Child": 0, "Infant": 0}
