@@ -487,6 +487,12 @@ def _collect_key_issues(result: Mapping[str, Any]) -> List[str]:
                 if status in {"CAUTION", "FAIL"}:
                     summary = aircraft.get("summary") or status
                     issues.append(f"Leg {index} Aircraft: {summary}")
+            weight_balance = leg.get("weightBalance")
+            if isinstance(weight_balance, Mapping):
+                status = weight_balance.get("status", "PASS")
+                if status in {"CAUTION", "FAIL"}:
+                    summary = weight_balance.get("summary") or status
+                    issues.append(f"Leg {index} Weight & Balance: {summary}")
             for side_name in ("departure", "arrival"):
                 side = leg.get(side_name)
                 if not isinstance(side, Mapping):
@@ -553,6 +559,7 @@ def _render_full_quote_result(result: FullFeasibilityResult) -> None:
         departure = leg.get("departure", {}) if isinstance(leg, Mapping) else {}
         arrival = leg.get("arrival", {}) if isinstance(leg, Mapping) else {}
         aircraft = leg.get("aircraft") if isinstance(leg, Mapping) else None
+        weight_balance = leg.get("weightBalance") if isinstance(leg, Mapping) else None
         dep_code = departure.get("icao", "???")
         arr_code = arrival.get("icao", "???")
         header = f"Leg {index}: {dep_code} → {arr_code}"
@@ -562,6 +569,12 @@ def _render_full_quote_result(result: FullFeasibilityResult) -> None:
             st.markdown(
                 f"{status_icon(aircraft_status)} Aircraft – {aircraft_summary}"
             )
+        if isinstance(weight_balance, Mapping):
+            wb_status = weight_balance.get("status", "PASS")
+            wb_summary = weight_balance.get("summary") or wb_status
+            st.markdown(
+                f"{status_icon(wb_status)} Weight & Balance – {wb_summary}"
+            )
         with st.expander(header, expanded=False):
             if isinstance(aircraft, Mapping):
                 aircraft_status = aircraft.get("status", "PASS")
@@ -570,6 +583,13 @@ def _render_full_quote_result(result: FullFeasibilityResult) -> None:
                     f"{status_icon(aircraft_status)} Aircraft – {aircraft_summary}"
                 )
             _render_aircraft_category(aircraft)
+            if isinstance(weight_balance, Mapping):
+                wb_status = weight_balance.get("status", "PASS")
+                wb_summary = weight_balance.get("summary") or wb_status
+                st.markdown(
+                    f"{status_icon(wb_status)} Weight & Balance – {wb_summary}"
+                )
+                _render_weight_balance_details(weight_balance)
             _render_leg_side("Departure", departure)
             _render_leg_side("Arrival", arrival)
 
@@ -655,6 +675,45 @@ def _render_category(name: str, category) -> None:
             st.markdown("\n".join(f"- {issue}" for issue in category.issues))
         else:
             st.write("No issues recorded.")
+
+        if name == "weightBalance":
+            _render_weight_balance_details(category)
+
+
+def _render_weight_balance_details(category) -> None:
+    details = None
+    if isinstance(category, Mapping):
+        details = category.get("details")
+    else:
+        details = getattr(category, "details", None)
+    if not isinstance(details, Mapping):
+        return
+
+    payload = {
+        "Season": details.get("season"),
+        "PAX Weight": details.get("paxWeight"),
+        "Cargo Weight": details.get("cargoWeight"),
+        "Total Payload": details.get("totalPayload"),
+        "Max Allowed": details.get("maxAllowed"),
+        "PAX Count": details.get("paxCount"),
+    }
+
+    metrics = [
+        ("Season", payload["Season"]),
+        ("PAX Weight", payload["PAX Weight"]),
+        ("Cargo Weight", payload["Cargo Weight"]),
+        ("Total Payload", payload["Total Payload"]),
+        ("Max Allowed", payload["Max Allowed"]),
+        ("PAX Count", payload["PAX Count"]),
+    ]
+
+    cols = st.columns(3)
+    for idx, (label, value) in enumerate(metrics):
+        col = cols[idx % 3]
+        if value is None:
+            col.metric(label, "n/a")
+        else:
+            col.metric(label, value)
 
 
 if stored_result and isinstance(stored_result, FeasibilityResult):

@@ -24,7 +24,7 @@ from .airport_notes_parser import (
     split_customs_operational_notes,
     summarize_operational_notes,
 )
-from . import checker_aircraft
+from . import checker_aircraft, checker_weight_balance
 from .common import extract_airport_code
 from .data_access import AirportCategoryRecord, CustomsRule, load_airport_categories, load_customs_rules
 from .schemas import CategoryResult, CategoryStatus
@@ -174,10 +174,12 @@ class AirportFeasibilityResult:
     departure: AirportSideResult
     arrival: AirportSideResult
     aircraft: CategoryResult
+    weight_balance: CategoryResult
 
     def iter_all_categories(self) -> Sequence[Tuple[str, CategoryResult]]:
         entries: List[Tuple[str, CategoryResult]] = []
         entries.append(("Aircraft", self.aircraft))
+        entries.append(("Weight / Balance", self.weight_balance))
         for prefix, side in (("Departure", self.departure), ("Arrival", self.arrival)):
             for label, result in side.iter_category_results():
                 entries.append((f"{prefix} {label}", result))
@@ -189,6 +191,7 @@ class AirportFeasibilityResult:
             "departure": self.departure.as_dict(),
             "arrival": self.arrival.as_dict(),
             "aircraft": self.aircraft.as_dict(),
+            "weightBalance": self.weight_balance.as_dict(),
         }
 
 
@@ -597,11 +600,23 @@ def evaluate_airport_feasibility_for_leg(
 
     aircraft_result = _evaluate_aircraft_endurance(leg)
 
+    pax_count = max(int(leg.get("pax") or 0), 0)
+    synthetic_tickets = [{"paxType": "ADULT"} for _ in range(pax_count)]
+    pax_payload: Mapping[str, Any] = {"pax": {"tickets": synthetic_tickets}}
+    season = checker_weight_balance.determine_season(leg.get("departure_date_utc") or leg)
+    weight_balance = checker_weight_balance.evaluate_weight_balance(
+        leg,
+        pax_payload=pax_payload,
+        aircraft_type=leg.get("aircraft_type"),
+        season=season,
+    )
+
     return AirportFeasibilityResult(
         leg_id=leg.get("leg_id", ""),
         departure=departure_side,
         arrival=arrival_side,
         aircraft=aircraft_result,
+        weight_balance=weight_balance,
     )
 
 
