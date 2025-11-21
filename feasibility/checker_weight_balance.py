@@ -208,7 +208,9 @@ def evaluate_weight_balance(
             details=dict(details),
         )
     
-    print("DEBUG PAX PAYLOAD:", pax_payload)
+    print("PAX DEBUG: Keys received =", list(pax_payload.keys()))
+    print("PAX DEBUG FULL:", pax_payload)
+
     tickets = list(_iter_tickets(pax_payload))
     pax_count = len(tickets)
     pax_breakdown: MutableMapping[str, int] = {"Male": 0, "Female": 0, "Child": 0, "Infant": 0}
