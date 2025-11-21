@@ -258,6 +258,9 @@ def build_quote_leg_options(
     for index, leg in enumerate(legs_raw):
         if not isinstance(leg, Mapping):
             continue
+        status = _coerce_upper(leg.get("status"))
+        if status in {"CANCELED", "CANCELLED"}:
+            continue
         flight = _normalize_quote_leg(quote_payload, leg, quote_id=quote_id, index=index)
         identifier = _coalesce_str(leg.get("id"), leg.get("legId")) or f"LEG-{index + 1}"
         label = _format_leg_label(leg, index)
