@@ -724,6 +724,13 @@ def _render_weight_balance_details(category) -> None:
             count = breakdown.get(label, 0)
             col.metric(label, count)
 
+    pax_keys = details.get("paxPayloadKeys") if isinstance(details, Mapping) else None
+    if pax_keys:
+        st.caption(f"PAX payload keys: {pax_keys}")
+
+    with st.expander("Debug: Raw weight balance details"):
+        st.json(details)
+
 
 if stored_result and isinstance(stored_result, FeasibilityResult):
     overall_emoji = STATUS_EMOJI.get(stored_result.overall_status, "")

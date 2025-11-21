@@ -242,6 +242,7 @@ def evaluate_weight_balance(
             "paxCount": pax_count,
             "maxAllowed": None,
             "paxBreakdown": dict(pax_breakdown),
+            "paxPayloadKeys": pax_keys,
         }
     )
 
