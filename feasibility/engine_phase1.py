@@ -232,16 +232,31 @@ def run_feasibility_phase1(request: FeasibilityRequest) -> FullFeasibilityResult
     tz_provider = request.get("tz_provider") or _build_default_tz_provider()
     operational_notes_fetcher = request.get("operational_notes_fetcher")
 
+    pax_payloads = {}
     leg_results: List[AirportFeasibilityResult] = []
+    
     for leg in day["legs"]:
+        flight_id = leg.get("flight_id") or leg.get("flightId") or leg.get("id")
+    
+        pax_payload = None
+        if flight_id:
+            try:
+                pax_payload = fetch_flight_pax_details(request.get("config"), flight_id)
+            except Exception:
+                pax_payload = None
+    
+        pax_payloads[flight_id] = pax_payload
+    
         leg_results.append(
             evaluate_airport_feasibility_for_leg(
                 leg,
                 tz_provider=tz_provider,
                 airport_metadata=airport_metadata,
                 operational_notes_fetcher=operational_notes_fetcher,
+                pax_payload=pax_payload,  # ★ ADD THIS LINE
             )
         )
+    
 
     duty_result = evaluate_generic_duty_day(day, tz_provider=tz_provider)
     overall_status = _determine_overall_status(leg_results, duty_result)
