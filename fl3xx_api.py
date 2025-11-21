@@ -372,7 +372,12 @@ def fetch_flight_pax_details(
     *,
     session: Optional[requests.Session] = None,
 ) -> Any:
-    """Return the pax_details payload for a specific flight."""
+    """Return the pax_details payload for a specific flight.
+
+    This issues a GET to ``{base_url}/{flight_id}/pax_details`` (with the
+    default base pointing at the external ``/flight/flights`` host) and is
+    the source used by feasibility to read passenger genders and types.
+    """
 
     http = session or requests.Session()
     close_session = session is None
