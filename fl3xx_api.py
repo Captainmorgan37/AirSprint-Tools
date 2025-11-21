@@ -178,6 +178,13 @@ def _build_preflight_endpoint(base_url: str, flight_id: Any) -> str:
     return f"{base}/{flight_id}/preflight"
 
 
+def _build_pax_details_endpoint(base_url: str, flight_id: Any) -> str:
+    base = base_url.rstrip("/")
+    if base.lower().endswith("/flights"):
+        base = base[: -len("/flights")]
+    return f"{base}/{flight_id}/pax_details"
+
+
 def _build_notification_endpoint(base_url: str, flight_id: Any) -> str:
     base = base_url.rstrip("/")
     if base.lower().endswith("/flights"):
@@ -345,6 +352,33 @@ def fetch_preflight(
     try:
         response = http.get(
             _build_preflight_endpoint(config.base_url, flight_id),
+            headers=config.build_headers(),
+            timeout=config.timeout,
+            verify=config.verify_ssl,
+        )
+        response.raise_for_status()
+        return response.json()
+    finally:
+        if close_session:
+            try:
+                http.close()
+            except AttributeError:
+                pass
+
+
+def fetch_flight_pax_details(
+    config: Fl3xxApiConfig,
+    flight_id: Any,
+    *,
+    session: Optional[requests.Session] = None,
+) -> Any:
+    """Return the pax_details payload for a specific flight."""
+
+    http = session or requests.Session()
+    close_session = session is None
+    try:
+        response = http.get(
+            _build_pax_details_endpoint(config.base_url, flight_id),
             headers=config.build_headers(),
             timeout=config.timeout,
             verify=config.verify_ssl,
@@ -1326,6 +1360,7 @@ __all__ = [
     "fetch_flight_crew",
     "fetch_postflight",
     "fetch_preflight",
+    "fetch_flight_pax_details",
     "fetch_flight_services",
     "fetch_operational_notes",
     "fetch_flight_planning_note",
