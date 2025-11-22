@@ -23,9 +23,6 @@ from flight_leg_utils import (
 
 
 _TARGET_DATE_VALUES: Sequence[date] = (
-    date(2025, 11, 6),
-    date(2025, 11, 7),
-    date(2025, 11, 11),
     date(2025, 12, 21),
     date(2025, 12, 26),
     date(2025, 12, 27),

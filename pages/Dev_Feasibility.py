@@ -3,11 +3,18 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, cast
 
+import pytz
+
 import pandas as pd
 
 import streamlit as st
 
-from flight_leg_utils import FlightDataError, build_fl3xx_api_config
+from flight_leg_utils import (
+    FlightDataError,
+    build_fl3xx_api_config,
+    load_airport_tz_lookup,
+    safe_parse_dt,
+)
 from fl3xx_api import fetch_flight_pax_details
 from feasibility import (
     FeasibilityResult,
@@ -22,6 +29,7 @@ from feasibility.quote_lookup import (
 )
 from Home import configure_page, password_gate, render_sidebar
 from feasibility.models import FullFeasibilityResult
+from reserve_calendar_checker import TARGET_DATES
 
 configure_page(page_title="Feasibility Engine (Dev)")
 password_gate()
@@ -59,6 +67,71 @@ SECTION_LABELS = {
     "operational_notes": "Other Operational Notes",
 }
 KEY_ISSUE_SECTIONS = {"customs", "deice", "overflight"}
+RESERVE_CALENDAR_DATES = set(TARGET_DATES)
+DEPARTURE_AIRPORT_KEYS = (
+    "departure_airport",
+    "dep_airport",
+    "departureAirport",
+    "airportFrom",
+    "fromAirport",
+)
+DEPARTURE_TIME_KEYS = (
+    "dep_time",
+    "departureTime",
+    "departureDateUTC",
+    "departureDate",
+)
+
+
+def _extract_airport_code(flight: Mapping[str, Any]) -> Optional[str]:
+    for key in DEPARTURE_AIRPORT_KEYS:
+        value = flight.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip().upper()
+    return None
+
+
+def _extract_departure_time(flight: Mapping[str, Any]) -> Optional[str]:
+    for key in DEPARTURE_TIME_KEYS:
+        value = flight.get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return None
+
+
+def _is_reserve_calendar_departure(flight: Optional[Mapping[str, Any]]) -> bool:
+    if not isinstance(flight, Mapping):
+        return False
+
+    departure_time = _extract_departure_time(flight)
+    if not departure_time:
+        return False
+
+    try:
+        dep_dt = safe_parse_dt(departure_time)
+    except Exception:
+        return False
+
+    tz_name: Optional[str] = None
+    dep_airport = _extract_airport_code(flight)
+    if dep_airport:
+        tz_lookup = load_airport_tz_lookup()
+        tz_candidate = tz_lookup.get(dep_airport)
+        if isinstance(tz_candidate, str) and tz_candidate.strip():
+            tz_name = tz_candidate.strip()
+
+    if tz_name:
+        try:
+            dep_dt = dep_dt.astimezone(pytz.timezone(tz_name))
+        except Exception:
+            dep_dt = dep_dt.astimezone(pytz.UTC)
+    else:
+        dep_dt = dep_dt.astimezone(pytz.UTC)
+
+    return dep_dt.date() in RESERVE_CALENDAR_DATES
 
 
 def status_icon(status: str) -> str:
@@ -748,6 +821,9 @@ if stored_result and isinstance(stored_result, FeasibilityResult):
     overall_emoji = STATUS_EMOJI.get(stored_result.overall_status, "")
     st.subheader(f"{overall_emoji} Overall Status: {stored_result.overall_status}")
     st.caption(f"Generated at {stored_result.timestamp}")
+
+    if _is_reserve_calendar_departure(stored_result.flight):
+        st.warning("Flight taking place on reserve calendar day.")
 
     for name, category in stored_result.categories.items():
         _render_category(name, category)
