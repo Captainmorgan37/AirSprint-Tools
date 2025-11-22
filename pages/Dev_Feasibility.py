@@ -541,27 +541,38 @@ def _render_aircraft_category(
 
 
 def _render_leg_side(label: str, side: Mapping[str, Any]) -> None:
+    side_lower = label.lower()
+    background_color = "rgba(46, 132, 208, 0.10)" if side_lower == "departure" else "rgba(94, 186, 125, 0.10)"
+    border_color = "rgba(46, 132, 208, 0.35)" if side_lower == "departure" else "rgba(94, 186, 125, 0.35)"
     icao = side.get("icao", "???") if isinstance(side, Mapping) else "???"
-    st.markdown(f"**{label} {icao}**")
-    planned_time_local = None
-    if label.lower() == "arrival" and isinstance(side, Mapping):
-        planned_value = side.get("planned_time_local")
-        if planned_value:
-            planned_time_local = str(planned_value)
-    for key in SECTION_ORDER:
-        display = SECTION_LABELS.get(key, key.title())
-        category = side.get(key) if isinstance(side, Mapping) else None
-        if isinstance(category, Mapping):
-            _render_category_block(display, category)
-    parsed_customs = side.get("parsed_customs_notes") if isinstance(side, Mapping) else None
-    _render_customs_details(
-        parsed_customs if isinstance(parsed_customs, Mapping) else None,
-        planned_time_local=planned_time_local,
-    )
-    parsed_ops = side.get("parsed_operational_restrictions") if isinstance(side, Mapping) else None
-    _render_operational_restrictions(parsed_ops if isinstance(parsed_ops, Mapping) else None)
-    raw_notes = side.get("raw_operational_notes") if isinstance(side, Mapping) else None
-    _render_raw_operational_notes(raw_notes)
+    with st.container():
+        st.markdown(
+            f"""
+            <div style="background: {background_color}; border: 1px solid {border_color}; padding: 1rem; border-radius: 0.75rem;">
+            """,
+            unsafe_allow_html=True,
+        )
+        st.markdown(f"**{label} {icao}**")
+        planned_time_local = None
+        if side_lower == "arrival" and isinstance(side, Mapping):
+            planned_value = side.get("planned_time_local")
+            if planned_value:
+                planned_time_local = str(planned_value)
+        for key in SECTION_ORDER:
+            display = SECTION_LABELS.get(key, key.title())
+            category = side.get(key) if isinstance(side, Mapping) else None
+            if isinstance(category, Mapping):
+                _render_category_block(display, category)
+        parsed_customs = side.get("parsed_customs_notes") if isinstance(side, Mapping) else None
+        _render_customs_details(
+            parsed_customs if isinstance(parsed_customs, Mapping) else None,
+            planned_time_local=planned_time_local,
+        )
+        parsed_ops = side.get("parsed_operational_restrictions") if isinstance(side, Mapping) else None
+        _render_operational_restrictions(parsed_ops if isinstance(parsed_ops, Mapping) else None)
+        raw_notes = side.get("raw_operational_notes") if isinstance(side, Mapping) else None
+        _render_raw_operational_notes(raw_notes)
+        st.markdown("</div>", unsafe_allow_html=True)
 
 
 def _collect_key_issues(result: Mapping[str, Any]) -> List[str]:
