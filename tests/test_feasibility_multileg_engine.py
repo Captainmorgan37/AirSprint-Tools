@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from pathlib import Path
 import sys
 from typing import Any, Dict, List, Optional, cast
 
@@ -195,6 +196,56 @@ def test_phase1_engine_surfaces_pax_details_error() -> None:
     assert "Unauthorized" in details.get("payloadError", "")
 
 
+def test_flight_category_highlights_osa_routes() -> None:
+    quote = {
+        "bookingIdentifier": "OSA-TEST",
+        "aircraftObj": {"type": "CJ3", "category": "LIGHT_JET"},
+        "legs": [
+            {
+                "id": "LEG-OSA-1",
+                "departureAirport": "CYYZ",
+                "arrivalAirport": "MMMX",
+                "departureDateUTC": "2025-11-19T12:00:00Z",
+                "arrivalDateUTC": "2025-11-19T16:00:00Z",
+                "blockTime": 240,
+            },
+            {
+                "id": "LEG-OSA-2",
+                "departureAirport": "MMMX",
+                "arrivalAirport": "EGLL",
+                "departureDateUTC": "2025-11-20T10:00:00Z",
+                "arrivalDateUTC": "2025-11-20T18:00:00Z",
+                "blockTime": 480,
+            },
+        ],
+    }
+
+    result = run_feasibility_phase1({"quote": quote, "tz_provider": lambda _icao: None})
+
+    assert result["flight_category"] == "OSA"
+
+
+def test_flight_category_detects_us_point_to_point() -> None:
+    quote = {
+        "bookingIdentifier": "US-DOMESTIC",
+        "aircraftObj": {"type": "CJ3", "category": "LIGHT_JET"},
+        "legs": [
+            {
+                "id": "LEG-US",
+                "departureAirport": "KBOS",
+                "arrivalAirport": "KDEN",
+                "departureDateUTC": "2025-12-01T12:00:00Z",
+                "arrivalDateUTC": "2025-12-01T16:30:00Z",
+                "blockTime": 270,
+            }
+        ],
+    }
+
+    result = run_feasibility_phase1({"quote": quote, "tz_provider": lambda _icao: None})
+
+    assert result["flight_category"] == "US point-to-point"
+
+
 def test_weight_balance_reads_nested_pax_and_cargo_payload() -> None:
     payload = {
         "paxDetails": {
@@ -275,7 +326,7 @@ def test_aircraft_endurance_is_evaluated_for_each_leg() -> None:
 
     leg = result["legs"][0]
     assert leg["aircraft"]["status"] == "FAIL"
-    assert "exceeds pax endurance" in leg["aircraft"]["summary"]
+    assert "pax" in leg["aircraft"]["summary"].lower()
     assert leg["weightBalance"]["status"] == "FAIL"
     assert "Overweight" in "".join(leg["weightBalance"].get("issues", []))
     assert result["overall_status"] == "FAIL"

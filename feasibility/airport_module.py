@@ -524,10 +524,6 @@ def _build_slot_ppr_profile(icao: str, airport_categories: Mapping[str, AirportC
     notes_upper = notes.upper() if notes else ""
     slot_required = any(keyword in notes_upper for keyword in SLOT_KEYWORDS)
     ppr_required = any(keyword in notes_upper for keyword in PPR_KEYWORDS)
-    # Airports classified as OSA often require coordination
-    if record and record.category == "OSA":
-        slot_required = True
-        ppr_required = True
     lead_days = _extract_lead_days(notes)
     return SlotPprProfile(
         icao=icao,
@@ -721,7 +717,13 @@ def evaluate_airport_side(
         operational_notes,
         parsed_customs=parsed_customs_notes,
     )
-    slot_ppr = evaluate_slot_ppr(slot_ppr_profile, leg, side, date_local)
+    slot_ppr = evaluate_slot_ppr(
+        slot_ppr_profile,
+        leg,
+        side,
+        date_local,
+        parsed_restrictions=parsed_operational_restrictions,
+    )
     osa_ssa = evaluate_osa_ssa(osa_ssa_profile, leg, side)
     operational_notes_result = summarize_operational_notes(
         icao,
@@ -1046,14 +1048,8 @@ def evaluate_slot_ppr(
     leg: LegContext,
     side: str,
     date_local: Optional[str],
+    parsed_restrictions: Optional[ParsedRestrictions] = None,
 ) -> CategoryResult:
-    slot_booking_windows_days = {
-        "CYYZ": 10,
-        "CYUL": 10,
-        "CYYC": 10,
-        "CYVR": 3,
-    }
-
     issues: List[str] = []
     status: CategoryStatus = "PASS"
     summary = "No slot/PPR requirement"
@@ -1064,34 +1060,75 @@ def evaluate_slot_ppr(
     if target_dt:
         hours_until_event = (target_dt - now).total_seconds() / 3600
 
-    def _within_booking_window() -> bool:
-        icao = slot_ppr_profile.icao.upper()
-        booking_window_days = slot_booking_windows_days.get(icao)
-        if booking_window_days is None:
-            return True
-        if hours_until_event is None:
-            return False
-        return hours_until_event <= booking_window_days * 24
+    restrictions = parsed_restrictions or {}
 
-    def _check_requirement(required: bool, label: str, lead_days: Optional[int]) -> None:
-        nonlocal status, summary
-        if not required or not _within_booking_window():
-            return
-        required_summary = f"{label} required"
-        summary = required_summary
+    slot_required = bool(restrictions.get("slot_required")) or slot_ppr_profile.slot_required
+    ppr_required = bool(restrictions.get("ppr_required")) or slot_ppr_profile.ppr_required
+
+    slot_lead_days = restrictions.get("slot_lead_days") or slot_ppr_profile.slot_lead_days
+    slot_lead_hours = restrictions.get("slot_lead_hours")
+    ppr_lead_days = restrictions.get("ppr_lead_days") or slot_ppr_profile.ppr_lead_days
+    ppr_lead_hours = restrictions.get("ppr_lead_hours")
+
+    slot_notes = restrictions.get("slot_notes") if slot_required else []
+    ppr_notes = restrictions.get("ppr_notes") if ppr_required else []
+
+    def _format_lead(
+        lead_days: Optional[int], lead_hours: Optional[int]
+    ) -> tuple[Optional[int], Optional[str], Optional[str]]:
+        if lead_days is not None:
+            label = f"{lead_days} day" if lead_days == 1 else f"{lead_days} days"
+            return lead_days * 24, f"{label} out", f"{lead_days}-day"
+        if lead_hours is not None:
+            label = f"{lead_hours} hour" if lead_hours == 1 else f"{lead_hours} hours"
+            return lead_hours, f"{label} out", f"{lead_hours}-hour"
+        return None, None, None
+
+    def _handle_requirement(
+        required: bool,
+        label: str,
+        lead_days: Optional[int],
+        lead_hours: Optional[int],
+        notes: Sequence[str] | None,
+    ) -> Optional[str]:
+        nonlocal status
+        if not required:
+            return None
+
+        lead_hours_total, lead_display, window_label = _format_lead(lead_days, lead_hours)
+
+        if lead_hours_total is not None and hours_until_event is not None and hours_until_event > lead_hours_total:
+            for note in notes or []:
+                issues.append(note)
+            return f"{label} can only be obtained {lead_display}" if lead_display else f"{label} can only be obtained closer to departure"
+
         status = _combine_status(status, "CAUTION")
         issues.append(f"{label} required for {slot_ppr_profile.icao}.")
-        if lead_days is not None and hours_until_event is not None:
-            lead_hours = lead_days * 24
-            if hours_until_event < lead_hours:
-                status = _combine_status(status, "FAIL")
-                issues.append(f"Inside {lead_days}-day {label.lower()} window; action immediately.")
 
-    _check_requirement(slot_ppr_profile.slot_required, "Slot", slot_ppr_profile.slot_lead_days)
-    _check_requirement(slot_ppr_profile.ppr_required, "PPR", slot_ppr_profile.ppr_lead_days)
+        if lead_hours_total is not None and hours_until_event is not None and hours_until_event < lead_hours_total:
+            status = _combine_status(status, "FAIL")
+            window_descriptor = window_label or "published"
+            issues.append(f"Inside {window_descriptor} {label.lower()} window; action immediately.")
+
+        for note in notes or []:
+            issues.append(note)
+
+        return f"{label} required"
+
+    summary_messages: List[str] = []
+    for label, required, lead_days, lead_hours, notes in (
+        ("Slot", slot_required, slot_lead_days, slot_lead_hours, slot_notes),
+        ("PPR", ppr_required, ppr_lead_days, ppr_lead_hours, ppr_notes),
+    ):
+        message = _handle_requirement(required, label, lead_days, lead_hours, notes)
+        if message:
+            summary_messages.append(message)
 
     if slot_ppr_profile.notes:
         issues.append(slot_ppr_profile.notes)
+
+    if summary_messages:
+        summary = summary_messages[0]
 
     return CategoryResult(status=status, summary=summary, issues=issues)
 
