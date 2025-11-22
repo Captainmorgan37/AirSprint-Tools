@@ -27,13 +27,37 @@ def test_praetor_pass_when_margin_is_large():
 
 
 def test_praetor_caution_when_close_to_limit():
-    result = checker_aircraft.evaluate_aircraft(_build_flight(plannedBlockTime="7:05", pax=4))
+    result = checker_aircraft.evaluate_aircraft(_build_flight(plannedBlockTime="7:25", pax=4))
     assert result.status == "CAUTION"
     assert "endurance" in result.summary
 
 
 def test_praetor_fail_when_over_limit():
-    result = checker_aircraft.evaluate_aircraft(_build_flight(plannedBlockTime="7:20", pax=4))
+    result = checker_aircraft.evaluate_aircraft(_build_flight(plannedBlockTime="7:31", pax=4))
+    assert result.status == "FAIL"
+    assert "exceeds pax endurance" in result.summary
+
+
+def test_legacy_450_uses_six_hour_limit_for_four_pax():
+    result = checker_aircraft.evaluate_aircraft(
+        {
+            "aircraftType": "E545",
+            "plannedBlockTime": "6:15",
+            "pax": 4,
+        }
+    )
+    assert result.status == "CAUTION"
+    assert "slightly exceeds pax endurance" in result.summary
+
+
+def test_legacy_450_fails_when_more_than_fifteen_minutes_over():
+    result = checker_aircraft.evaluate_aircraft(
+        {
+            "aircraftType": "E545",
+            "plannedBlockTime": "6:16",
+            "pax": 4,
+        }
+    )
     assert result.status == "FAIL"
     assert "exceeds pax endurance" in result.summary
 
