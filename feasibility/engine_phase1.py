@@ -247,7 +247,12 @@ def _determine_overall_status(
     statuses: List[CategoryStatus] = [duty_result.get("status", "PASS")]
     for result in leg_results:
         statuses.append(_leg_status(result))
-    return combine_statuses(statuses)
+
+    # Full-day quotes should only surface PASS, CAUTION, or FAIL. If all
+    # categories are informational, treat the day as a PASS.
+    normalized = ["PASS" if status == "INFO" else status for status in statuses]
+
+    return combine_statuses(normalized)
 
 
 def run_feasibility_phase1(request: FeasibilityRequest) -> FullFeasibilityResult:
