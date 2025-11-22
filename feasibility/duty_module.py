@@ -63,7 +63,7 @@ def _compute_turn_time(previous: LegContext, current: LegContext) -> Optional[in
 
 
 def _worse_status(current: CategoryStatus, candidate: CategoryStatus) -> CategoryStatus:
-    ranking = {"PASS": 0, "CAUTION": 1, "FAIL": 2}
+    ranking = {"PASS": 0, "INFO": 1, "CAUTION": 2, "FAIL": 3}
     return candidate if ranking[candidate] > ranking[current] else current
 
 

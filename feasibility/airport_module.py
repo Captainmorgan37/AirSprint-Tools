@@ -217,7 +217,12 @@ SLOT_KEYWORDS = ("SLOT", "ATC SLOT")
 PPR_KEYWORDS = ("PPR", "PRIOR PERMISSION")
 
 _RUNWAYS_PATH = Path(__file__).resolve().parents[1] / "runways.csv"
-_STATUS_PRIORITY: Mapping[CategoryStatus, int] = {"PASS": 0, "CAUTION": 1, "FAIL": 2}
+_STATUS_PRIORITY: Mapping[CategoryStatus, int] = {
+    "PASS": 0,
+    "INFO": 1,
+    "CAUTION": 2,
+    "FAIL": 3,
+}
 
 
 def _default_operational_notes_fetcher(icao: str, date_local: Optional[str]) -> Sequence[Mapping[str, Any]]:

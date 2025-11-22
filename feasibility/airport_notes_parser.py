@@ -38,6 +38,7 @@ class ParsedRestrictions(TypedDict):
 
     runway_limitations: list[str]
     aircraft_type_limits: list[str]
+    surface_contamination: bool
 
     generic_restrictions: list[str]
     raw_notes: list[str]
@@ -66,7 +67,12 @@ class ParsedCustoms(TypedDict):
     raw_notes: list[str]
 
 
-_STATUS_PRIORITY: Mapping[CategoryStatus, int] = {"PASS": 0, "CAUTION": 1, "FAIL": 2}
+_STATUS_PRIORITY: Mapping[CategoryStatus, int] = {
+    "PASS": 0,
+    "INFO": 1,
+    "CAUTION": 2,
+    "FAIL": 3,
+}
 
 SLOT_KEYWORDS = ("slot", "slots", "reservation", "reservations", "ecvrs", "ocs")
 WINTER_KEYWORDS = (
@@ -83,6 +89,16 @@ FUEL_KEYWORDS = ("fuel not available", "fuel unavailable", "no fuel")
 DEICE_KEYWORDS = ("deice", "antice", "de-ice")
 NIGHT_KEYWORDS = ("night ops", "no night ops", "night operations", "night landings", "curfew", "sunset")
 RUNWAY_KEYWORDS = ("rwy", "runway", "landings", "departures")
+RUNWAY_RESTRICTION_TERMS = (
+    "closed",
+    "clsd",
+    "closure",
+    "not available",
+    "unavailable",
+    "restricted",
+    "limitation",
+)
+RUNWAY_CONTAMINATION_TERMS = ("contaminated", "contamination")
 CUSTOMS_NOTE_KEYWORDS = (
     "customs",
     "canpass",
@@ -168,6 +184,7 @@ def _empty_parsed_restrictions() -> ParsedRestrictions:
         "hour_notes": [],
         "runway_limitations": [],
         "aircraft_type_limits": [],
+        "surface_contamination": False,
         "generic_restrictions": [],
         "raw_notes": [],
     }
@@ -197,6 +214,25 @@ def _empty_parsed_customs() -> ParsedCustoms:
 def _contains_keyword(text: str, keywords: Sequence[str]) -> bool:
     lower = text.lower()
     return any(keyword in lower for keyword in keywords)
+
+
+def _has_weight_limitation(text: str) -> bool:
+    lower = text.lower()
+    if "weight" not in lower:
+        return False
+    return any(
+        keyword in lower
+        for keyword in (
+            "limit",
+            "restricted",
+            "restriction",
+            "max",
+            "maximum",
+            "mlw",
+            "lbs",
+            "ton",
+        )
+    )
 
 
 def is_ppr_note(text: str) -> bool:
@@ -249,7 +285,10 @@ def parse_operational_restrictions(notes: Sequence[str]) -> ParsedRestrictions:
         if not text:
             continue
         parsed["raw_notes"].append(text)
+        lower = text.lower()
         categories = _classify_operational_note(text)
+        if "contaminated" in lower:
+            parsed["surface_contamination"] = True
         if "slot" in categories:
             _extract_slot_details(text, parsed)
         if "ppr" in categories:
@@ -334,7 +373,16 @@ def _extract_night_details(note: str, out: ParsedRestrictions) -> None:
 
 
 def _extract_runway_details(note: str, out: ParsedRestrictions) -> None:
-    if RUNWAY_NUM_RE.search(note):
+    lower = note.lower()
+    actionable = False
+    if _contains_keyword(lower, RUNWAY_RESTRICTION_TERMS):
+        actionable = True
+    if _has_weight_limitation(lower):
+        actionable = True
+    if _contains_keyword(lower, RUNWAY_CONTAMINATION_TERMS):
+        out["surface_contamination"] = True
+        actionable = True
+    if actionable:
         out["runway_limitations"].append(note)
 
 
@@ -439,7 +487,7 @@ def summarize_operational_notes(
     status: CategoryStatus = "PASS"
     issues: list[str] = []
 
-    def add_issue(message: str, severity: CategoryStatus = "PASS") -> None:
+    def add_issue(message: str, severity: CategoryStatus = "INFO") -> None:
         nonlocal status
         issues.append(message)
         status = _combine_status(status, severity)
@@ -467,18 +515,21 @@ def summarize_operational_notes(
             issues.append(f"Deice note: {note}")
     elif restrictions["deice_limited"]:
         add_issue("Operational note: deice limited", "CAUTION")
-    if restrictions["winter_sensitivity"]:
-        add_issue("Winter operations sensitivity reported", "CAUTION")
     if restrictions["fuel_available"] is False:
         add_issue("Fuel unavailable per operational notes", "CAUTION")
     if restrictions["night_ops_allowed"] is False:
         add_issue("Night operations prohibited", "CAUTION")
     if restrictions["curfew"]:
         add_issue("Curfew in effect per operational notes", "CAUTION")
+    if restrictions["surface_contamination"]:
+        add_issue("Surface contamination reported in operational notes", "CAUTION")
     for runway_note in restrictions["runway_limitations"]:
         add_issue(f"Runway restriction: {runway_note}", "CAUTION")
     for acft_note in restrictions["aircraft_type_limits"]:
         add_issue(f"Aircraft limit: {acft_note}", "CAUTION")
+
+    if restrictions["winter_sensitivity"] and status == "PASS":
+        add_issue("Winter operations sensitivity reported", "INFO")
 
     if customs["canpass_only"]:
         add_issue("Customs limited to CANPASS", "CAUTION")
@@ -500,11 +551,19 @@ def summarize_operational_notes(
         add_issue("Crew documentation requirements noted", "CAUTION")
 
     summary = "Operational notes reviewed"
-    if status != "PASS":
+    if status == "CAUTION":
         summary = "Operational restrictions detected"
+    elif status == "INFO":
+        summary = "Operational notes available — no restrictions detected."
 
-    if not issues:
-        issues.append("Operational notes available")
+    if not issues and has_raw_notes:
+        issues.append(summary)
+        status = _combine_status(status, "INFO")
+    elif status == "PASS" and has_raw_notes:
+        status = "INFO"
+        summary = "Operational notes available — no restrictions detected."
+        if not issues:
+            issues.append(summary)
 
     return CategoryResult(status=status, summary=summary, issues=issues)
 
