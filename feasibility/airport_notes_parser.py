@@ -416,10 +416,31 @@ def _extract_deice_details(
     lower = note.lower()
     if "not available" in lower or "no deice" in lower or "no de-ice" in lower:
         out["deice_unavailable"] = True
-    if "limited" in lower:
+    if _contains_limited_deice(lower):
         out["deice_limited"] = True
     if add_note:
         out["deice_notes"].append(note)
+
+
+def _contains_limited_deice(text: str) -> bool:
+    """Return True when the note explicitly calls out limited deice support."""
+
+    phrases = (
+        "limited deice",
+        "limited de-ice",
+        "limited deicing",
+        "deice limited",
+        "de-ice limited",
+        "deicing limited",
+    )
+    if any(phrase in text for phrase in phrases):
+        return True
+
+    proximity_patterns = (
+        r"limited[^\n]{0,30}de-?ic",
+        r"de-?ic[^\n]{0,30}limited",
+    )
+    return any(re.search(pattern, text) for pattern in proximity_patterns)
 
 
 def _extract_fuel_details(
