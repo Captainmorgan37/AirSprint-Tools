@@ -24,26 +24,35 @@ def _build_slot_profile(icao: str) -> SlotPprProfile:
     )
 
 
-def test_cyyz_slot_skipped_outside_booking_window() -> None:
+def test_slot_outside_lead_window_reports_future_opening() -> None:
     leg = _build_leg(15)
-    profile = _build_slot_profile("CYYZ")
+    profile = _build_slot_profile("CYYC")
+    parsed_restrictions = {
+        "slot_required": True,
+        "slot_lead_days": 10,
+        "slot_notes": ["Slot required (10 day lead)"],
+    }
 
-    result = evaluate_slot_ppr(profile, leg, "DEP", None)
+    result = evaluate_slot_ppr(profile, leg, "DEP", None, parsed_restrictions)
 
     assert result.status == "PASS"
-    assert result.summary == "No slot/PPR requirement"
-    assert result.issues == []
+    assert result.summary == "Slot can only be obtained 10 days out"
+    assert "Slot required (10 day lead)" in result.issues
 
 
-def test_cyvr_slot_flagged_within_booking_window() -> None:
-    leg = _build_leg(2)
-    profile = _build_slot_profile("CYVR")
+def test_slot_inside_lead_window_flags_failure() -> None:
+    leg = _build_leg(5)
+    profile = _build_slot_profile("CYYZ")
+    parsed_restrictions = {
+        "slot_required": True,
+        "slot_lead_days": 10,
+    }
 
-    result = evaluate_slot_ppr(profile, leg, "DEP", None)
+    result = evaluate_slot_ppr(profile, leg, "DEP", None, parsed_restrictions)
 
-    assert result.status == "CAUTION"
+    assert result.status == "FAIL"
     assert result.summary == "Slot required"
-    assert "Slot required for CYVR." in result.issues
+    assert any("Inside 10-day" in issue for issue in result.issues)
 
 
 def test_ssa_category_does_not_infer_slot_or_ppr() -> None:
@@ -53,3 +62,19 @@ def test_ssa_category_does_not_infer_slot_or_ppr() -> None:
 
     assert profile.slot_required is False
     assert profile.ppr_required is False
+
+
+def test_generic_category_notes_are_ignored_in_slot_ppr_details() -> None:
+    categories = {
+        "CYYC": AirportCategoryRecord(
+            icao="CYYC", category="STANDARD", notes="Primary service area airport with no special handling required."
+        )
+    }
+
+    profile = _build_slot_ppr_profile("CYYC", categories)
+    leg = _build_leg(3)
+
+    result = evaluate_slot_ppr(profile, leg, "DEP", None, {})
+
+    assert profile.notes is None
+    assert "Primary service area airport with no special handling required." not in result.issues

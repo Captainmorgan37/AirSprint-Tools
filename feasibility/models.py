@@ -52,6 +52,7 @@ class FullFeasibilityResult(TypedDict):
     bookingIdentifier: str
     aircraft_type: str
     aircraft_category: str
+    flight_category: Optional[str]
     legs: Sequence[Mapping[str, Any]]
     duty: DutyFeasibilityResult
     overall_status: CategoryStatus
