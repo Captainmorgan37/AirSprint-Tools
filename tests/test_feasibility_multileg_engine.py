@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 import sys
-from typing import Any, Dict, Optional, cast
+from typing import Any, Dict, List, Optional, cast
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from feasibility.engine_phase1 import run_feasibility_phase1
+from feasibility import checker_weight_balance
 from feasibility.duty_module import evaluate_generic_duty_day
 from feasibility.models import DayContext
 
@@ -56,6 +57,201 @@ def test_phase1_engine_runs_for_entire_quote() -> None:
     assert result["duty"]["total_duty"] == 270
     assert result["duty"]["status"] == "PASS"
     assert all(leg["weightBalance"]["status"] == "PASS" for leg in result["legs"])
+
+
+def test_phase1_engine_uses_pax_details_fetcher() -> None:
+    quote = {
+        "bookingIdentifier": "PAX1",
+        "legs": [
+            {
+                "id": "LEG-PAX",
+                "departureAirport": "CYYC",
+                "arrivalAirport": "CYVR",
+                "departureDateUTC": "2025-11-19T15:00:00Z",
+                "arrivalDateUTC": "2025-11-19T17:00:00Z",
+                "pax": 0,
+                "blockTime": 120,
+            }
+        ],
+    }
+
+    fetched_ids: list[str] = []
+
+    def _fetcher(flight_id: str) -> Dict[str, Any]:
+        fetched_ids.append(flight_id)
+        return {
+            "pax": {
+                "tickets": [
+                    {"paxType": "ADULT", "paxUser": {"gender": "Male"}},
+                    {"paxType": "ADULT", "paxUser": {"gender": "Female"}},
+                ]
+            }
+        }
+
+    result = run_feasibility_phase1(
+        {"quote": quote, "tz_provider": _tz_provider, "pax_details_fetcher": _fetcher}
+    )
+
+    assert fetched_ids == ["LEG-PAX"]
+    leg = result["legs"][0]
+    details = leg["weightBalance"]["details"]
+    assert details["paxCount"] == 2
+    assert details["paxBreakdown"]["Male"] == 1
+    assert details["paxBreakdown"]["Female"] == 1
+
+
+def test_phase1_engine_prefers_flight_id_when_fetching_pax_details() -> None:
+    quote = {
+        "bookingIdentifier": "NESTED-ID",
+        "legs": [
+            {
+                "id": "LEG-WRAPPER",
+                "flight": {"id": "FLIGHT-123"},
+                "departureAirport": "CYYC",
+                "arrivalAirport": "CYVR",
+                "departureDateUTC": "2025-11-19T15:00:00Z",
+                "arrivalDateUTC": "2025-11-19T17:00:00Z",
+                "pax": 1,
+                "blockTime": 120,
+            }
+        ],
+    }
+
+    fetched_ids: list[str] = []
+
+    def _fetcher(flight_id: str) -> Dict[str, Any]:
+        fetched_ids.append(flight_id)
+        return {
+            "pax": {
+                "tickets": [
+                    {"paxType": "ADULT", "paxUser": {"gender": "Male"}},
+                ]
+            }
+        }
+
+    run_feasibility_phase1(
+        {"quote": quote, "tz_provider": _tz_provider, "pax_details_fetcher": _fetcher}
+    )
+
+    assert fetched_ids == ["FLIGHT-123"]
+
+
+def test_phase1_engine_uses_flight_info_id_for_pax_details() -> None:
+    quote = {
+        "bookingIdentifier": "FLIGHT-INFO-ID",
+        "legs": [
+            {
+                "id": "LEG-WRAPPER",
+                "flightInfo": {"flightId": "FLIGHT-INFO-999"},
+                "departureAirport": "CYYC",
+                "arrivalAirport": "CYVR",
+                "departureDateUTC": "2025-11-19T15:00:00Z",
+                "arrivalDateUTC": "2025-11-19T17:00:00Z",
+                "pax": 1,
+                "blockTime": 120,
+            }
+        ],
+    }
+
+    fetched_ids: list[str] = []
+
+    def _fetcher(flight_id: str) -> Dict[str, Any]:
+        fetched_ids.append(flight_id)
+        return {"pax": {"tickets": [{"paxType": "ADULT"}]}}
+
+    run_feasibility_phase1(
+        {"quote": quote, "tz_provider": _tz_provider, "pax_details_fetcher": _fetcher}
+    )
+
+    assert fetched_ids == ["FLIGHT-INFO-999"]
+
+
+def test_phase1_engine_surfaces_pax_details_error() -> None:
+    quote = {
+        "bookingIdentifier": "PAX-ERR",
+        "legs": [
+            {
+                "id": "LEG-ERR",
+                "departureAirport": "CYYC",
+                "arrivalAirport": "CYVR",
+                "departureDateUTC": "2025-11-19T15:00:00Z",
+                "arrivalDateUTC": "2025-11-19T17:00:00Z",
+                "pax": 2,
+                "blockTime": 120,
+            }
+        ],
+    }
+
+    def _fetcher(_: str) -> Dict[str, Any]:
+        raise RuntimeError("HTTP 401 Unauthorized: token missing")
+
+    result = run_feasibility_phase1(
+        {"quote": quote, "tz_provider": _tz_provider, "pax_details_fetcher": _fetcher}
+    )
+
+    leg = result["legs"][0]
+    details = leg["weightBalance"]["details"]
+    assert details["payloadSource"] == "api_error"
+    assert "Unauthorized" in details.get("payloadError", "")
+
+
+def test_weight_balance_reads_nested_pax_and_cargo_payload() -> None:
+    payload = {
+        "paxDetails": {
+            "tickets": [
+                {"paxType": "ADULT", "paxUser": {"gender": "Female"}},
+            ]
+        },
+        "cargoItems": [
+            {"weightQty": 260, "note": "PET DOG 6lb"},
+        ],
+    }
+
+    result = checker_weight_balance.evaluate_weight_balance(
+        {"aircraft_type": "C25A"},
+        pax_payload=payload,
+        aircraft_type="C25A",
+        season="Winter",
+        payload_source="api",
+    )
+
+    details = result.details
+    assert details["payloadSource"] == "api"
+    assert details["paxCount"] == 1
+    assert details["paxBreakdown"]["Female"] == 1
+    assert details["cargoWeight"] == 260
+
+
+def test_weight_balance_reads_deeply_nested_payloads() -> None:
+    payload = {
+        "payload": {
+            "paxPayload": {
+                "tickets": [
+                    {"paxUser": {"gender": "Female"}},
+                    {"paxUser": {"gender": "Male"}},
+                ],
+                "cargoItems": [
+                    {"weightQty": 60},
+                    {"weightQty": 200, "note": "PET"},
+                ],
+            }
+        }
+    }
+
+    result = checker_weight_balance.evaluate_weight_balance(
+        {"aircraft_type": "C25A"},
+        pax_payload=payload,
+        aircraft_type="C25A",
+        season="Winter",
+        payload_source="api",
+    )
+
+    details = result.details
+    assert details["paxCount"] == 2
+    assert details["paxBreakdown"]["Male"] == 1
+    assert details["paxBreakdown"]["Female"] == 1
+    assert details["cargoWeight"] == 260
+    assert details["highRiskCargo"] is True
 
 
 def test_aircraft_endurance_is_evaluated_for_each_leg() -> None:
