@@ -74,6 +74,8 @@ def _normalize_aircraft_type(name: Optional[str]) -> Optional[str]:
     if not text:
         return None
     upper_text = text.upper()
+    if "CJ3" in upper_text:
+        return "C25B"
     for key in MAX_PAX_CARGO:
         if key.upper() in upper_text:
             return key
@@ -147,24 +149,106 @@ def _standard_pax_weight(season: str, category: str) -> float:
 
 
 def _iter_tickets(payload: Mapping[str, Any]) -> Iterable[Mapping[str, Any]]:
-    pax = payload.get("pax") if isinstance(payload, Mapping) else None
-    if isinstance(pax, Mapping) and isinstance(pax.get("tickets"), Iterable):
-        for entry in pax.get("tickets", []) or []:
-            if isinstance(entry, Mapping):
-                yield entry
-    tickets = payload.get("tickets") if isinstance(payload, Mapping) else None
-    if isinstance(tickets, Iterable):
-        for entry in tickets:
-            if isinstance(entry, Mapping):
-                yield entry
+    """Yield ticket mappings from many possible pax payload shapes.
+
+    FL3XX responses sometimes nest ``tickets`` under several layers (e.g.
+    ``payload`` → ``paxPayload`` → ``tickets``). We traverse mappings/lists
+    breadth-first and emit each unique ticket mapping once.
+    """
+
+    search_queue: list[Any] = []
+    if payload is not None:
+        search_queue.append(payload)
+
+    visited: set[int] = set()
+    yielded: set[int] = set()
+
+    while search_queue:
+        current = search_queue.pop(0)
+        marker = id(current)
+        if marker in visited:
+            continue
+        visited.add(marker)
+
+        if isinstance(current, Mapping):
+            entries = current.get("tickets")
+            if isinstance(entries, Iterable) and not isinstance(entries, (str, bytes)):
+                for entry in entries:
+                    if isinstance(entry, Mapping):
+                        entry_marker = id(entry)
+                        if entry_marker in yielded:
+                            continue
+                        yielded.add(entry_marker)
+                        yield entry
+
+            for key in (
+                "pax",
+                "pax_details",
+                "paxDetails",
+                "paxPayload",
+                "passengers",
+                "payload",
+            ):
+                child = current.get(key)
+                if child is not None:
+                    search_queue.append(child)
+
+            for child in current.values():
+                if isinstance(child, (Mapping, list, tuple, set)):
+                    search_queue.append(child)
+
+        elif isinstance(current, Iterable) and not isinstance(current, (str, bytes)):
+            for child in current:
+                if isinstance(child, (Mapping, list, tuple, set)):
+                    search_queue.append(child)
 
 
 def _iter_cargo(payload: Mapping[str, Any]) -> Iterable[Mapping[str, Any]]:
-    cargo = payload.get("cargo") if isinstance(payload, Mapping) else None
-    if isinstance(cargo, Iterable):
-        for entry in cargo:
-            if isinstance(entry, Mapping):
-                yield entry
+    """Yield cargo item mappings from nested payload structures."""
+
+    search_queue: list[Any] = []
+    if payload is not None:
+        search_queue.append(payload)
+
+    visited: set[int] = set()
+    yielded: set[int] = set()
+    cargo_keys = {"cargo", "cargoItems", "cargo_items"}
+
+    while search_queue:
+        current = search_queue.pop(0)
+        marker = id(current)
+        if marker in visited:
+            continue
+        visited.add(marker)
+
+        if isinstance(current, Mapping):
+            for key in cargo_keys:
+                entries = current.get(key)
+                if isinstance(entries, Iterable) and not isinstance(entries, (str, bytes)):
+                    for entry in entries:
+                        if isinstance(entry, Mapping):
+                            entry_marker = id(entry)
+                            if entry_marker in yielded:
+                                continue
+                            yielded.add(entry_marker)
+                            yield entry
+
+            for child in (
+                current.get("pax"),
+                current.get("paxPayload"),
+                current.get("payload"),
+            ):
+                if isinstance(child, (Mapping, list, tuple, set)):
+                    search_queue.append(child)
+
+            for child in current.values():
+                if isinstance(child, (Mapping, list, tuple, set)):
+                    search_queue.append(child)
+
+        elif isinstance(current, Iterable) and not isinstance(current, (str, bytes)):
+            for child in current:
+                if isinstance(child, (Mapping, list, tuple, set)):
+                    search_queue.append(child)
 
 
 def _extract_ticket_stats(ticket: Mapping[str, Any], season: str) -> tuple[float, str]:
@@ -201,6 +285,8 @@ def evaluate_weight_balance(
     pax_payload: Optional[Mapping[str, Any]],
     aircraft_type: Optional[str],
     season: str,
+    payload_source: Optional[str] = None,
+    payload_error: Optional[str] = None,
 ) -> CategoryResult:
     """Assess passenger + cargo payload feasibility for a flight."""
 
@@ -211,6 +297,9 @@ def evaluate_weight_balance(
     details: MutableMapping[str, Any] = {"season": season_label}
 
     if pax_payload is None:
+        details["payloadSource"] = payload_source or "missing"
+        if payload_error:
+            details["payloadError"] = payload_error
         return CategoryResult(
             status="CAUTION",
             summary="No weight data available",
@@ -219,6 +308,9 @@ def evaluate_weight_balance(
         )
     
     pax_keys = list(pax_payload.keys()) if isinstance(pax_payload, Mapping) else []
+    details["payloadSource"] = payload_source or "api"
+    if payload_error:
+        details["payloadError"] = payload_error
     print("PAX DEBUG: Keys received =", pax_keys)
     print("PAX DEBUG FULL:", pax_payload)
 

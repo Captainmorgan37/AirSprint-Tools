@@ -39,6 +39,7 @@ class LegContext(TypedDict, total=False):
     departure_date_utc: str
     arrival_date_utc: str
     pax: int
+    pax_payload: Mapping[str, Any]
     block_time_minutes: int
     flight_time_minutes: int
     distance_nm: float
@@ -600,15 +601,23 @@ def evaluate_airport_feasibility_for_leg(
 
     aircraft_result = _evaluate_aircraft_endurance(leg)
 
-    pax_count = max(int(leg.get("pax") or 0), 0)
-    synthetic_tickets = [{"paxType": "ADULT"} for _ in range(pax_count)]
-    pax_payload: Mapping[str, Any] = {"pax": {"tickets": synthetic_tickets}}
+    pax_payload = leg.get("pax_payload") if isinstance(leg.get("pax_payload"), Mapping) else None
+    payload_source = leg.get("pax_payload_source") if isinstance(leg.get("pax_payload_source"), str) else None
+    if pax_payload is None:
+        pax_count = max(int(leg.get("pax") or 0), 0)
+        synthetic_tickets = [{"paxType": "ADULT"} for _ in range(pax_count)]
+        pax_payload = {"pax": {"tickets": synthetic_tickets}}
+        payload_source = payload_source or "synthetic"
+    else:
+        payload_source = payload_source or "api"
     season = checker_weight_balance.determine_season(leg.get("departure_date_utc") or leg)
     weight_balance = checker_weight_balance.evaluate_weight_balance(
         leg,
         pax_payload=pax_payload,
         aircraft_type=leg.get("aircraft_type"),
         season=season,
+        payload_source=payload_source,
+        payload_error=leg.get("pax_payload_error"),
     )
 
     return AirportFeasibilityResult(

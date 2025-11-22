@@ -379,17 +379,43 @@ def fetch_flight_pax_details(
     the source used by feasibility to read passenger genders and types.
     """
 
+    url = _build_pax_details_endpoint(config.base_url, flight_id)
     http = session or requests.Session()
     close_session = session is None
+    response: Optional[requests.Response] = None
     try:
         response = http.get(
-            _build_pax_details_endpoint(config.base_url, flight_id),
+            url,
             headers=config.build_headers(),
             timeout=config.timeout,
             verify=config.verify_ssl,
         )
         response.raise_for_status()
         return response.json()
+    except requests.HTTPError as exc:
+        status = None
+        reason = None
+        body_snippet = None
+        if exc.response is not None:
+            status = exc.response.status_code
+            reason = exc.response.reason
+            try:
+                body_snippet = exc.response.text
+            except Exception:
+                body_snippet = None
+        detail_parts = ["pax_details GET failed"]
+        if status is not None:
+            detail_parts.append(f"HTTP {status}")
+        if reason:
+            detail_parts.append(str(reason))
+        if body_snippet:
+            trimmed = " ".join(body_snippet.split())[:500]
+            if trimmed:
+                detail_parts.append(f"response: {trimmed}")
+        detail = " | ".join(detail_parts)
+        raise RuntimeError(f"{detail} for {url}") from exc
+    except Exception as exc:
+        raise RuntimeError(f"pax_details GET failed for {url}: {exc}") from exc
     finally:
         if close_session:
             try:

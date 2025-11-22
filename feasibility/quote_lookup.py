@@ -209,7 +209,15 @@ def _normalize_quote_leg(
     _apply_airport_code(flight, leg, "departure")
     _apply_airport_code(flight, leg, "arrival")
 
-    leg_id = _coalesce_str(leg.get("id"), leg.get("legId"))
+    # Prefer a concrete flight identifier from the API payload (often nested under
+    # ``flight``) so we can call pax-details endpoints for quotes that already have
+    # flight records behind them.
+    nested_flight = leg.get("flight") if isinstance(leg.get("flight"), Mapping) else None
+    nested_flight_id = None
+    if nested_flight:
+        nested_flight_id = _coalesce_str(nested_flight.get("id"), nested_flight.get("flightId"))
+
+    leg_id = _coalesce_str(nested_flight_id, leg.get("flightId"), leg.get("id"), leg.get("legId"))
     if leg_id:
         flight.setdefault("flightId", leg_id)
         flight.setdefault("id", leg_id)
