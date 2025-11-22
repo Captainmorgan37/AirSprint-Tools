@@ -1,12 +1,39 @@
 icao,category,min_ground_time_minutes,notes
-CYYC,OSA,90,Home base international arrivals typically require OSA buffers.
-CYYZ,SSA,120,Major SSA requiring extended ground time.
-CYVR,SSA,120,Peak congestion requires SSA handling plan.
-CYUL,OSA,90,Jeppesen coordination recommended for OSA operations.
-CYQB,OSA,90,
-CYEG,OSA,90,
-CYHZ,STANDARD,60,
-KAPA,STANDARD,45,
-KTEB,SSA,120,High-risk international gateway.
-MMMX,SSA,120,Permits and extended ground time mandatory.
-EGLL,SSA,120,
+CYYC,STANDARD,60,Primary service area airport with no special handling required.
+CYYZ,STANDARD,60,Primary service area airport with no special handling required.
+CYVR,STANDARD,60,Primary service area airport with no special handling required.
+CYUL,STANDARD,60,Primary service area airport with no special handling required.
+CYQB,STANDARD,60,Primary service area airport with no special handling required.
+CYEG,STANDARD,60,Primary service area airport with no special handling required.
+CYHZ,STANDARD,60,Primary service area airport with no special handling required.
+KAPA,STANDARD,45,Primary service area airport with no special handling required.
+KTEB,STANDARD,60,Primary service area airport with no special handling required.
+KJFK,STANDARD,60,Primary service area airport with no special handling required.
+KLAX,STANDARD,60,Primary service area airport with no special handling required.
+KORD,STANDARD,60,Primary service area airport with no special handling required.
+KSFO,STANDARD,60,Primary service area airport with no special handling required.
+KDFW,STANDARD,60,Primary service area airport with no special handling required.
+KSEA,STANDARD,60,Primary service area airport with no special handling required.
+PANC,SSA,120,Alaska airport treated as SSA; SSA handling only.
+PAFA,SSA,120,Alaska airport treated as SSA; SSA handling only.
+PAKT,SSA,120,Alaska airport treated as SSA; SSA handling only.
+CYFB,SSA,120,Nunavut airport treated as SSA; SSA handling only.
+CYRT,SSA,120,Nunavut airport treated as SSA; SSA handling only.
+CYRB,SSA,120,Nunavut airport treated as SSA; SSA handling only.
+MMMX,SSA,120,Mexico airport treated as SSA; SSA handling only.
+MMUN,SSA,120,Mexico airport treated as SSA; SSA handling only.
+TJSJ,SSA,120,Caribbean airport treated as SSA; SSA handling only.
+TNCM,SSA,120,Caribbean airport treated as SSA; SSA handling only.
+MKJP,SSA,120,Caribbean airport treated as SSA; SSA handling only.
+EGLL,OSA,120,Outside service area; final feasibility must be determined in Fl3xx.
+EHAM,OSA,120,Outside service area; final feasibility must be determined in Fl3xx.
+LFPG,OSA,120,Outside service area; final feasibility must be determined in Fl3xx.
+EDDF,OSA,120,Outside service area; final feasibility must be determined in Fl3xx.
+RJTT,OSA,120,Outside service area; final feasibility must be determined in Fl3xx.
+RJAA,OSA,120,Outside service area; final feasibility must be determined in Fl3xx.
+ZBAA,OSA,120,Outside service area; final feasibility must be determined in Fl3xx.
+OMDB,OSA,120,Outside service area; final feasibility must be determined in Fl3xx.
+YSSY,OSA,120,Outside service area; final feasibility must be determined in Fl3xx.
+SBGR,OSA,120,Outside service area; final feasibility must be determined in Fl3xx.
+FAOR,OSA,120,Outside service area; final feasibility must be determined in Fl3xx.
+PHNL,OSA,120,Outside service area; final feasibility must be determined in Fl3xx.
