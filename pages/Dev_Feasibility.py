@@ -631,6 +631,10 @@ with quote_tab:
         options = _load_quote_options(quote_input)
         if options:
             st.session_state["feasibility_quote_options"] = options
+        quote_payload = st.session_state.get("feasibility_quote_payload")
+        if isinstance(quote_payload, Mapping):
+            st.session_state["feasibility_loaded_quote_id"] = quote_input
+            st.session_state["feasibility_should_run_full_quote"] = True
 
     quote_options = st.session_state.get("feasibility_quote_options", [])
     quote_payload = st.session_state.get("feasibility_quote_payload")
@@ -662,9 +666,14 @@ with quote_tab:
         key="run-full-quote",
         type="primary",
         disabled=not quote_loaded,
+        help="Feasibility now runs automatically after loading a quote; use this to rerun manually.",
     )
 
-    if run_full_quote and quote_loaded:
+    should_run_full_quote = st.session_state.pop(
+        "feasibility_should_run_full_quote", False
+    )
+
+    if (run_full_quote or should_run_full_quote) and quote_loaded:
         full_day_result = _run_full_quote_day(quote_payload)
         if full_day_result:
             st.session_state["feasibility_last_full_quote_result"] = full_day_result
