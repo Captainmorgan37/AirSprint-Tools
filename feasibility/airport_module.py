@@ -829,6 +829,7 @@ def evaluate_suitability(
 
     closure_fail_keywords = ("closed", "no ga", "curfew")
     closure_caution_keywords = ("closure",)
+    icao = (airport_profile.icao or "").strip().upper()
     closure_caution_found = False
     for note in operational_notes:
         body = " ".join(str(note.get(key) or "") for key in ("note", "title", "body")).lower()
@@ -839,6 +840,8 @@ def evaluate_suitability(
             issues.append("Operational notes indicate closures or curfews impacting this leg.")
             break
         if not closure_caution_found and any(keyword in body for keyword in closure_caution_keywords):
+            if _is_closure_caution_exempt(icao, body):
+                continue
             closure_caution_found = True
             status = _combine_status(status, "CAUTION")
             if not summary_locked:
@@ -848,6 +851,15 @@ def evaluate_suitability(
             )
 
     return CategoryResult(status=status, summary=summary, issues=issues)
+
+
+def _is_closure_caution_exempt(icao: str, body: str) -> bool:
+    if not icao or not body:
+        return False
+    exemptions = CLOSURE_CAUTIONS_TO_IGNORE.get(icao)
+    if not exemptions:
+        return False
+    return any(exemption in body for exemption in exemptions)
 
 
 def _parse_iso_date(value: Optional[str]) -> Optional[date]:
@@ -1470,4 +1482,15 @@ def evaluate_overflight(
 
 def _combine_status(current: CategoryStatus, candidate: CategoryStatus) -> CategoryStatus:
     return candidate if _STATUS_PRIORITY[candidate] > _STATUS_PRIORITY[current] else current
+
+## Known benign operational notes that mention closures
+CLOSURE_CAUTIONS_TO_IGNORE: Mapping[str, tuple[str, ...]] = {
+    # CYLW publishes a standing reminder about NOTAM reviews and potential closures that
+    # should not trigger a closure caution.
+    "CYLW": (
+        "crews to review notams prior to every operation. taxiway and airport closures are common."
+        " crews to contact phone number prior to departure for permission to operate if required by notam",
+    ),
+}
+
 
