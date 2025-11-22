@@ -489,6 +489,10 @@ def _render_operational_restrictions(parsed: Mapping[str, Any] | None) -> None:
         _render_bullet_section("Operational Intel", summary_lines)
         _render_bullet_section("Deice Notes", _collect_entries(parsed.get("deice_notes"), explode=True))
         _render_bullet_section("Winter Notes", _collect_entries(parsed.get("winter_notes"), explode=True))
+        _render_bullet_section(
+            "Weather Limitations",
+            _collect_entries(parsed.get("weather_limitations"), explode=True),
+        )
         _render_bullet_section("Slot Notes", _collect_entries(parsed.get("slot_notes"), explode=True))
         _render_bullet_section("PPR Notes", _collect_entries(parsed.get("ppr_notes"), explode=True))
         _render_bullet_section("Hours / Curfew Notes", _collect_entries(parsed.get("hour_notes"), explode=True))

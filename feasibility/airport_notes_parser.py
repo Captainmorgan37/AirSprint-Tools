@@ -342,12 +342,38 @@ def split_customs_operational_notes(
         if not text:
             continue
         lower = text.lower()
+        if _should_ignore_operational_note(text, lower=lower):
+            continue
         is_customs = any(keyword in lower for keyword in CUSTOMS_NOTE_KEYWORDS)
+        if lower.startswith("crew notes"):
+            continue
+        if "crew" in lower:
+            is_customs = True
         if is_customs:
             customs.append(text)
         else:
             operational.append(text)
     return customs, operational
+
+
+def _should_ignore_operational_note(text: str, *, lower: str | None = None) -> bool:
+    lowered = lower or text.lower()
+    if not lowered:
+        return False
+    if lowered.startswith("crew notes"):
+        return True
+    if lowered.startswith("contact instructions"):
+        return True
+    if "rental car" in lowered and "tesla" in lowered:
+        return True
+    if ("yyc" in lowered or "nvc" in lowered) and (
+        lowered.startswith("operational instruction")
+        or "contact person updated" in lowered
+        or "engine run" in lowered
+        or "repositioning back from cyyc" in lowered
+    ):
+        return True
+    return False
 
 
 def parse_operational_restrictions(notes: Sequence[str]) -> ParsedRestrictions:
@@ -356,8 +382,10 @@ def parse_operational_restrictions(notes: Sequence[str]) -> ParsedRestrictions:
         text = raw.strip()
         if not text:
             continue
-        parsed["raw_notes"].append(text)
         lower = text.lower()
+        if _should_ignore_operational_note(text, lower=lower):
+            continue
+        parsed["raw_notes"].append(text)
         categories = _classify_operational_note(text)
         primary = _select_primary_category(categories)
         if "contaminated" in lower:
@@ -550,15 +578,29 @@ def parse_customs_notes(notes: Sequence[str]) -> ParsedCustoms:
         if not text:
             continue
         lower = text.lower()
+        if lower.startswith("crew notes"):
+            continue
         parsed["raw_notes"].append(text)
         categories = _classify_customs_note(text)
         primary = _select_primary_customs_category(categories)
-        if "customs" in lower or "clearing customs" in lower:
+        if "customs" in lower or "clearing customs" in lower or "aoe" in lower:
             parsed["customs_available"] = True
+        if "24/7" in lower or "24 hrs" in lower or "24hours" in lower or "24 hours" in lower:
+            parsed["customs_hours"].append({"start": "0000", "end": "2400", "days": ["Daily"]})
         if "canpass" in lower:
-            parsed["canpass_only"] = True
+            if "only" in lower or "canpass arrival" in lower or "arrival by canpass" in lower:
+                parsed["canpass_only"] = True
             if primary == "canpass":
                 parsed["canpass_notes"].append(text)
+        if match := re.search(r"primary location:\s*([^\n\.]+)", text, re.IGNORECASE):
+            location = match.group(1).strip()
+            parsed["location_to_clear"] = location or parsed["location_to_clear"]
+            parsed["location_notes"].append(text)
+        elif match := re.search(r"secondary location:\s*([^\n\.]+)", text, re.IGNORECASE):
+            location = match.group(1).strip()
+            if location and not parsed["location_to_clear"]:
+                parsed["location_to_clear"] = location
+            parsed["location_notes"].append(text)
         for match in re.finditer(HOURS_RE, lower):
             # Skip phone-number style matches like 760-318-3880 where another
             # dash-and-digits segment immediately follows the match.
@@ -651,7 +693,7 @@ def summarize_operational_notes(
         add_issue(detail, "CAUTION")
     if restrictions["fuel_available"] is False:
         add_issue("Fuel unavailable per operational notes", "CAUTION")
-    if restrictions["night_ops_allowed"] is False:
+    if restrictions["night_ops_allowed"] is False and not restrictions["hour_notes"]:
         add_issue("Night operations prohibited", "CAUTION")
     if restrictions["curfew"]:
         add_issue("Curfew in effect per operational notes", "CAUTION")
@@ -665,8 +707,9 @@ def summarize_operational_notes(
     if restrictions["winter_sensitivity"] and status == "PASS":
         add_issue("Winter operations sensitivity reported", "INFO")
 
-    for weather_note in restrictions["weather_limitations"]:
-        add_issue(f"Weather limitation: {weather_note}", "CAUTION")
+    if not restrictions["raw_notes"]:
+        for weather_note in restrictions["weather_limitations"]:
+            add_issue(f"Weather limitation: {weather_note}", "CAUTION")
 
     for note in restrictions["generic_restrictions"]:
         add_issue(f"Operational restriction: {note}", "CAUTION")
