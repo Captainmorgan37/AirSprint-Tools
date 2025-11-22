@@ -444,14 +444,17 @@ def _render_category_block(label: str, category: Mapping[str, Any]) -> None:
                 st.markdown(f"- {issue}")
 
 
-def _render_aircraft_category(category: Mapping[str, Any] | None) -> None:
+def _render_aircraft_category(
+    category: Mapping[str, Any] | None, *, expanded: bool | None = None
+) -> None:
     if not isinstance(category, Mapping):
         return
     status = str(category.get("status", "PASS"))
     summary = category.get("summary") or status
     header = f"{status_icon(status)} Aircraft – {summary}"
     issues = [str(issue) for issue in category.get("issues", []) if issue]
-    with st.expander(header, expanded=status != "PASS"):
+    expanded_state = expanded if expanded is not None else status != "PASS"
+    with st.expander(header, expanded=expanded_state):
         st.write(f"Status: **{status}**")
         if issues:
             for issue in issues:
@@ -580,33 +583,16 @@ def _render_full_quote_result(result: FullFeasibilityResult) -> None:
         dep_code = departure.get("icao", "???")
         arr_code = arrival.get("icao", "???")
         header = f"Leg {index}: {dep_code} → {arr_code}"
-        if isinstance(aircraft, Mapping):
-            aircraft_status = aircraft.get("status", "PASS")
-            aircraft_summary = aircraft.get("summary") or aircraft_status
-            st.markdown(
-                f"{status_icon(aircraft_status)} Aircraft – {aircraft_summary}"
-            )
-        if isinstance(weight_balance, Mapping):
-            wb_status = weight_balance.get("status", "PASS")
-            wb_summary = weight_balance.get("summary") or wb_status
-            st.markdown(
-                f"{status_icon(wb_status)} Weight & Balance – {wb_summary}"
-            )
         with st.expander(header, expanded=False):
             if isinstance(aircraft, Mapping):
-                aircraft_status = aircraft.get("status", "PASS")
-                aircraft_summary = aircraft.get("summary") or aircraft_status
-                st.markdown(
-                    f"{status_icon(aircraft_status)} Aircraft – {aircraft_summary}"
-                )
-            _render_aircraft_category(aircraft)
+                _render_aircraft_category(aircraft, expanded=False)
             if isinstance(weight_balance, Mapping):
                 wb_status = weight_balance.get("status", "PASS")
                 wb_summary = weight_balance.get("summary") or wb_status
-                st.markdown(
-                    f"{status_icon(wb_status)} Weight & Balance – {wb_summary}"
-                )
-                _render_weight_balance_details(weight_balance)
+                header = f"{status_icon(wb_status)} Weight & Balance – {wb_summary}"
+                with st.expander(header, expanded=False):
+                    st.write(f"Status: **{wb_status}**")
+                    _render_weight_balance_details(weight_balance)
             _render_leg_side("Departure", departure)
             _render_leg_side("Arrival", arrival)
 
