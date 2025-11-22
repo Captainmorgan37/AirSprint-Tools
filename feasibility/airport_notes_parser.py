@@ -402,6 +402,10 @@ def _should_ignore_operational_note(text: str, *, lower: str | None = None) -> b
         or "repositioning back from cyyc" in lowered
     ):
         return True
+    if "marketing@airsprint.com" in lowered:
+        return True
+    if "boeing field" in lowered and "seattle city centre" in lowered:
+        return True
     return False
 
 
