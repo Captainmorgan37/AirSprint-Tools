@@ -8,6 +8,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Dict, Optional
 
+from flight_leg_utils import load_airport_metadata_lookup
+
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -64,7 +66,98 @@ def load_airport_categories(path: Optional[Path] = None) -> Dict[str, AirportCat
             category = (row.get("category") or row.get("airport_category") or "").strip() or None
             notes = (row.get("notes") or row.get("remarks") or "").strip() or None
             lookup[icao] = AirportCategoryRecord(icao=icao, category=category, notes=notes)
+
+    metadata_lookup = load_airport_metadata_lookup()
+    if metadata_lookup:
+        for code, metadata in metadata_lookup.items():
+            icao = str(code or "").strip().upper()
+            if not icao or len(icao) != 4 or icao in lookup:
+                continue
+            category_record = _derive_category_from_country_metadata(icao=icao, metadata=metadata)
+            if category_record:
+                lookup[icao] = category_record
     return lookup
+
+
+def _derive_category_from_country_metadata(icao: str, metadata: Dict[str, Optional[str]]) -> Optional[AirportCategoryRecord]:
+    country_raw = str(metadata.get("country") or "").strip()
+    subdivision_raw = str(metadata.get("subd") or "").strip()
+    if not country_raw:
+        return None
+
+    country = country_raw.upper()
+    subdivision = subdivision_raw.upper()
+
+    caribbean_countries = {
+        "ANTIGUA AND BARBUDA",
+        "ARUBA",
+        "BAHAMAS",
+        "BARBADOS",
+        "BELIZE",
+        "BERMUDA",
+        "BONAIRE",
+        "BRITISH VIRGIN ISLANDS",
+        "CAYMAN ISLANDS",
+        "CUBA",
+        "CURACAO",
+        "DOMINICA",
+        "DOMINICAN REPUBLIC",
+        "GRENADA",
+        "GUADELOUPE",
+        "HAITI",
+        "JAMAICA",
+        "MARTINIQUE",
+        "MONTSERRAT",
+        "PUERTO RICO",
+        "SABA",
+        "SAINT BARTHELEMY",
+        "SAINT KITTS AND NEVIS",
+        "SAINT LUCIA",
+        "SAINT MARTIN",
+        "SAINT VINCENT AND THE GRENADINES",
+        "SINT EUSTATIUS",
+        "SINT MAARTEN",
+        "TRINIDAD AND TOBAGO",
+        "TURKS AND CAICOS ISLANDS",
+        "UNITED STATES VIRGIN ISLANDS",
+    }
+
+    if country in {"US", "USA", "UNITED STATES"}:
+        if subdivision == "ALASKA":
+            return AirportCategoryRecord(
+                icao=icao, category="SSA", notes="Alaska airport treated as SSA; SSA handling only."
+            )
+        if subdivision == "HAWAII":
+            return AirportCategoryRecord(
+                icao=icao,
+                category="OSA",
+                notes="Outside service area; final feasibility must be determined in Fl3xx.",
+            )
+        return AirportCategoryRecord(
+            icao=icao,
+            category="STANDARD",
+            notes="Primary service area airport with no special handling required.",
+        )
+
+    if country in {"CANADA", "CA"}:
+        if subdivision == "NUNAVUT":
+            return AirportCategoryRecord(
+                icao=icao, category="SSA", notes="Nunavut airport treated as SSA; SSA handling only."
+            )
+        return AirportCategoryRecord(
+            icao=icao,
+            category="STANDARD",
+            notes="Primary service area airport with no special handling required.",
+        )
+
+    if country == "MEXICO" or country == "MX" or country in caribbean_countries:
+        return AirportCategoryRecord(icao=icao, category="SSA", notes="SSA region airport; SSA handling only.")
+
+    return AirportCategoryRecord(
+        icao=icao,
+        category="OSA",
+        notes="Outside service area; final feasibility must be determined in Fl3xx.",
+    )
 
 
 @lru_cache(maxsize=1)
