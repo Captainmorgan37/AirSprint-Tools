@@ -6,9 +6,14 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Literal, Mapping, MutableMapping, Optional
 
-CategoryStatus = Literal["PASS", "CAUTION", "FAIL"]
+CategoryStatus = Literal["PASS", "INFO", "CAUTION", "FAIL"]
 
-_STATUS_PRIORITY: Mapping[CategoryStatus, int] = {"PASS": 0, "CAUTION": 1, "FAIL": 2}
+_STATUS_PRIORITY: Mapping[CategoryStatus, int] = {
+    "PASS": 0,
+    "INFO": 1,
+    "CAUTION": 2,
+    "FAIL": 3,
+}
 
 
 def combine_statuses(statuses: Iterable[CategoryStatus]) -> CategoryStatus:

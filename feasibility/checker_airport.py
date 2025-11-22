@@ -25,7 +25,12 @@ from .common import (
 from .data_access import CustomsRule, load_customs_rules
 from .schemas import CategoryResult, CategoryStatus, combine_statuses
 
-_ALERT_PRIORITY: Mapping[CategoryStatus, int] = {"PASS": 0, "CAUTION": 1, "FAIL": 2}
+_ALERT_PRIORITY: Mapping[CategoryStatus, int] = {
+    "PASS": 0,
+    "INFO": 1,
+    "CAUTION": 2,
+    "FAIL": 3,
+}
 
 
 def _international(
