@@ -42,6 +42,7 @@ def test_customs_note_assigned_to_single_section() -> None:
 
     parsed = parse_customs_notes([note])
 
+    assert parsed["customs_contact_required"] is True
     assert parsed["customs_contact_notes"] == []
     assert parsed["general_customs_notes"] == [note]
 
@@ -53,6 +54,35 @@ def test_canpass_note_only_in_canpass_section() -> None:
 
     assert parsed["canpass_notes"] == [note]
     assert parsed["general_customs_notes"] == []
+
+
+def test_operational_callouts_do_not_trigger_customs_contact_requirement() -> None:
+    note = (
+        "Primary Location: AirSprint Hangar. Secondary location: SkyService FBO."  # operational instruction
+        " Call on the radio to SkyService with a heads up that you will be parking"
+        " on their ramp and they will direct you to a gate."
+    )
+
+    parsed = parse_customs_notes([note])
+
+    assert parsed["customs_contact_required"] is False
+    assert parsed["customs_contact_notes"] == []
+    assert note in parsed["location_notes"] or note in parsed["general_customs_notes"]
+
+
+def test_customs_contact_number_not_treated_as_contact_requirement() -> None:
+    note = (
+        "CUSTOMS:\n"
+        "AOE 24/7.\n"
+        "Third Location: Small Aircraft Centre 'Customs Shack'. Contact # 403.477.5422. "
+        "Commercial customs CBSA # 403.461.7564"
+    )
+
+    parsed = parse_customs_notes([note])
+
+    assert parsed["customs_contact_required"] is False
+    assert parsed["customs_contact_notes"] == []
+    assert note in parsed["raw_notes"]
 
 
 def test_deice_limited_not_triggered_by_holdover_language() -> None:

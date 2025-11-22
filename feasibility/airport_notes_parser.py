@@ -49,6 +49,7 @@ class ParsedCustoms(TypedDict):
     customs_available: bool
     customs_hours: list[dict[str, object]]
     customs_afterhours_available: bool
+    customs_afterhours_not_available: bool
     customs_afterhours_requirements: list[str]
     customs_prior_notice_hours: int | None
     customs_prior_notice_days: int | None
@@ -215,6 +216,7 @@ def _empty_parsed_customs() -> ParsedCustoms:
         "customs_available": False,
         "customs_hours": [],
         "customs_afterhours_available": False,
+        "customs_afterhours_not_available": False,
         "customs_afterhours_requirements": [],
         "customs_prior_notice_hours": None,
         "customs_prior_notice_days": None,
@@ -234,6 +236,33 @@ def _empty_parsed_customs() -> ParsedCustoms:
 def _contains_keyword(text: str, keywords: Sequence[str]) -> bool:
     lower = text.lower()
     return any(keyword in lower for keyword in keywords)
+
+
+def _is_customs_contact_instruction(text: str) -> bool:
+    """Detect whether a note explicitly directs contacting customs/CBSA.
+
+    Some notes list parking radio calls or generic contact numbers near the word
+    "customs" (e.g., describing a "Customs Shack" location). To avoid false
+    positives, only treat a segment as a contact requirement when the contact
+    verb and a customs-related term appear in the *same* sentence/segment.
+    """
+
+    lower = text.lower()
+
+    contact_verbs = ("call", "phone", "contact", "notify")
+    customs_terms = ("customs", "cbsa", "cbp", "officer", "border")
+
+    def _has_contact(segment: str) -> bool:
+        return any(verb in segment for verb in contact_verbs)
+
+    def _has_customs(segment: str) -> bool:
+        return any(term in segment for term in customs_terms)
+
+    if not _has_contact(lower):
+        return False
+
+    segments = re.split(r"[\.\n;•]+", lower)
+    return any(_has_contact(segment) and _has_customs(segment) for segment in segments)
 
 
 def _classify_customs_note(text: str) -> set[str]:
@@ -613,7 +642,21 @@ def parse_customs_notes(notes: Sequence[str]) -> ParsedCustoms:
             if not days:
                 days = ["unknown"]
             parsed["customs_hours"].append({"start": start, "end": end, "days": days})
-        if "after hours" in lower or "afterhours" in lower:
+        mentions_after_hours = "after hours" in lower or "afterhours" in lower
+        mentions_no_after_hours = any(
+            phrase in lower
+            for phrase in (
+                "no after hours",
+                "no after-hours",
+                "after hours not available",
+                "afterhours not available",
+                "after hours unavailable",
+                "afterhours unavailable",
+            )
+        )
+        if mentions_no_after_hours:
+            parsed["customs_afterhours_not_available"] = True
+        if mentions_after_hours and not mentions_no_after_hours:
             parsed["customs_afterhours_available"] = True
             if primary == "afterhours":
                 parsed["customs_afterhours_requirements"].append(text)
@@ -621,7 +664,7 @@ def parse_customs_notes(notes: Sequence[str]) -> ParsedCustoms:
             parsed["customs_prior_notice_hours"] = int(match.group(1))
         if match := re.search(PRIOR_DAYS_RE, lower):
             parsed["customs_prior_notice_days"] = int(match.group(1))
-        if any(k in lower for k in ("call", "phone", "contact", "notify")):
+        if _is_customs_contact_instruction(text):
             parsed["customs_contact_required"] = True
             if primary == "contact":
                 parsed["customs_contact_notes"].append(text)
@@ -707,7 +750,7 @@ def summarize_operational_notes(
     if restrictions["winter_sensitivity"] and status == "PASS":
         add_issue("Winter operations sensitivity reported", "INFO")
 
-    if not restrictions["raw_notes"]:
+    if restrictions["weather_limitations"]:
         for weather_note in restrictions["weather_limitations"]:
             add_issue(f"Weather limitation: {weather_note}", "CAUTION")
 
