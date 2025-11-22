@@ -802,6 +802,17 @@ def _is_within_deice_season(date_local: Optional[str]) -> bool:
     return month_day >= DEICE_SEASON_START or month_day <= DEICE_SEASON_END
 
 
+def _dedupe_preserve_order(items: Sequence[str]) -> list[str]:
+    seen = set()
+    deduped: list[str] = []
+    for item in items:
+        if item in seen:
+            continue
+        seen.add(item)
+        deduped.append(item)
+    return deduped
+
+
 def evaluate_deice(
     deice_profile: DeiceProfile,
     operational_notes: Sequence[Mapping[str, Any]],
@@ -834,6 +845,7 @@ def evaluate_deice(
         issues.append("No deice intel available; confirm if icing conditions likely.")
 
     restrictions = parsed_restrictions
+    restriction_notes: Sequence[str] = []
     if restrictions:
         if restrictions["deice_unavailable"]:
             status = _combine_status(status, "CAUTION")
@@ -843,7 +855,8 @@ def evaluate_deice(
             summary = "Operational note: deice limited"
         if restrictions["winter_sensitivity"]:
             issues.append("Operational notes highlight winter sensitivity.")
-        for note in restrictions["deice_notes"]:
+        restriction_notes = restrictions["deice_notes"]
+        for note in restriction_notes:
             issues.append(f"Deice note: {note}")
     else:
         note_text = " ".join(
@@ -856,9 +869,13 @@ def evaluate_deice(
             issues.append("Operational notes reference deice outages; confirm support.")
 
     if deice_profile.notes:
-        issues.append(deice_profile.notes)
+        normalized_restriction_notes = {note.strip() for note in restriction_notes}
+        if deice_profile.notes.strip() not in normalized_restriction_notes:
+            issues.append(deice_profile.notes)
 
-    return CategoryResult(status=status, summary=summary, issues=issues)
+    return CategoryResult(
+        status=status, summary=summary, issues=_dedupe_preserve_order(issues)
+    )
 
 
 def _format_customs_hours_entry(entry: Mapping[str, Any]) -> Optional[str]:

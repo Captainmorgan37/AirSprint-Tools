@@ -52,3 +52,15 @@ def test_canpass_note_only_in_canpass_section() -> None:
 
     assert parsed["canpass_notes"] == [note]
     assert parsed["general_customs_notes"] == []
+
+
+def test_deice_limited_not_triggered_by_holdover_language() -> None:
+    note = (
+        "DEICE/ANTI ICE: If temperature is below -14, better hold over times exist "
+        "using the CDF fluid (EG106) due to very limited hold over times in the hangar."
+    )
+
+    parsed = parse_operational_restrictions([note])
+
+    assert parsed["deice_limited"] is False
+    assert parsed["deice_notes"] == [note]
