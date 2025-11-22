@@ -85,7 +85,43 @@ def _derive_category_from_country_metadata(icao: str, metadata: Dict[str, Option
     if not country_raw:
         return None
 
-    country = country_raw.upper()
+    country_aliases = {
+        "US": "UNITED STATES",
+        "USA": "UNITED STATES",
+        "CA": "CANADA",
+        "MX": "MEXICO",
+        "AG": "ANTIGUA AND BARBUDA",
+        "AW": "ARUBA",
+        "BS": "BAHAMAS",
+        "BB": "BARBADOS",
+        "BZ": "BELIZE",
+        "BM": "BERMUDA",
+        "BQ": "BONAIRE",
+        "VG": "BRITISH VIRGIN ISLANDS",
+        "KY": "CAYMAN ISLANDS",
+        "CU": "CUBA",
+        "CW": "CURACAO",
+        "DM": "DOMINICA",
+        "DO": "DOMINICAN REPUBLIC",
+        "GD": "GRENADA",
+        "GP": "GUADELOUPE",
+        "HT": "HAITI",
+        "JM": "JAMAICA",
+        "MQ": "MARTINIQUE",
+        "MS": "MONTSERRAT",
+        "PR": "PUERTO RICO",
+        "BL": "SAINT BARTHELEMY",
+        "KN": "SAINT KITTS AND NEVIS",
+        "LC": "SAINT LUCIA",
+        "MF": "SAINT MARTIN",
+        "VC": "SAINT VINCENT AND THE GRENADINES",
+        "SX": "SINT MAARTEN",
+        "TT": "TRINIDAD AND TOBAGO",
+        "TC": "TURKS AND CAICOS ISLANDS",
+        "VI": "UNITED STATES VIRGIN ISLANDS",
+    }
+
+    country = country_aliases.get(country_raw.upper(), country_raw.upper())
     subdivision = subdivision_raw.upper()
 
     caribbean_countries = {

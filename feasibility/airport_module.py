@@ -36,7 +36,7 @@ from .data_access import (
 )
 from .schemas import CategoryResult, CategoryStatus
 
-AirportMetadataLookup = Mapping[str, Mapping[str, Optional[str]]]
+AirportMetadataLookup = Mapping[str, Mapping[str, Optional[object]]]
 
 
 class LegContext(TypedDict, total=False):
@@ -444,16 +444,40 @@ def _build_airport_profile(
     )
 
 
-def _build_deice_profile(icao: str) -> DeiceProfile:
+def _build_deice_profile(
+    icao: str, *, metadata: AirportMetadataLookup | None = None
+) -> DeiceProfile:
     record: Optional[DeiceRecord] = get_deice_record(icao=icao)
+    latitude = record.latitude if record else None
+    longitude = record.longitude if record else None
+
+    if metadata and (latitude is None or longitude is None):
+        meta_record = metadata.get(icao.upper(), {}) if metadata else {}
+
+        def _parse_coordinate(value: object) -> Optional[float]:
+            if value is None:
+                return None
+            try:
+                parsed = float(value)
+            except (TypeError, ValueError):
+                return None
+            return parsed
+
+        if latitude is None:
+            latitude = _parse_coordinate(meta_record.get("lat"))
+        if longitude is None:
+            longitude = _parse_coordinate(meta_record.get("lon"))
+
     if not record:
-        return DeiceProfile(icao=icao, deice_available=None, notes=None)
+        return DeiceProfile(
+            icao=icao, deice_available=None, notes=None, latitude=latitude, longitude=longitude
+        )
     return DeiceProfile(
         icao=icao,
         deice_available=record.has_deice,
         notes=record.deice_info,
-        latitude=record.latitude,
-        longitude=record.longitude,
+        latitude=latitude,
+        longitude=longitude,
     )
 
 
@@ -500,8 +524,8 @@ def _build_slot_ppr_profile(icao: str, airport_categories: Mapping[str, AirportC
     notes_upper = notes.upper() if notes else ""
     slot_required = any(keyword in notes_upper for keyword in SLOT_KEYWORDS)
     ppr_required = any(keyword in notes_upper for keyword in PPR_KEYWORDS)
-    # Airports classified as OSA/SSA often require coordination
-    if record and record.category in {"OSA", "SSA"}:
+    # Airports classified as OSA often require coordination
+    if record and record.category == "OSA":
         slot_required = True
         ppr_required = True
     lead_days = _extract_lead_days(notes)
@@ -571,8 +595,8 @@ def evaluate_airport_feasibility_for_leg(
         arr_icao, airport_categories=airport_categories, fl3xx_categories=fl3xx_categories, metadata=airport_metadata
     )
 
-    dep_deice = _build_deice_profile(dep_icao)
-    arr_deice = _build_deice_profile(arr_icao)
+    dep_deice = _build_deice_profile(dep_icao, metadata=airport_metadata)
+    arr_deice = _build_deice_profile(arr_icao, metadata=airport_metadata)
 
     dep_customs = _build_customs_profile(dep_icao, customs_rules)
     arr_customs = _build_customs_profile(arr_icao, customs_rules)

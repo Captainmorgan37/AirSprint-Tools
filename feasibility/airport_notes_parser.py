@@ -40,6 +40,7 @@ class ParsedRestrictions(TypedDict):
     aircraft_type_limits: list[str]
     surface_contamination: bool
 
+    weather_limitations: list[str]
     generic_restrictions: list[str]
     raw_notes: list[str]
 
@@ -87,6 +88,14 @@ FUEL_KEYWORDS = ("fuel not available", "fuel unavailable", "no fuel")
 DEICE_KEYWORDS = ("deice", "antice", "de-ice")
 NIGHT_KEYWORDS = ("night ops", "no night ops", "night operations", "night landings", "curfew", "sunset")
 RUNWAY_KEYWORDS = ("rwy", "runway", "landings", "departures")
+WEATHER_LIMITATION_KEYWORDS = (
+    "good weather only",
+    "vfr only",
+    "vfr weather",
+    "visual flight rules",
+    "visual conditions only",
+    "vmc only",
+)
 RUNWAY_RESTRICTION_TERMS = (
     "closed",
     "clsd",
@@ -194,6 +203,8 @@ def _empty_parsed_restrictions() -> ParsedRestrictions:
         "runway_limitations": [],
         "aircraft_type_limits": [],
         "surface_contamination": False,
+
+        "weather_limitations": [],
         "generic_restrictions": [],
         "raw_notes": [],
     }
@@ -293,8 +304,10 @@ def _classify_operational_note(note: str) -> set[str]:
         categories.add("deice")
     if _contains_keyword(lower, FUEL_KEYWORDS):
         categories.add("fuel")
-    if _contains_keyword(lower, NIGHT_KEYWORDS):
+    if _contains_keyword(lower, NIGHT_KEYWORDS) or "day operations only" in lower or "day ops" in lower:
         categories.add("night")
+    if _contains_keyword(lower, WEATHER_LIMITATION_KEYWORDS):
+        categories.add("weather")
     if _contains_keyword(lower, RUNWAY_KEYWORDS):
         categories.add("runway")
     return categories
@@ -307,6 +320,7 @@ _CATEGORY_PRIORITY: tuple[str, ...] = (
     "winter",
     "fuel",
     "night",
+    "weather",
     "runway",
 )
 
@@ -363,6 +377,8 @@ def parse_operational_restrictions(notes: Sequence[str]) -> ParsedRestrictions:
         if "runway" in categories:
             _extract_runway_details(text, parsed, add_note=primary == "runway")
             _extract_aircraft_limits(text, parsed, add_note=primary == "runway")
+        if "weather" in categories:
+            _extract_weather_limitations(text, parsed)
         if not categories:
             _extract_generic(text, parsed)
     return parsed
@@ -441,6 +457,10 @@ def _contains_limited_deice(text: str) -> bool:
         r"de-?ic[^\n]{0,30}limited",
     )
     return any(re.search(pattern, text) for pattern in proximity_patterns)
+
+
+def _extract_weather_limitations(note: str, out: ParsedRestrictions) -> None:
+    out["weather_limitations"].append(note)
 
 
 def _extract_fuel_details(
@@ -644,6 +664,12 @@ def summarize_operational_notes(
 
     if restrictions["winter_sensitivity"] and status == "PASS":
         add_issue("Winter operations sensitivity reported", "INFO")
+
+    for weather_note in restrictions["weather_limitations"]:
+        add_issue(f"Weather limitation: {weather_note}", "CAUTION")
+
+    for note in restrictions["generic_restrictions"]:
+        add_issue(f"Operational restriction: {note}", "CAUTION")
 
     summary = "Operational notes reviewed"
     if status == "CAUTION":

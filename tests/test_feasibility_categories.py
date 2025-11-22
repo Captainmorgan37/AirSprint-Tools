@@ -13,6 +13,7 @@ from feasibility.common import (
     classify_flight_category,
 )
 from flight_leg_utils import load_airport_metadata_lookup
+from feasibility.data_access import load_airport_categories
 
 
 LOOKUP = load_airport_metadata_lookup()
@@ -43,3 +44,10 @@ def test_mexico_leg_is_ssa() -> None:
 def test_europe_leg_is_osa() -> None:
     result = classify_flight_category("CYYZ", "EGLL", LOOKUP)
     assert result.category == OSA_CATEGORY
+
+
+def test_caribbean_airport_derived_as_ssa_from_metadata() -> None:
+    categories = load_airport_categories()
+    record = categories.get("MYAM")
+    assert record is not None
+    assert record.category == SSA_CATEGORY

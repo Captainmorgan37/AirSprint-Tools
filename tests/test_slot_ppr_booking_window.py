@@ -1,6 +1,12 @@
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+import sys
 
-from feasibility.airport_module import SlotPprProfile, evaluate_slot_ppr
+if str(Path(__file__).resolve().parents[1]) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from feasibility.airport_module import SlotPprProfile, _build_slot_ppr_profile, evaluate_slot_ppr
+from feasibility.data_access import AirportCategoryRecord
 
 
 def _build_leg(days_ahead: int) -> dict:
@@ -38,3 +44,12 @@ def test_cyvr_slot_flagged_within_booking_window() -> None:
     assert result.status == "CAUTION"
     assert result.summary == "Slot required"
     assert "Slot required for CYVR." in result.issues
+
+
+def test_ssa_category_does_not_infer_slot_or_ppr() -> None:
+    categories = {"MYAM": AirportCategoryRecord(icao="MYAM", category="SSA", notes=None)}
+
+    profile = _build_slot_ppr_profile("MYAM", categories)
+
+    assert profile.slot_required is False
+    assert profile.ppr_required is False
