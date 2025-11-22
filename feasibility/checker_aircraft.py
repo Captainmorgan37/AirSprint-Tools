@@ -101,7 +101,7 @@ _PASSENGER_PROFILES: Mapping[str, PaxProfile] = {
             _hm(3, 10),
             _hm(2, 55),
             _hm(2, 35),
-            None,
+            _hm(2, 35),
             None,
             None,
         )
