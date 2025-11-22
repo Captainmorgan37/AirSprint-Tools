@@ -82,8 +82,6 @@ WINTER_KEYWORDS = (
     "contaminated",
     "rwy contamination",
     "limited winter maintenance",
-    "deice",
-    "antice",
 )
 FUEL_KEYWORDS = ("fuel not available", "fuel unavailable", "no fuel")
 DEICE_KEYWORDS = ("deice", "antice", "de-ice")
@@ -113,6 +111,17 @@ CUSTOMS_NOTE_KEYWORDS = (
     "clearing customs",
     "customs information",
     "customs procedure",
+)
+CUSTOMS_CATEGORY_PRIORITY: tuple[str, ...] = (
+    "canpass",
+    "afterhours",
+    "notice",
+    "hours",
+    "location",
+    "contact",
+    "pax",
+    "crew",
+    "general",
 )
 PPR_TRUE_PATTERNS = [
     r"\bppr\b",
@@ -216,6 +225,37 @@ def _contains_keyword(text: str, keywords: Sequence[str]) -> bool:
     return any(keyword in lower for keyword in keywords)
 
 
+def _classify_customs_note(text: str) -> set[str]:
+    lower = text.lower()
+    categories: set[str] = set()
+    if re.search(HOURS_RE, lower):
+        categories.add("hours")
+    if "after hours" in lower or "afterhours" in lower:
+        categories.add("afterhours")
+    if re.search(PRIOR_HOURS_RE, lower) or re.search(PRIOR_DAYS_RE, lower):
+        categories.add("notice")
+    if re.search(LOCATION_RE, lower):
+        categories.add("location")
+    if any(k in lower for k in ("call", "phone", "contact", "notify")):
+        categories.add("contact")
+    if "pax" in lower or "passenger" in lower:
+        categories.add("pax")
+    if "crew" in lower:
+        categories.add("crew")
+    if "canpass" in lower:
+        categories.add("canpass")
+    if not categories:
+        categories.add("general")
+    return categories
+
+
+def _select_primary_customs_category(categories: set[str]) -> str:
+    for category in CUSTOMS_CATEGORY_PRIORITY:
+        if category in categories:
+            return category
+    return "general"
+
+
 def _has_weight_limitation(text: str) -> bool:
     lower = text.lower()
     if "weight" not in lower:
@@ -260,6 +300,24 @@ def _classify_operational_note(note: str) -> set[str]:
     return categories
 
 
+_CATEGORY_PRIORITY: tuple[str, ...] = (
+    "slot",
+    "ppr",
+    "deice",
+    "winter",
+    "fuel",
+    "night",
+    "runway",
+)
+
+
+def _select_primary_category(categories: set[str]) -> str | None:
+    for category in _CATEGORY_PRIORITY:
+        if category in categories:
+            return category
+    return None
+
+
 def split_customs_operational_notes(
     notes: Sequence[Mapping[str, object]]
 ) -> Tuple[list[str], list[str]]:
@@ -287,30 +345,32 @@ def parse_operational_restrictions(notes: Sequence[str]) -> ParsedRestrictions:
         parsed["raw_notes"].append(text)
         lower = text.lower()
         categories = _classify_operational_note(text)
+        primary = _select_primary_category(categories)
         if "contaminated" in lower:
             parsed["surface_contamination"] = True
         if "slot" in categories:
-            _extract_slot_details(text, parsed)
+            _extract_slot_details(text, parsed, add_note=primary == "slot")
         if "ppr" in categories:
-            _extract_ppr_details(text, parsed)
+            _extract_ppr_details(text, parsed, add_note=primary == "ppr")
         if "winter" in categories:
-            parsed["winter_sensitivity"] = True
-            parsed["winter_notes"].append(text)
+            _extract_winter_details(text, parsed, add_note=primary == "winter")
         if "deice" in categories:
-            _extract_deice_details(text, parsed)
+            _extract_deice_details(text, parsed, add_note=primary == "deice")
         if "fuel" in categories:
-            _extract_fuel_details(text, parsed)
+            _extract_fuel_details(text, parsed, add_note=primary == "fuel")
         if "night" in categories:
-            _extract_night_details(text, parsed)
+            _extract_night_details(text, parsed, add_note=primary == "night")
         if "runway" in categories:
-            _extract_runway_details(text, parsed)
-            _extract_aircraft_limits(text, parsed)
+            _extract_runway_details(text, parsed, add_note=primary == "runway")
+            _extract_aircraft_limits(text, parsed, add_note=primary == "runway")
         if not categories:
             _extract_generic(text, parsed)
     return parsed
 
 
-def _extract_slot_details(note: str, out: ParsedRestrictions) -> None:
+def _extract_slot_details(
+    note: str, out: ParsedRestrictions, *, add_note: bool = True
+) -> None:
     lower = note.lower()
     out["slot_required"] = True
     if match := SLOT_DAYS_OUT_RE.search(lower):
@@ -325,36 +385,56 @@ def _extract_slot_details(note: str, out: ParsedRestrictions) -> None:
         out["slot_validity_minutes"] = int(match.group(1))
     if WITHIN_HOUR_RE.search(lower):
         out["slot_validity_minutes"] = 60
-    out["slot_notes"].append(note)
+    if add_note:
+        out["slot_notes"].append(note)
 
 
-def _extract_ppr_details(note: str, out: ParsedRestrictions) -> None:
+def _extract_ppr_details(
+    note: str, out: ParsedRestrictions, *, add_note: bool = True
+) -> None:
     lower = note.lower()
     out["ppr_required"] = True
     if match := PPR_DAYS_OUT_RE.search(lower):
         out["ppr_lead_days"] = int(match.group(1))
     if match := PPR_HOURS_OUT_RE.search(lower):
         out["ppr_lead_hours"] = int(match.group(1))
-    out["ppr_notes"].append(note)
+    if add_note:
+        out["ppr_notes"].append(note)
 
 
-def _extract_deice_details(note: str, out: ParsedRestrictions) -> None:
+def _extract_winter_details(
+    note: str, out: ParsedRestrictions, *, add_note: bool = True
+) -> None:
+    out["winter_sensitivity"] = True
+    if add_note:
+        out["winter_notes"].append(note)
+
+
+def _extract_deice_details(
+    note: str, out: ParsedRestrictions, *, add_note: bool = True
+) -> None:
     lower = note.lower()
     if "not available" in lower or "no deice" in lower or "no de-ice" in lower:
         out["deice_unavailable"] = True
     if "limited" in lower:
         out["deice_limited"] = True
-    out["deice_notes"].append(note)
+    if add_note:
+        out["deice_notes"].append(note)
 
 
-def _extract_fuel_details(note: str, out: ParsedRestrictions) -> None:
+def _extract_fuel_details(
+    note: str, out: ParsedRestrictions, *, add_note: bool = True
+) -> None:
     lower = note.lower()
     if any(keyword in lower for keyword in FUEL_KEYWORDS):
         out["fuel_available"] = False
-    out["fuel_notes"].append(note)
+    if add_note:
+        out["fuel_notes"].append(note)
 
 
-def _extract_night_details(note: str, out: ParsedRestrictions) -> None:
+def _extract_night_details(
+    note: str, out: ParsedRestrictions, *, add_note: bool = True
+) -> None:
     lower = note.lower()
     if out["night_ops_allowed"] is None:
         out["night_ops_allowed"] = True
@@ -369,10 +449,13 @@ def _extract_night_details(note: str, out: ParsedRestrictions) -> None:
         out["hours_of_operation"].append({"closed_from": start, "closed_to": end})
     if "curfew" in lower:
         out["curfew"] = {"raw": note}
-    out["hour_notes"].append(note)
+    if add_note:
+        out["hour_notes"].append(note)
 
 
-def _extract_runway_details(note: str, out: ParsedRestrictions) -> None:
+def _extract_runway_details(
+    note: str, out: ParsedRestrictions, *, add_note: bool = True
+) -> None:
     lower = note.lower()
     actionable = False
     if _contains_keyword(lower, RUNWAY_RESTRICTION_TERMS):
@@ -382,14 +465,17 @@ def _extract_runway_details(note: str, out: ParsedRestrictions) -> None:
     if _contains_keyword(lower, RUNWAY_CONTAMINATION_TERMS):
         out["surface_contamination"] = True
         actionable = True
-    if actionable:
+    if actionable and add_note:
         out["runway_limitations"].append(note)
 
 
-def _extract_aircraft_limits(note: str, out: ParsedRestrictions) -> None:
+def _extract_aircraft_limits(
+    note: str, out: ParsedRestrictions, *, add_note: bool = True
+) -> None:
     lower = note.lower()
     if ACFT_LIMIT_RE.search(lower) and ("only" in lower or "restricted" in lower):
-        out["aircraft_type_limits"].append(note)
+        if add_note:
+            out["aircraft_type_limits"].append(note)
 
 
 def _extract_generic(note: str, out: ParsedRestrictions) -> None:
@@ -424,11 +510,14 @@ def parse_customs_notes(notes: Sequence[str]) -> ParsedCustoms:
             continue
         lower = text.lower()
         parsed["raw_notes"].append(text)
+        categories = _classify_customs_note(text)
+        primary = _select_primary_customs_category(categories)
         if "customs" in lower or "clearing customs" in lower:
             parsed["customs_available"] = True
         if "canpass" in lower:
             parsed["canpass_only"] = True
-            parsed["canpass_notes"].append(text)
+            if primary == "canpass":
+                parsed["canpass_notes"].append(text)
         for match in re.finditer(HOURS_RE, lower):
             # Skip phone-number style matches like 760-318-3880 where another
             # dash-and-digits segment immediately follows the match.
@@ -443,22 +532,40 @@ def parse_customs_notes(notes: Sequence[str]) -> ParsedCustoms:
             parsed["customs_hours"].append({"start": start, "end": end, "days": days})
         if "after hours" in lower or "afterhours" in lower:
             parsed["customs_afterhours_available"] = True
-            parsed["customs_afterhours_requirements"].append(text)
+            if primary == "afterhours":
+                parsed["customs_afterhours_requirements"].append(text)
         if match := re.search(PRIOR_HOURS_RE, lower):
             parsed["customs_prior_notice_hours"] = int(match.group(1))
         if match := re.search(PRIOR_DAYS_RE, lower):
             parsed["customs_prior_notice_days"] = int(match.group(1))
         if any(k in lower for k in ("call", "phone", "contact", "notify")):
             parsed["customs_contact_required"] = True
-            parsed["customs_contact_notes"].append(text)
+            if primary == "contact":
+                parsed["customs_contact_notes"].append(text)
         if match := re.search(LOCATION_RE, lower):
             parsed["location_to_clear"] = match.group(1).strip()
-            parsed["location_notes"].append(text)
+            if primary == "location":
+                parsed["location_notes"].append(text)
         if "pax" in lower or "passenger" in lower:
-            parsed["pax_requirements"].append(text)
+            if primary == "pax":
+                parsed["pax_requirements"].append(text)
         if "crew" in lower:
-            parsed["crew_requirements"].append(text)
-        parsed["general_customs_notes"].append(text)
+            if primary == "crew":
+                parsed["crew_requirements"].append(text)
+        if primary == "afterhours":
+            pass
+        elif primary == "contact":
+            pass
+        elif primary == "location":
+            pass
+        elif primary == "pax":
+            pass
+        elif primary == "crew":
+            pass
+        elif primary == "canpass":
+            pass
+        else:
+            parsed["general_customs_notes"].append(text)
     return parsed
 
 
