@@ -62,6 +62,33 @@ def _compute_turn_time(previous: LegContext, current: LegContext) -> Optional[in
     return max(delta, 0)
 
 
+def _worse_status(current: CategoryStatus, candidate: CategoryStatus) -> CategoryStatus:
+    ranking = {"PASS": 0, "CAUTION": 1, "FAIL": 2}
+    return candidate if ranking[candidate] > ranking[current] else current
+
+
+def _describe_duty_segment(
+    *,
+    duration_minutes: int,
+    label: str,
+    issues: List[str],
+) -> CategoryStatus:
+    limit_label = _format_minutes(_STANDARD_DUTY_LIMIT_MINUTES)
+
+    if duration_minutes <= _STANDARD_DUTY_LIMIT_MINUTES:
+        issues.append(f"{label} {_format_minutes(duration_minutes)} within {limit_label} limit.")
+        return "PASS"
+
+    if duration_minutes < _EXTENDED_DUTY_LIMIT_MINUTES:
+        issues.append(
+            f"{label} {_format_minutes(duration_minutes)} exceeds {limit_label} limit (<=17:00 extension required)."
+        )
+        return "CAUTION"
+
+    issues.append(f"{label} {_format_minutes(duration_minutes)} exceeds 17-hour maximum.")
+    return "FAIL"
+
+
 def evaluate_generic_duty_day(
     day: DayContext,
     *,
@@ -126,10 +153,17 @@ def evaluate_generic_duty_day(
 
     qualifying_split_turns = [turn for turn in turn_times if turn >= _SPLIT_DUTY_THRESHOLD_MINUTES]
     split_possible = bool(qualifying_split_turns)
-    reset_possible = any(turn >= _RESET_DUTY_THRESHOLD_MINUTES for turn in turn_times)
+    reset_breaks = [
+        (index, turn)
+        for index, turn in enumerate(turn_times)
+        if turn >= _RESET_DUTY_THRESHOLD_MINUTES
+    ]
+    reset_possible = bool(reset_breaks)
 
     split_extension_minutes = 0
-    if qualifying_split_turns:
+    if reset_possible:
+        issues.append("Reset duty window available (≥11h15 ground).")
+    elif qualifying_split_turns:
         best_ground = max(qualifying_split_turns)
         split_extension_minutes = max(best_ground - 120, 0) // 2
         split_extension_minutes = min(
@@ -149,6 +183,60 @@ def evaluate_generic_duty_day(
     if total_duty is None:
         status: CategoryStatus = "CAUTION"
         summary = "Duty duration unavailable"
+    elif reset_possible and reset_breaks:
+        break_index, longest_ground = max(reset_breaks, key=lambda item: item[1])
+        break_arrival = _parse_timestamp(legs[break_index].get("arrival_date_utc"))
+        next_departure = _parse_timestamp(legs[break_index + 1].get("departure_date_utc"))
+
+        first_segment_minutes: Optional[int] = None
+        second_segment_minutes: Optional[int] = None
+
+        if start_time and break_arrival:
+            first_segment_end = break_arrival + timedelta(minutes=_DUTY_END_BUFFER_MINUTES)
+            first_segment_minutes = max(int((first_segment_end - start_time).total_seconds() // 60), 0)
+        else:
+            issues.append("Unable to compute pre-break duty duration; missing timestamps.")
+
+        if end_time and next_departure:
+            second_segment_start = next_departure - timedelta(minutes=_DUTY_START_BUFFER_MINUTES)
+            second_segment_minutes = max(int((end_time - second_segment_start).total_seconds() // 60), 0)
+        else:
+            issues.append("Unable to compute post-break duty duration; missing timestamps.")
+
+        issues.append(
+            f"Reset break {_format_minutes(longest_ground)} between {legs[break_index]['arrival_icao']} and {legs[break_index + 1]['departure_icao']}"
+        )
+
+        status = "PASS"
+        summaries: List[str] = []
+
+        if first_segment_minutes is not None:
+            status = _worse_status(
+                status,
+                _describe_duty_segment(
+                    duration_minutes=first_segment_minutes,
+                    label="Duty before reset",
+                    issues=issues,
+                ),
+            )
+            summaries.append(f"pre-break {_format_minutes(first_segment_minutes)}")
+
+        if second_segment_minutes is not None:
+            status = _worse_status(
+                status,
+                _describe_duty_segment(
+                    duration_minutes=second_segment_minutes,
+                    label="Duty after reset",
+                    issues=issues,
+                ),
+            )
+            summaries.append(f"post-break {_format_minutes(second_segment_minutes)}")
+
+        if first_segment_minutes is None and second_segment_minutes is None:
+            status = "CAUTION"
+            summary = "Duty duration unavailable"
+        else:
+            summary = "Reset duty day: " + "; ".join(summaries)
     else:
         allowed_limit = _STANDARD_DUTY_LIMIT_MINUTES + split_extension_minutes
         allowed_limit = min(allowed_limit, _EXTENDED_DUTY_LIMIT_MINUTES)
@@ -167,9 +255,6 @@ def evaluate_generic_duty_day(
             status = "FAIL"
             summary = f"Total duty {_format_minutes(total_duty)} exceeds 17h limit"
             issues.append("Duty exceeds 17-hour maximum.")
-
-    if reset_possible:
-        issues.append("Reset duty window available (≥11h15 ground).")
 
     return DutyFeasibilityResult(
         status=status,
