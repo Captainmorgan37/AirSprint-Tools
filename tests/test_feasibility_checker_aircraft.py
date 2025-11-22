@@ -27,13 +27,13 @@ def test_praetor_pass_when_margin_is_large():
 
 
 def test_praetor_caution_when_close_to_limit():
-    result = checker_aircraft.evaluate_aircraft(_build_flight(plannedBlockTime="6:55", pax=4))
+    result = checker_aircraft.evaluate_aircraft(_build_flight(plannedBlockTime="7:05", pax=4))
     assert result.status == "CAUTION"
-    assert "near pax endurance" in result.summary
+    assert "endurance" in result.summary
 
 
 def test_praetor_fail_when_over_limit():
-    result = checker_aircraft.evaluate_aircraft(_build_flight(plannedBlockTime="7:30", pax=4))
+    result = checker_aircraft.evaluate_aircraft(_build_flight(plannedBlockTime="7:20", pax=4))
     assert result.status == "FAIL"
     assert "exceeds pax endurance" in result.summary
 

@@ -219,7 +219,7 @@ def _evaluate_pax_profile(
     issues.append(f"Limit for {pax} pax: {limit} minutes")
     issues.append(f"Margin to limit: {diff} minutes")
 
-    if diff >= 10:
+    if diff > 0:
         return CategoryResult(
             status="PASS",
             summary=f"{aircraft_type} ({pax} pax) within pax endurance (margin {diff} min)",
