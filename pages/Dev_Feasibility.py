@@ -334,38 +334,7 @@ def _render_customs_details(
         return
     if not parsed.get("raw_notes"):
         return
-    summary_lines: list[str] = []
-    if planned_time_local:
-        summary_lines.append(f"Planned arrival: {planned_time_local}")
-    hours_entries: list[str] = []
-    for entry in parsed.get("customs_hours", []):
-        if isinstance(entry, Mapping):
-            formatted = _format_hours_entry(entry)
-            if formatted:
-                hours_entries.append(formatted)
-    if hours_entries:
-        summary_lines.append(f"Hours: {', '.join(hours_entries)} (local)")
-    if parsed.get("customs_afterhours_available"):
-        detail = "After-hours available"
-        requirements = _collect_entries(parsed.get("customs_afterhours_requirements"), explode=True)
-        if requirements:
-            detail += f" — {'; '.join(requirements)}"
-        summary_lines.append(detail)
-    notice_bits: list[str] = []
-    if parsed.get("customs_prior_notice_hours"):
-        notice_bits.append(f"{parsed['customs_prior_notice_hours']}h notice")
-    if parsed.get("customs_prior_notice_days"):
-        notice_bits.append(f"{parsed['customs_prior_notice_days']} day notice")
-    if notice_bits:
-        summary_lines.append(f"Prior notice: {', '.join(notice_bits)}")
-    if parsed.get("canpass_only"):
-        summary_lines.append("CANPASS arrivals only")
-    if parsed.get("location_to_clear"):
-        summary_lines.append(f"Clear at {parsed['location_to_clear']}")
     contact_notes = _collect_entries(parsed.get("customs_contact_notes"), explode=True)
-    if contact_notes:
-        summary_lines.append("Contact customs before arrival")
-    _render_bullet_section("Customs Intel", summary_lines)
     _render_bullet_section("Contact Instructions", contact_notes)
     _render_bullet_section(
         "Passenger Requirements",
