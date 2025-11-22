@@ -14,6 +14,7 @@ from .airport_module import (
     build_leg_context_from_flight,
     evaluate_airport_feasibility_for_leg,
 )
+from .common import OSA_CATEGORY, SSA_CATEGORY, classify_airport_category
 from .duty_module import evaluate_generic_duty_day
 from .models import DayContext, FeasibilityRequest, FullFeasibilityResult
 from .quote_lookup import build_quote_leg_options
@@ -168,6 +169,41 @@ def _format_date_range(day: DayContext) -> str:
     return ""
 
 
+def _determine_flight_category(
+    legs: Sequence[LegContext], airport_metadata: AirportMetadataLookup
+) -> Optional[str]:
+    if not legs:
+        return None
+
+    any_osa = False
+    any_ssa = False
+    all_us = True
+    seen_airport = False
+
+    for leg in legs:
+        for key in ("departure_icao", "arrival_icao"):
+            icao = leg.get(key)
+            if not isinstance(icao, str):
+                all_us = False
+                continue
+            seen_airport = True
+            classification = classify_airport_category(icao, airport_metadata)
+            if classification.category == OSA_CATEGORY:
+                any_osa = True
+            elif classification.category == SSA_CATEGORY:
+                any_ssa = True
+            if classification.country != "US":
+                all_us = False
+
+    if any_osa:
+        return OSA_CATEGORY
+    if any_ssa:
+        return SSA_CATEGORY
+    if seen_airport and all_us:
+        return "US point-to-point"
+    return None
+
+
 def _build_summary(
     day: DayContext,
     leg_results: Sequence[AirportFeasibilityResult],
@@ -246,6 +282,7 @@ def run_feasibility_phase1(request: FeasibilityRequest) -> FullFeasibilityResult
         )
 
     duty_result = evaluate_generic_duty_day(day, tz_provider=tz_provider)
+    flight_category = _determine_flight_category(day["legs"], airport_metadata)
     overall_status = _determine_overall_status(leg_results, duty_result)
     issues = _collect_issues(day, leg_results, duty_result)
     summary = _build_summary(day, leg_results, duty_result)
@@ -255,6 +292,7 @@ def run_feasibility_phase1(request: FeasibilityRequest) -> FullFeasibilityResult
         bookingIdentifier=day["bookingIdentifier"],
         aircraft_type=day["aircraft_type"],
         aircraft_category=day["aircraft_category"],
+        flight_category=flight_category,
         legs=[result.as_dict() for result in leg_results],
         duty=duty_result,
         overall_status=overall_status,

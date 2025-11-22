@@ -617,6 +617,9 @@ def _render_full_quote_result(result: FullFeasibilityResult) -> None:
     st.caption(
         f"{result.get('bookingIdentifier', 'Unknown Quote')} • {len(legs)} leg(s) • {result.get('aircraft_type', 'Unknown Aircraft')}"
     )
+    flight_category = result.get("flight_category")
+    if flight_category:
+        st.caption(f"Flight Category: {flight_category}")
 
     summary = result.get("summary")
     if summary:
