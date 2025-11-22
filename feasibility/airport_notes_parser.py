@@ -352,14 +352,30 @@ def split_customs_operational_notes(
     return customs, operational
 
 
+def _should_ignore_operational_note(text: str, *, lower: str | None = None) -> bool:
+    lowered = lower or text.lower()
+    if not lowered:
+        return False
+    if ("yyc" in lowered or "nvc" in lowered) and (
+        lowered.startswith("operational instruction")
+        or "contact person updated" in lowered
+        or "engine run" in lowered
+        or "repositioning back from cyyc" in lowered
+    ):
+        return True
+    return False
+
+
 def parse_operational_restrictions(notes: Sequence[str]) -> ParsedRestrictions:
     parsed = _empty_parsed_restrictions()
     for raw in notes:
         text = raw.strip()
         if not text:
             continue
-        parsed["raw_notes"].append(text)
         lower = text.lower()
+        if _should_ignore_operational_note(text, lower=lower):
+            continue
+        parsed["raw_notes"].append(text)
         categories = _classify_operational_note(text)
         primary = _select_primary_category(categories)
         if "contaminated" in lower:
