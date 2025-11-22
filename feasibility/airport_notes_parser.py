@@ -236,6 +236,21 @@ def _contains_keyword(text: str, keywords: Sequence[str]) -> bool:
     return any(keyword in lower for keyword in keywords)
 
 
+def _is_customs_contact_instruction(text: str) -> bool:
+    """Detect whether a note explicitly directs contacting customs/CBSA.
+
+    Notes often include operational call-outs (e.g., radio a handler for parking)
+    that should not trigger a customs contact requirement. Restrict the detection
+    to contact verbs that also mention customs-related terms.
+    """
+
+    lower = text.lower()
+    if not any(k in lower for k in ("call", "phone", "contact", "notify")):
+        return False
+
+    return any(keyword in lower for keyword in ("customs", "cbsa", "cbp", "officer", "border"))
+
+
 def _classify_customs_note(text: str) -> set[str]:
     lower = text.lower()
     categories: set[str] = set()
@@ -621,7 +636,7 @@ def parse_customs_notes(notes: Sequence[str]) -> ParsedCustoms:
             parsed["customs_prior_notice_hours"] = int(match.group(1))
         if match := re.search(PRIOR_DAYS_RE, lower):
             parsed["customs_prior_notice_days"] = int(match.group(1))
-        if any(k in lower for k in ("call", "phone", "contact", "notify")):
+        if _is_customs_contact_instruction(text):
             parsed["customs_contact_required"] = True
             if primary == "contact":
                 parsed["customs_contact_notes"].append(text)
@@ -707,7 +722,7 @@ def summarize_operational_notes(
     if restrictions["winter_sensitivity"] and status == "PASS":
         add_issue("Winter operations sensitivity reported", "INFO")
 
-    if not restrictions["raw_notes"]:
+    if restrictions["weather_limitations"]:
         for weather_note in restrictions["weather_limitations"]:
             add_issue(f"Weather limitation: {weather_note}", "CAUTION")
 
