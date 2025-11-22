@@ -65,9 +65,11 @@ def _build_leg_contexts(
                     try:
                         pax_payload = pax_details_fetcher(flight_id)
                         context["pax_payload_source"] = "api"
-                    except Exception:
+                        context.pop("pax_payload_error", None)
+                    except Exception as exc:
                         pax_payload = None
                         context["pax_payload_source"] = "api_error"
+                        context["pax_payload_error"] = str(exc)
                     if isinstance(pax_payload, Mapping):
                         context["pax_payload"] = pax_payload
             if not context.get("aircraft_type") and quote_aircraft_type:

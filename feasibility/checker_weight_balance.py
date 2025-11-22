@@ -286,6 +286,7 @@ def evaluate_weight_balance(
     aircraft_type: Optional[str],
     season: str,
     payload_source: Optional[str] = None,
+    payload_error: Optional[str] = None,
 ) -> CategoryResult:
     """Assess passenger + cargo payload feasibility for a flight."""
 
@@ -297,6 +298,8 @@ def evaluate_weight_balance(
 
     if pax_payload is None:
         details["payloadSource"] = payload_source or "missing"
+        if payload_error:
+            details["payloadError"] = payload_error
         return CategoryResult(
             status="CAUTION",
             summary="No weight data available",
@@ -306,6 +309,8 @@ def evaluate_weight_balance(
     
     pax_keys = list(pax_payload.keys()) if isinstance(pax_payload, Mapping) else []
     details["payloadSource"] = payload_source or "api"
+    if payload_error:
+        details["payloadError"] = payload_error
     print("PAX DEBUG: Keys received =", pax_keys)
     print("PAX DEBUG FULL:", pax_payload)
 

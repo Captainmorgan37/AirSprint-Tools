@@ -136,6 +136,35 @@ def test_phase1_engine_prefers_flight_id_when_fetching_pax_details() -> None:
     assert fetched_ids == ["FLIGHT-123"]
 
 
+def test_phase1_engine_surfaces_pax_details_error() -> None:
+    quote = {
+        "bookingIdentifier": "PAX-ERR",
+        "legs": [
+            {
+                "id": "LEG-ERR",
+                "departureAirport": "CYYC",
+                "arrivalAirport": "CYVR",
+                "departureDateUTC": "2025-11-19T15:00:00Z",
+                "arrivalDateUTC": "2025-11-19T17:00:00Z",
+                "pax": 2,
+                "blockTime": 120,
+            }
+        ],
+    }
+
+    def _fetcher(_: str) -> Dict[str, Any]:
+        raise RuntimeError("HTTP 401 Unauthorized: token missing")
+
+    result = run_feasibility_phase1(
+        {"quote": quote, "tz_provider": _tz_provider, "pax_details_fetcher": _fetcher}
+    )
+
+    leg = result["legs"][0]
+    details = leg["weightBalance"]["details"]
+    assert details["payloadSource"] == "api_error"
+    assert "Unauthorized" in details.get("payloadError", "")
+
+
 def test_weight_balance_reads_nested_pax_and_cargo_payload() -> None:
     payload = {
         "paxDetails": {

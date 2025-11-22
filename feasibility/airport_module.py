@@ -617,6 +617,7 @@ def evaluate_airport_feasibility_for_leg(
         aircraft_type=leg.get("aircraft_type"),
         season=season,
         payload_source=payload_source,
+        payload_error=leg.get("pax_payload_error"),
     )
 
     return AirportFeasibilityResult(
