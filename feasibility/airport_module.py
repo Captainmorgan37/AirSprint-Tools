@@ -26,7 +26,14 @@ from .airport_notes_parser import (
 )
 from . import checker_aircraft, checker_weight_balance
 from .common import extract_airport_code
-from .data_access import AirportCategoryRecord, CustomsRule, load_airport_categories, load_customs_rules
+from .data_access import (
+    AirportCategoryRecord,
+    CustomsRule,
+    Fl3xxAirportCategory,
+    load_airport_categories,
+    load_customs_rules,
+    load_fl3xx_airport_categories,
+)
 from .schemas import CategoryResult, CategoryStatus
 
 AirportMetadataLookup = Mapping[str, Mapping[str, Optional[str]]]
@@ -74,6 +81,7 @@ class AirportProfile:
     longest_runway_ft: Optional[int]
     is_approved_for_ops: bool
     category: Optional[str]
+    fl3xx_category: Optional[str]
     elevation_ft: Optional[int]
     country: Optional[str]
 
@@ -408,17 +416,21 @@ def _build_airport_profile(
     icao: str,
     *,
     airport_categories: Mapping[str, AirportCategoryRecord],
+    fl3xx_categories: Mapping[str, Fl3xxAirportCategory],
     metadata: AirportMetadataLookup,
 ) -> AirportProfile:
     longest_runways = _load_longest_runways()
     category_record = airport_categories.get(icao)
+    fl3xx_category_record = fl3xx_categories.get(icao)
     metadata_record = metadata.get(icao, {}) if metadata else {}
+    fl3xx_category = fl3xx_category_record.category if fl3xx_category_record else None
     return AirportProfile(
         icao=icao,
         name=None,
         longest_runway_ft=longest_runways.get(icao),
-        is_approved_for_ops=True,
+        is_approved_for_ops=fl3xx_category in {"A", "B", "C"},
         category=category_record.category if category_record else None,
+        fl3xx_category=fl3xx_category,
         elevation_ft=None,
         country=str(metadata_record.get("country") or "").strip() or None,
     )
@@ -529,10 +541,12 @@ def evaluate_airport_feasibility_for_leg(
     operational_notes_fetcher: Optional[Callable[[str, Optional[str]], Sequence[Mapping[str, Any]]]] = None,
     airport_metadata: Optional[AirportMetadataLookup] = None,
     airport_categories: Optional[Mapping[str, AirportCategoryRecord]] = None,
+    fl3xx_categories: Optional[Mapping[str, Fl3xxAirportCategory]] = None,
     customs_rules: Optional[Mapping[str, CustomsRule]] = None,
     now: Optional[datetime] = None,
 ) -> AirportFeasibilityResult:
     airport_categories = airport_categories or load_airport_categories()
+    fl3xx_categories = fl3xx_categories or load_fl3xx_airport_categories()
     customs_rules = customs_rules or load_customs_rules()
     airport_metadata = airport_metadata or load_airport_metadata_lookup()
     tz_provider = tz_provider or _get_timezone_provider(airport_metadata)
@@ -542,8 +556,12 @@ def evaluate_airport_feasibility_for_leg(
     dep_icao = leg["departure_icao"]
     arr_icao = leg["arrival_icao"]
 
-    dep_profile = _build_airport_profile(dep_icao, airport_categories=airport_categories, metadata=airport_metadata)
-    arr_profile = _build_airport_profile(arr_icao, airport_categories=airport_categories, metadata=airport_metadata)
+    dep_profile = _build_airport_profile(
+        dep_icao, airport_categories=airport_categories, fl3xx_categories=fl3xx_categories, metadata=airport_metadata
+    )
+    arr_profile = _build_airport_profile(
+        arr_icao, airport_categories=airport_categories, fl3xx_categories=fl3xx_categories, metadata=airport_metadata
+    )
 
     dep_deice = _build_deice_profile(dep_icao)
     arr_deice = _build_deice_profile(arr_icao)
@@ -702,28 +720,40 @@ def evaluate_suitability(
 ) -> CategoryResult:
     issues: List[str] = []
     status: CategoryStatus = "PASS"
-    summary = "Airport approved"
+    approved_categories = {"A", "B", "C"}
+    fl3xx_category = (airport_profile.fl3xx_category or "").strip().upper()
+    summary = f"Fl3xx category {fl3xx_category}" if fl3xx_category else "Airport approved"
+    summary_locked = False
 
-    if not airport_profile.is_approved_for_ops:
+    if fl3xx_category in approved_categories:
+        summary = f"Fl3xx category {fl3xx_category} approved"
+    else:
         status = "FAIL"
         summary = "Airport not approved"
-        issues.append("Airport marked as not approved for AirSprint operations.")
+        summary_locked = True
+        if fl3xx_category:
+            issues.append(f"Fl3xx category {fl3xx_category} is not approved for AirSprint operations.")
+        else:
+            issues.append("No Fl3xx approval category found; airport not cleared for operations.")
 
     required_length = RUNWAY_REQUIREMENTS_FT.get(leg.get("aircraft_category", ""), 4300)
     longest = airport_profile.longest_runway_ft
     if longest is None:
         issues.append("No runway data available; verify manually.")
         status = _combine_status(status, "CAUTION")
-        summary = "Missing runway intel"
+        if not summary_locked:
+            summary = "Missing runway intel"
     elif longest < required_length:
         status = "FAIL"
-        summary = "Insufficient runway length"
+        if not summary_locked:
+            summary = "Insufficient runway length"
         issues.append(
             f"Longest runway {longest:,} ft < required {required_length:,} ft for {leg.get('aircraft_category') or 'aircraft'}."
         )
     elif longest - required_length < 500:
         status = _combine_status(status, "CAUTION")
-        summary = "Runway margin tight"
+        if not summary_locked:
+            summary = "Runway margin tight"
         issues.append(
             f"Runway margin only {longest - required_length:,} ft; monitor performance numbers."
         )
@@ -733,7 +763,8 @@ def evaluate_suitability(
         body = " ".join(str(note.get(key) or "") for key in ("note", "title", "body")).lower()
         if any(keyword in body for keyword in closure_keywords):
             status = "FAIL"
-            summary = "Operational closure in effect"
+            if not summary_locked:
+                summary = "Operational closure in effect"
             issues.append("Operational notes indicate closures or curfews impacting this leg.")
             break
 
