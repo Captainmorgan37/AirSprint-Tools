@@ -343,6 +343,8 @@ def split_customs_operational_notes(
             continue
         lower = text.lower()
         is_customs = any(keyword in lower for keyword in CUSTOMS_NOTE_KEYWORDS)
+        if "crew" in lower:
+            is_customs = True
         if is_customs:
             customs.append(text)
         else:
@@ -651,7 +653,7 @@ def summarize_operational_notes(
         add_issue(detail, "CAUTION")
     if restrictions["fuel_available"] is False:
         add_issue("Fuel unavailable per operational notes", "CAUTION")
-    if restrictions["night_ops_allowed"] is False:
+    if restrictions["night_ops_allowed"] is False and not restrictions["hour_notes"]:
         add_issue("Night operations prohibited", "CAUTION")
     if restrictions["curfew"]:
         add_issue("Curfew in effect per operational notes", "CAUTION")
@@ -665,8 +667,9 @@ def summarize_operational_notes(
     if restrictions["winter_sensitivity"] and status == "PASS":
         add_issue("Winter operations sensitivity reported", "INFO")
 
-    for weather_note in restrictions["weather_limitations"]:
-        add_issue(f"Weather limitation: {weather_note}", "CAUTION")
+    if not restrictions["raw_notes"]:
+        for weather_note in restrictions["weather_limitations"]:
+            add_issue(f"Weather limitation: {weather_note}", "CAUTION")
 
     for note in restrictions["generic_restrictions"]:
         add_issue(f"Operational restriction: {note}", "CAUTION")
