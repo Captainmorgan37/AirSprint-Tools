@@ -257,6 +257,8 @@ full closure during ETA → FAIL
 
 partial closure impacting runway length → CAUTION/FAIL depending on margin
 
+generic "closure" wording (no explicit closed/curfew) → CAUTION to review Fl3xx note timing
+
 Else → PASS (with possible notes if marginal).
 
 5.2 evaluate_deice

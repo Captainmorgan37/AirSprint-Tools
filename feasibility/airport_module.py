@@ -807,15 +807,25 @@ def evaluate_suitability(
             f"Runway margin only {longest - required_length:,} ft; monitor performance numbers."
         )
 
-    closure_keywords = ("closed", "closure", "no ga", "curfew")
+    closure_fail_keywords = ("closed", "no ga", "curfew")
+    closure_caution_keywords = ("closure",)
+    closure_caution_found = False
     for note in operational_notes:
         body = " ".join(str(note.get(key) or "") for key in ("note", "title", "body")).lower()
-        if any(keyword in body for keyword in closure_keywords):
+        if any(keyword in body for keyword in closure_fail_keywords):
             status = "FAIL"
             if not summary_locked:
                 summary = "Operational closure in effect"
             issues.append("Operational notes indicate closures or curfews impacting this leg.")
             break
+        if not closure_caution_found and any(keyword in body for keyword in closure_caution_keywords):
+            closure_caution_found = True
+            status = _combine_status(status, "CAUTION")
+            if not summary_locked:
+                summary = "Operational closure noted"
+            issues.append(
+                "Operational notes mention closures; review Fl3xx note for timing before dispatch."
+            )
 
     return CategoryResult(status=status, summary=summary, issues=issues)
 
