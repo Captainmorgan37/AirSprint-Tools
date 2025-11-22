@@ -638,6 +638,7 @@ def evaluate_airport_feasibility_for_leg(
         overflight_result=overflight_result,
         side="DEP",
         planned_time_local=dep_time_local,
+        tz_name=dep_tz,
     )
     arrival_side = evaluate_airport_side(
         icao=arr_icao,
@@ -652,6 +653,7 @@ def evaluate_airport_feasibility_for_leg(
         overflight_result=overflight_result,
         side="ARR",
         planned_time_local=arr_time_local,
+        tz_name=arr_tz,
     )
 
     aircraft_result = _evaluate_aircraft_endurance(leg)
@@ -698,6 +700,7 @@ def evaluate_airport_side(
     overflight_result: CategoryResult,
     side: str,
     planned_time_local: Optional[str] = None,
+    tz_name: Optional[str] = None,
 ) -> AirportSideResult:
     customs_texts, operational_texts = split_customs_operational_notes(operational_notes)
     parsed_customs_notes = parse_customs_notes(customs_texts)
@@ -725,6 +728,7 @@ def evaluate_airport_side(
         side,
         operational_notes,
         parsed_customs=parsed_customs_notes,
+        tz_name=tz_name,
     )
     slot_ppr = evaluate_slot_ppr(
         slot_ppr_profile,
@@ -969,6 +973,89 @@ def _build_customs_summary(base_summary: str, parsed: Optional[ParsedCustoms]) -
     return f"{base_summary} — {detail_text}"
 
 
+def _parse_time_minutes(value: str) -> Optional[int]:
+    digits = re.sub(r"\D", "", value)
+    if len(digits) == 3:
+        digits = f"0{digits}"
+    if len(digits) != 4:
+        return None
+    try:
+        hours = int(digits[:2])
+        minutes = int(digits[2:])
+    except ValueError:
+        return None
+    if hours > 24 or minutes > 59:
+        return None
+    return hours * 60 + minutes
+
+
+def _day_matches(day_value: str, weekday_index: int) -> bool:
+    if not day_value:
+        return True
+    normalized = day_value.strip().lower()
+    if normalized in {"daily", "day", "days", "all", "any", "unknown"}:
+        return True
+    names = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+    if normalized in names:
+        return normalized == names[weekday_index]
+    if "-" in normalized:
+        start, end = (part.strip() for part in normalized.split("-", 1))
+        if start in names and end in names:
+            start_idx = names.index(start)
+            end_idx = names.index(end)
+            if start_idx <= end_idx:
+                return start_idx <= weekday_index <= end_idx
+            return weekday_index >= start_idx or weekday_index <= end_idx
+    if "week" in normalized and "end" not in normalized:
+        return weekday_index < 5
+    if "weekend" in normalized:
+        return weekday_index >= 5
+    return False
+
+
+def _is_within_customs_hours(
+    arrival_dt_local: Optional[datetime], customs_hours: Sequence[Mapping[str, object]]
+) -> Optional[bool]:
+    if not customs_hours or arrival_dt_local is None:
+        return None
+
+    arrival_minutes = arrival_dt_local.hour * 60 + arrival_dt_local.minute
+    weekday_index = arrival_dt_local.weekday()
+
+    for entry in customs_hours:
+        start_raw = str(entry.get("start") or "").strip()
+        end_raw = str(entry.get("end") or "").strip()
+        days_value = entry.get("days")
+        days: Sequence[str] = ()
+        if isinstance(days_value, (list, tuple, set)):
+            days = [str(d) for d in days_value]
+
+        if days and not any(_day_matches(day, weekday_index) for day in days):
+            continue
+
+        start_minutes = _parse_time_minutes(start_raw) if start_raw else 0
+        end_minutes = _parse_time_minutes(end_raw) if end_raw else None
+
+        if start_minutes is None:
+            continue
+
+        if end_minutes is None:
+            return None
+
+        if end_minutes == 2400:
+            end_minutes = 24 * 60
+
+        if end_minutes < start_minutes:
+            in_window = arrival_minutes >= start_minutes or arrival_minutes < end_minutes
+        else:
+            in_window = start_minutes <= arrival_minutes < end_minutes
+
+        if in_window:
+            return True
+
+    return False
+
+
 def evaluate_customs(
     customs_profile: Optional[CustomsProfile],
     leg: LegContext,
@@ -976,11 +1063,21 @@ def evaluate_customs(
     operational_notes: Sequence[Mapping[str, Any]],
     *,
     parsed_customs: ParsedCustoms | None = None,
+    tz_name: Optional[str] = None,
 ) -> CategoryResult:
     issues: List[str] = []
     status: CategoryStatus = "PASS"
     summary = "Customs available"
     parsed = parsed_customs
+
+    arrival_dt_local: Optional[datetime] = None
+    arrival_raw = leg.get("arrival_date_utc")
+    if isinstance(arrival_raw, str) and tz_name:
+        try:
+            arrival_dt_local = safe_parse_dt(arrival_raw)
+            arrival_dt_local = arrival_dt_local.astimezone(pytz.timezone(tz_name))
+        except Exception:
+            arrival_dt_local = None
 
     if side == "DEP":
         return CategoryResult(status=status, summary="Not required for departure", issues=issues)
@@ -991,7 +1088,7 @@ def evaluate_customs(
 
     if customs_profile is None:
         if not parsed or not parsed.get("customs_available"):
-            status = "CAUTION"
+            status = "FAIL"
             summary = "No customs intel"
             issues.append("No customs record available; confirm with airport directly.")
         else:
@@ -1011,6 +1108,20 @@ def evaluate_customs(
             issues.append(customs_profile.notes)
 
     if parsed:
+        hours_result = _is_within_customs_hours(arrival_dt_local, parsed["customs_hours"])
+        if hours_result is False:
+            if parsed["customs_afterhours_not_available"]:
+                status = "FAIL"
+                summary = "Customs unavailable at planned time"
+                issues.append(
+                    "Arrival time falls outside customs hours and after-hours support is not permitted."
+                )
+            else:
+                status = _combine_status(status, "CAUTION")
+                issues.append(
+                    "Arrival time falls outside customs hours; arrange after-hours support or confirm availability."
+                )
+
         if parsed["canpass_only"]:
             status = _combine_status(status, "CAUTION")
             summary = "CANPASS arrival"
@@ -1026,7 +1137,6 @@ def evaluate_customs(
                 f"Customs requires {parsed['customs_prior_notice_days']} day notice."
             )
         if parsed["customs_contact_required"]:
-            status = _combine_status(status, "CAUTION")
             issues.append("Customs contact required per notes.")
             issues.extend(parsed["customs_contact_notes"])
         if parsed["customs_afterhours_available"]:

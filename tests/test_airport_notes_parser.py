@@ -70,6 +70,21 @@ def test_operational_callouts_do_not_trigger_customs_contact_requirement() -> No
     assert note in parsed["location_notes"] or note in parsed["general_customs_notes"]
 
 
+def test_customs_contact_number_not_treated_as_contact_requirement() -> None:
+    note = (
+        "CUSTOMS:\n"
+        "AOE 24/7.\n"
+        "Third Location: Small Aircraft Centre 'Customs Shack'. Contact # 403.477.5422. "
+        "Commercial customs CBSA # 403.461.7564"
+    )
+
+    parsed = parse_customs_notes([note])
+
+    assert parsed["customs_contact_required"] is False
+    assert parsed["customs_contact_notes"] == []
+    assert note in parsed["raw_notes"]
+
+
 def test_deice_limited_not_triggered_by_holdover_language() -> None:
     note = (
         "DEICE/ANTI ICE: If temperature is below -14, better hold over times exist "
