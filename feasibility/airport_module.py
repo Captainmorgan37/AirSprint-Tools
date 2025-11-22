@@ -524,8 +524,8 @@ def _build_slot_ppr_profile(icao: str, airport_categories: Mapping[str, AirportC
     notes_upper = notes.upper() if notes else ""
     slot_required = any(keyword in notes_upper for keyword in SLOT_KEYWORDS)
     ppr_required = any(keyword in notes_upper for keyword in PPR_KEYWORDS)
-    # Airports classified as OSA/SSA often require coordination
-    if record and record.category in {"OSA", "SSA"}:
+    # Airports classified as OSA often require coordination
+    if record and record.category == "OSA":
         slot_required = True
         ppr_required = True
     lead_days = _extract_lead_days(notes)

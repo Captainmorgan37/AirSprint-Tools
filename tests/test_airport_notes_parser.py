@@ -9,6 +9,7 @@ if str(Path(__file__).resolve().parents[1]) not in sys.path:
 from feasibility.airport_notes_parser import (
     parse_customs_notes,
     parse_operational_restrictions,
+    summarize_operational_notes,
 )
 
 
@@ -64,3 +65,25 @@ def test_deice_limited_not_triggered_by_holdover_language() -> None:
 
     assert parsed["deice_limited"] is False
     assert parsed["deice_notes"] == [note]
+
+
+def test_day_operations_only_blocks_night_ops() -> None:
+    note = "Day Operations Only - NO RWY LIGHTS"
+
+    parsed = parse_operational_restrictions([note])
+
+    assert parsed["night_ops_allowed"] is False
+    assert parsed["hour_notes"] == [note]
+
+
+def test_weather_limitation_included_in_summary() -> None:
+    note = "Good Weather Only (VFR weather - no night operations)"
+
+    parsed = parse_operational_restrictions([note])
+
+    assert parsed["weather_limitations"] == [note]
+
+    summary = summarize_operational_notes("MYAM", [{"note": note}], parsed)
+
+    assert summary.status == "CAUTION"
+    assert any("Weather limitation" in issue for issue in summary.issues)
