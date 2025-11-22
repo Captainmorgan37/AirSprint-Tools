@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, cast
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from feasibility.engine_phase1 import run_feasibility_phase1
+from feasibility import checker_weight_balance
 from feasibility.duty_module import evaluate_generic_duty_day
 from feasibility.models import DayContext
 
@@ -133,6 +134,33 @@ def test_phase1_engine_prefers_flight_id_when_fetching_pax_details() -> None:
     )
 
     assert fetched_ids == ["FLIGHT-123"]
+
+
+def test_weight_balance_reads_nested_pax_and_cargo_payload() -> None:
+    payload = {
+        "paxDetails": {
+            "tickets": [
+                {"paxType": "ADULT", "paxUser": {"gender": "Female"}},
+            ]
+        },
+        "cargoItems": [
+            {"weightQty": 260, "note": "PET DOG 6lb"},
+        ],
+    }
+
+    result = checker_weight_balance.evaluate_weight_balance(
+        {"aircraft_type": "C25A"},
+        pax_payload=payload,
+        aircraft_type="C25A",
+        season="Winter",
+        payload_source="api",
+    )
+
+    details = result.details
+    assert details["payloadSource"] == "api"
+    assert details["paxCount"] == 1
+    assert details["paxBreakdown"]["Female"] == 1
+    assert details["cargoWeight"] == 260
 
 
 def test_aircraft_endurance_is_evaluated_for_each_leg() -> None:

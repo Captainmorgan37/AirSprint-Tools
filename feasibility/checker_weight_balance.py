@@ -149,24 +149,68 @@ def _standard_pax_weight(season: str, category: str) -> float:
 
 
 def _iter_tickets(payload: Mapping[str, Any]) -> Iterable[Mapping[str, Any]]:
-    pax = payload.get("pax") if isinstance(payload, Mapping) else None
-    if isinstance(pax, Mapping) and isinstance(pax.get("tickets"), Iterable):
-        for entry in pax.get("tickets", []) or []:
+    candidates: list[Any] = []
+    if isinstance(payload, Mapping):
+        candidates.extend(
+            [
+                payload,
+                payload.get("pax"),
+                payload.get("pax_details"),
+                payload.get("paxDetails"),
+                payload.get("paxPayload"),
+                payload.get("passengers"),
+            ]
+        )
+
+    seen_ids: set[int] = set()
+
+    for candidate in candidates:
+        if isinstance(candidate, Mapping):
+            entries = candidate.get("tickets")
+        elif isinstance(candidate, Iterable) and not isinstance(candidate, (str, bytes)):
+            entries = candidate
+        else:
+            continue
+
+        for entry in entries or []:
             if isinstance(entry, Mapping):
-                yield entry
-    tickets = payload.get("tickets") if isinstance(payload, Mapping) else None
-    if isinstance(tickets, Iterable):
-        for entry in tickets:
-            if isinstance(entry, Mapping):
+                marker = id(entry)
+                if marker in seen_ids:
+                    continue
+                seen_ids.add(marker)
                 yield entry
 
 
 def _iter_cargo(payload: Mapping[str, Any]) -> Iterable[Mapping[str, Any]]:
-    cargo = payload.get("cargo") if isinstance(payload, Mapping) else None
-    if isinstance(cargo, Iterable):
-        for entry in cargo:
-            if isinstance(entry, Mapping):
-                yield entry
+    candidates: list[Any] = []
+    if isinstance(payload, Mapping):
+        candidates.extend(
+            [
+                payload.get("cargo"),
+                payload.get("cargoItems"),
+                payload.get("cargo_items"),
+            ]
+        )
+        nested = payload.get("pax") if isinstance(payload.get("pax"), Mapping) else None
+        if nested:
+            candidates.extend(
+                [
+                    nested.get("cargo"),
+                    nested.get("cargoItems"),
+                    nested.get("cargo_items"),
+                ]
+            )
+
+    seen_ids: set[int] = set()
+    for candidate in candidates:
+        if isinstance(candidate, Iterable) and not isinstance(candidate, (str, bytes)):
+            for entry in candidate:
+                if isinstance(entry, Mapping):
+                    marker = id(entry)
+                    if marker in seen_ids:
+                        continue
+                    seen_ids.add(marker)
+                    yield entry
 
 
 def _extract_ticket_stats(ticket: Mapping[str, Any], season: str) -> tuple[float, str]:
@@ -203,6 +247,7 @@ def evaluate_weight_balance(
     pax_payload: Optional[Mapping[str, Any]],
     aircraft_type: Optional[str],
     season: str,
+    payload_source: Optional[str] = None,
 ) -> CategoryResult:
     """Assess passenger + cargo payload feasibility for a flight."""
 
@@ -213,6 +258,7 @@ def evaluate_weight_balance(
     details: MutableMapping[str, Any] = {"season": season_label}
 
     if pax_payload is None:
+        details["payloadSource"] = payload_source or "missing"
         return CategoryResult(
             status="CAUTION",
             summary="No weight data available",
@@ -221,6 +267,7 @@ def evaluate_weight_balance(
         )
     
     pax_keys = list(pax_payload.keys()) if isinstance(pax_payload, Mapping) else []
+    details["payloadSource"] = payload_source or "api"
     print("PAX DEBUG: Keys received =", pax_keys)
     print("PAX DEBUG FULL:", pax_payload)
 
