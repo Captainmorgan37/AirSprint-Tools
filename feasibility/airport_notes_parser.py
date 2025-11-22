@@ -112,6 +112,17 @@ CUSTOMS_NOTE_KEYWORDS = (
     "customs information",
     "customs procedure",
 )
+CUSTOMS_CATEGORY_PRIORITY: tuple[str, ...] = (
+    "canpass",
+    "afterhours",
+    "notice",
+    "hours",
+    "location",
+    "contact",
+    "pax",
+    "crew",
+    "general",
+)
 PPR_TRUE_PATTERNS = [
     r"\bppr\b",
     r"prior permission required",
@@ -212,6 +223,37 @@ def _empty_parsed_customs() -> ParsedCustoms:
 def _contains_keyword(text: str, keywords: Sequence[str]) -> bool:
     lower = text.lower()
     return any(keyword in lower for keyword in keywords)
+
+
+def _classify_customs_note(text: str) -> set[str]:
+    lower = text.lower()
+    categories: set[str] = set()
+    if re.search(HOURS_RE, lower):
+        categories.add("hours")
+    if "after hours" in lower or "afterhours" in lower:
+        categories.add("afterhours")
+    if re.search(PRIOR_HOURS_RE, lower) or re.search(PRIOR_DAYS_RE, lower):
+        categories.add("notice")
+    if re.search(LOCATION_RE, lower):
+        categories.add("location")
+    if any(k in lower for k in ("call", "phone", "contact", "notify")):
+        categories.add("contact")
+    if "pax" in lower or "passenger" in lower:
+        categories.add("pax")
+    if "crew" in lower:
+        categories.add("crew")
+    if "canpass" in lower:
+        categories.add("canpass")
+    if not categories:
+        categories.add("general")
+    return categories
+
+
+def _select_primary_customs_category(categories: set[str]) -> str:
+    for category in CUSTOMS_CATEGORY_PRIORITY:
+        if category in categories:
+            return category
+    return "general"
 
 
 def _has_weight_limitation(text: str) -> bool:
@@ -468,11 +510,14 @@ def parse_customs_notes(notes: Sequence[str]) -> ParsedCustoms:
             continue
         lower = text.lower()
         parsed["raw_notes"].append(text)
+        categories = _classify_customs_note(text)
+        primary = _select_primary_customs_category(categories)
         if "customs" in lower or "clearing customs" in lower:
             parsed["customs_available"] = True
         if "canpass" in lower:
             parsed["canpass_only"] = True
-            parsed["canpass_notes"].append(text)
+            if primary == "canpass":
+                parsed["canpass_notes"].append(text)
         for match in re.finditer(HOURS_RE, lower):
             # Skip phone-number style matches like 760-318-3880 where another
             # dash-and-digits segment immediately follows the match.
@@ -487,22 +532,40 @@ def parse_customs_notes(notes: Sequence[str]) -> ParsedCustoms:
             parsed["customs_hours"].append({"start": start, "end": end, "days": days})
         if "after hours" in lower or "afterhours" in lower:
             parsed["customs_afterhours_available"] = True
-            parsed["customs_afterhours_requirements"].append(text)
+            if primary == "afterhours":
+                parsed["customs_afterhours_requirements"].append(text)
         if match := re.search(PRIOR_HOURS_RE, lower):
             parsed["customs_prior_notice_hours"] = int(match.group(1))
         if match := re.search(PRIOR_DAYS_RE, lower):
             parsed["customs_prior_notice_days"] = int(match.group(1))
         if any(k in lower for k in ("call", "phone", "contact", "notify")):
             parsed["customs_contact_required"] = True
-            parsed["customs_contact_notes"].append(text)
+            if primary == "contact":
+                parsed["customs_contact_notes"].append(text)
         if match := re.search(LOCATION_RE, lower):
             parsed["location_to_clear"] = match.group(1).strip()
-            parsed["location_notes"].append(text)
+            if primary == "location":
+                parsed["location_notes"].append(text)
         if "pax" in lower or "passenger" in lower:
-            parsed["pax_requirements"].append(text)
+            if primary == "pax":
+                parsed["pax_requirements"].append(text)
         if "crew" in lower:
-            parsed["crew_requirements"].append(text)
-        parsed["general_customs_notes"].append(text)
+            if primary == "crew":
+                parsed["crew_requirements"].append(text)
+        if primary == "afterhours":
+            pass
+        elif primary == "contact":
+            pass
+        elif primary == "location":
+            pass
+        elif primary == "pax":
+            pass
+        elif primary == "crew":
+            pass
+        elif primary == "canpass":
+            pass
+        else:
+            parsed["general_customs_notes"].append(text)
     return parsed
 
 
