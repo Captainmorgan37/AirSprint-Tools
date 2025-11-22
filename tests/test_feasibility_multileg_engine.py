@@ -136,6 +136,36 @@ def test_phase1_engine_prefers_flight_id_when_fetching_pax_details() -> None:
     assert fetched_ids == ["FLIGHT-123"]
 
 
+def test_phase1_engine_uses_flight_info_id_for_pax_details() -> None:
+    quote = {
+        "bookingIdentifier": "FLIGHT-INFO-ID",
+        "legs": [
+            {
+                "id": "LEG-WRAPPER",
+                "flightInfo": {"flightId": "FLIGHT-INFO-999"},
+                "departureAirport": "CYYC",
+                "arrivalAirport": "CYVR",
+                "departureDateUTC": "2025-11-19T15:00:00Z",
+                "arrivalDateUTC": "2025-11-19T17:00:00Z",
+                "pax": 1,
+                "blockTime": 120,
+            }
+        ],
+    }
+
+    fetched_ids: list[str] = []
+
+    def _fetcher(flight_id: str) -> Dict[str, Any]:
+        fetched_ids.append(flight_id)
+        return {"pax": {"tickets": [{"paxType": "ADULT"}]}}
+
+    run_feasibility_phase1(
+        {"quote": quote, "tz_provider": _tz_provider, "pax_details_fetcher": _fetcher}
+    )
+
+    assert fetched_ids == ["FLIGHT-INFO-999"]
+
+
 def test_phase1_engine_surfaces_pax_details_error() -> None:
     quote = {
         "bookingIdentifier": "PAX-ERR",

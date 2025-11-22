@@ -217,7 +217,20 @@ def _normalize_quote_leg(
     if nested_flight:
         nested_flight_id = _coalesce_str(nested_flight.get("id"), nested_flight.get("flightId"))
 
-    leg_id = _coalesce_str(nested_flight_id, leg.get("flightId"), leg.get("id"), leg.get("legId"))
+    nested_flight_info = leg.get("flightInfo") if isinstance(leg.get("flightInfo"), Mapping) else None
+    nested_flight_info_id = None
+    if nested_flight_info:
+        nested_flight_info_id = _coalesce_str(
+            nested_flight_info.get("flightId"), nested_flight_info.get("id")
+        )
+
+    leg_id = _coalesce_str(
+        nested_flight_id,
+        nested_flight_info_id,
+        leg.get("flightId"),
+        leg.get("id"),
+        leg.get("legId"),
+    )
     if leg_id:
         flight.setdefault("flightId", leg_id)
         flight.setdefault("id", leg_id)
