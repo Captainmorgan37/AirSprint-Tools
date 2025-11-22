@@ -17,7 +17,7 @@ from reserve_calendar_checker import (
     [
         (
             dt.datetime(2025, 11, 5, 12, tzinfo=MOUNTAIN_TIME_ZONE),
-            [dt.date(2025, 11, 6), dt.date(2025, 11, 7), dt.date(2025, 11, 11), dt.date(2025, 12, 21)],
+            [dt.date(2025, 12, 21), dt.date(2025, 12, 26), dt.date(2025, 12, 27), dt.date(2025, 12, 28)],
         ),
         (
             dt.datetime(2026, 12, 29, 0, tzinfo=MOUNTAIN_TIME_ZONE),
@@ -33,7 +33,7 @@ def test_evaluate_flights_for_date_flags_missing_as_available():
     row = {
         "flightId": "F-1",
         "tail": "C-TEST",
-        "dep_time": "2025-11-06T15:30:00Z",
+        "dep_time": "2025-12-21T15:30:00Z",
         "departure_airport": "CYYZ",
         "arrival_airport": "CYUL",
         "workflowCustomName": "Reserve Club",
@@ -64,7 +64,7 @@ def test_evaluate_flights_for_date_skips_non_club_notes():
     row = {
         "flightId": "F-2",
         "tail": "C-TEST",
-        "dep_time": "2025-11-06T18:00:00Z",
+        "dep_time": "2025-12-21T18:00:00Z",
         "departure_airport": "CYYZ",
         "arrival_airport": "CYUL",
         "workflowCustomName": "Reserve Club",
@@ -86,12 +86,12 @@ def test_evaluate_flights_for_date_skips_non_club_notes():
 
 
 def test_run_reserve_day_check_fetches_flagged_rows(monkeypatch):
-    target_date = dt.date(2025, 11, 6)
+    target_date = dt.date(2025, 12, 21)
     flights_payload = [
         {
             "flightId": "F-3",
             "tail": "C-GLXY",
-            "dep_time": "2025-11-06T12:00:00Z",
+            "dep_time": "2025-12-21T12:00:00Z",
             "departure_airport": "CYYZ",
             "arrival_airport": "CYUL",
             "workflowCustomName": "Reserve Club",
