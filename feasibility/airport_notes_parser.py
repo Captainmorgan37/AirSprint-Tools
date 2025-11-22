@@ -575,22 +575,15 @@ def summarize_operational_notes(
     parsed_restrictions: ParsedRestrictions | None = None,
     parsed_customs: ParsedCustoms | None = None,
 ) -> CategoryResult:
-    has_raw_notes = bool(notes)
+    _, operational_texts = split_customs_operational_notes(notes) if notes else ([], [])
+    if parsed_restrictions is None:
+        parsed_restrictions = parse_operational_restrictions(operational_texts)
+
+    has_raw_notes = bool(operational_texts)
     if parsed_restrictions and parsed_restrictions["raw_notes"]:
-        has_raw_notes = True
-    if parsed_customs and parsed_customs["raw_notes"]:
         has_raw_notes = True
     if not has_raw_notes:
         return CategoryResult(status="PASS", summary="No operational notes", issues=[])
-
-    customs_texts: list[str]
-    operational_texts: list[str]
-    if parsed_restrictions is None or parsed_customs is None:
-        customs_texts, operational_texts = split_customs_operational_notes(notes)
-        if parsed_restrictions is None:
-            parsed_restrictions = parse_operational_restrictions(operational_texts)
-        if parsed_customs is None:
-            parsed_customs = parse_customs_notes(customs_texts)
     status: CategoryStatus = "PASS"
     issues: list[str] = []
 
@@ -600,7 +593,6 @@ def summarize_operational_notes(
         status = _combine_status(status, severity)
 
     restrictions = parsed_restrictions or _empty_parsed_restrictions()
-    customs = parsed_customs or _empty_parsed_customs()
 
     if restrictions["slot_required"]:
         detail = "Slot required"
@@ -616,12 +608,6 @@ def summarize_operational_notes(
         elif restrictions["ppr_lead_hours"]:
             detail += f" ({restrictions['ppr_lead_hours']} hour notice)"
         add_issue(detail, "CAUTION")
-    if restrictions["deice_unavailable"]:
-        add_issue("Operational note: deice unavailable", "CAUTION")
-        for note in restrictions["deice_notes"]:
-            issues.append(f"Deice note: {note}")
-    elif restrictions["deice_limited"]:
-        add_issue("Operational note: deice limited", "CAUTION")
     if restrictions["fuel_available"] is False:
         add_issue("Fuel unavailable per operational notes", "CAUTION")
     if restrictions["night_ops_allowed"] is False:
@@ -637,25 +623,6 @@ def summarize_operational_notes(
 
     if restrictions["winter_sensitivity"] and status == "PASS":
         add_issue("Winter operations sensitivity reported", "INFO")
-
-    if customs["canpass_only"]:
-        add_issue("Customs limited to CANPASS", "CAUTION")
-    if customs["customs_prior_notice_hours"]:
-        add_issue(
-            f"Customs requires {customs['customs_prior_notice_hours']} hours notice",
-            "CAUTION",
-        )
-    if customs["customs_prior_notice_days"]:
-        add_issue(
-            f"Customs requires {customs['customs_prior_notice_days']} day notice",
-            "CAUTION",
-        )
-    if customs["customs_contact_required"]:
-        add_issue("Customs contact required", "CAUTION")
-    if customs["pax_requirements"]:
-        add_issue("Passenger documentation requirements noted", "CAUTION")
-    if customs["crew_requirements"]:
-        add_issue("Crew documentation requirements noted", "CAUTION")
 
     summary = "Operational notes reviewed"
     if status == "CAUTION":
