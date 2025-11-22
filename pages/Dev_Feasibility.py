@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, cast
 
+import pandas as pd
+
 import streamlit as st
 
 from flight_leg_utils import FlightDataError, build_fl3xx_api_config
@@ -203,6 +205,33 @@ def _format_note_text(note: Any) -> str:
     return str(note)
 
 
+def _render_raw_operational_notes(notes: Sequence[Any] | Any) -> None:
+    if not isinstance(notes, Sequence) or isinstance(notes, (str, bytes)) or not notes:
+        return
+
+    note_texts: list[str] = []
+    alert_flags: list[bool] = []
+    for note in notes:
+        alert_flag = False
+        if isinstance(note, Mapping):
+            alert_flag = bool(note.get("alert"))
+        note_texts.append(_format_note_text(note))
+        alert_flags.append(alert_flag)
+
+    st.markdown("**FL3XX Operational Notes**")
+    dataframe = pd.DataFrame({"Note": note_texts})
+
+    def _highlight_alert(row: pd.Series) -> list[str]:
+        if alert_flags[row.name]:
+            return [
+                "background-color: rgba(220, 38, 38, 0.18); color: #ef4444; font-weight: 600;"
+            ]
+        return [""]
+
+    styled = dataframe.style.apply(_highlight_alert, axis=1)
+    st.dataframe(styled, use_container_width=True, hide_index=True)
+
+
 def _format_hours_entry(entry: Mapping[str, Any]) -> Optional[str]:
     start = str(entry.get("start") or entry.get("closed_from") or "").strip()
     end = str(entry.get("end") or entry.get("closed_to") or "").strip()
@@ -356,81 +385,82 @@ def _render_operational_restrictions(parsed: Mapping[str, Any] | None) -> None:
         return
     if not parsed.get("raw_notes"):
         return
-    summary_lines: list[str] = []
-    if parsed.get("slot_required"):
-        lead: list[str] = []
-        if parsed.get("slot_lead_days"):
-            lead.append(f"{parsed['slot_lead_days']} day lead")
-        if parsed.get("slot_lead_hours"):
-            lead.append(f"{parsed['slot_lead_hours']} hour lead")
-        detail = "Slot required"
-        if lead:
-            detail += f" ({', '.join(lead)})"
-        summary_lines.append(detail)
-    if parsed.get("slot_time_windows"):
-        windows: list[str] = []
-        for entry in parsed.get("slot_time_windows", []):
+    with st.expander("Parsed operational intel (for status)", expanded=False):
+        summary_lines: list[str] = []
+        if parsed.get("slot_required"):
+            lead: list[str] = []
+            if parsed.get("slot_lead_days"):
+                lead.append(f"{parsed['slot_lead_days']} day lead")
+            if parsed.get("slot_lead_hours"):
+                lead.append(f"{parsed['slot_lead_hours']} hour lead")
+            detail = "Slot required"
+            if lead:
+                detail += f" ({', '.join(lead)})"
+            summary_lines.append(detail)
+        if parsed.get("slot_time_windows"):
+            windows: list[str] = []
+            for entry in parsed.get("slot_time_windows", []):
+                if isinstance(entry, Mapping):
+                    formatted = _format_slot_window(entry)
+                    if formatted:
+                        windows.append(formatted)
+            if windows:
+                summary_lines.append(f"Slot windows: {', '.join(windows)}")
+        if parsed.get("ppr_required"):
+            lead: list[str] = []
+            if parsed.get("ppr_lead_days"):
+                lead.append(f"{parsed['ppr_lead_days']} day notice")
+            if parsed.get("ppr_lead_hours"):
+                lead.append(f"{parsed['ppr_lead_hours']} hour notice")
+            detail = "PPR required"
+            if lead:
+                detail += f" ({', '.join(lead)})"
+            summary_lines.append(detail)
+        if parsed.get("deice_unavailable"):
+            summary_lines.append("Deice NOT available per notes")
+        elif parsed.get("deice_limited"):
+            summary_lines.append("Deice limited in notes")
+        if parsed.get("winter_sensitivity"):
+            summary_lines.append("Winter sensitivity / contamination risk")
+        if parsed.get("fuel_available") is False:
+            summary_lines.append("Fuel unavailable per notes")
+        if parsed.get("night_ops_allowed") is False:
+            summary_lines.append("Night operations prohibited")
+        if parsed.get("curfew"):
+            curfew = parsed.get("curfew")
+            if isinstance(curfew, Mapping):
+                start = curfew.get("from") or curfew.get("start") or curfew.get("closed_from")
+                end = curfew.get("to") or curfew.get("end") or curfew.get("closed_to")
+                window = f"{start}-{end}" if start and end else start or end or "in effect"
+                summary_lines.append(f"Curfew: {window}")
+            else:
+                summary_lines.append("Curfew in effect")
+        hours_entries: list[str] = []
+        for entry in parsed.get("hours_of_operation", []):
             if isinstance(entry, Mapping):
-                formatted = _format_slot_window(entry)
+                formatted = _format_hours_entry(entry)
                 if formatted:
-                    windows.append(formatted)
-        if windows:
-            summary_lines.append(f"Slot windows: {', '.join(windows)}")
-    if parsed.get("ppr_required"):
-        lead: list[str] = []
-        if parsed.get("ppr_lead_days"):
-            lead.append(f"{parsed['ppr_lead_days']} day notice")
-        if parsed.get("ppr_lead_hours"):
-            lead.append(f"{parsed['ppr_lead_hours']} hour notice")
-        detail = "PPR required"
-        if lead:
-            detail += f" ({', '.join(lead)})"
-        summary_lines.append(detail)
-    if parsed.get("deice_unavailable"):
-        summary_lines.append("Deice NOT available per notes")
-    elif parsed.get("deice_limited"):
-        summary_lines.append("Deice limited in notes")
-    if parsed.get("winter_sensitivity"):
-        summary_lines.append("Winter sensitivity / contamination risk")
-    if parsed.get("fuel_available") is False:
-        summary_lines.append("Fuel unavailable per notes")
-    if parsed.get("night_ops_allowed") is False:
-        summary_lines.append("Night operations prohibited")
-    if parsed.get("curfew"):
-        curfew = parsed.get("curfew")
-        if isinstance(curfew, Mapping):
-            start = curfew.get("from") or curfew.get("start") or curfew.get("closed_from")
-            end = curfew.get("to") or curfew.get("end") or curfew.get("closed_to")
-            window = f"{start}-{end}" if start and end else start or end or "in effect"
-            summary_lines.append(f"Curfew: {window}")
-        else:
-            summary_lines.append("Curfew in effect")
-    hours_entries: list[str] = []
-    for entry in parsed.get("hours_of_operation", []):
-        if isinstance(entry, Mapping):
-            formatted = _format_hours_entry(entry)
-            if formatted:
-                hours_entries.append(formatted)
-    if hours_entries:
-        summary_lines.append(f"Hours: {', '.join(hours_entries)}")
-    _render_bullet_section("Operational Intel", summary_lines)
-    _render_bullet_section("Deice Notes", _collect_entries(parsed.get("deice_notes"), explode=True))
-    _render_bullet_section("Winter Notes", _collect_entries(parsed.get("winter_notes"), explode=True))
-    _render_bullet_section("Slot Notes", _collect_entries(parsed.get("slot_notes"), explode=True))
-    _render_bullet_section("PPR Notes", _collect_entries(parsed.get("ppr_notes"), explode=True))
-    _render_bullet_section("Hours / Curfew Notes", _collect_entries(parsed.get("hour_notes"), explode=True))
-    _render_bullet_section(
-        "Runway Limits",
-        _collect_entries(parsed.get("runway_limitations"), explode=True),
-    )
-    _render_bullet_section(
-        "Aircraft Type Limits",
-        _collect_entries(parsed.get("aircraft_type_limits"), explode=True),
-    )
-    _render_bullet_section(
-        "Other Operational Restrictions",
-        _collect_entries(parsed.get("generic_restrictions"), explode=True),
-    )
+                    hours_entries.append(formatted)
+        if hours_entries:
+            summary_lines.append(f"Hours: {', '.join(hours_entries)}")
+        _render_bullet_section("Operational Intel", summary_lines)
+        _render_bullet_section("Deice Notes", _collect_entries(parsed.get("deice_notes"), explode=True))
+        _render_bullet_section("Winter Notes", _collect_entries(parsed.get("winter_notes"), explode=True))
+        _render_bullet_section("Slot Notes", _collect_entries(parsed.get("slot_notes"), explode=True))
+        _render_bullet_section("PPR Notes", _collect_entries(parsed.get("ppr_notes"), explode=True))
+        _render_bullet_section("Hours / Curfew Notes", _collect_entries(parsed.get("hour_notes"), explode=True))
+        _render_bullet_section(
+            "Runway Limits",
+            _collect_entries(parsed.get("runway_limitations"), explode=True),
+        )
+        _render_bullet_section(
+            "Aircraft Type Limits",
+            _collect_entries(parsed.get("aircraft_type_limits"), explode=True),
+        )
+        _render_bullet_section(
+            "Other Operational Restrictions",
+            _collect_entries(parsed.get("generic_restrictions"), explode=True),
+        )
 
 
 def _render_category_block(label: str, category: Mapping[str, Any]) -> None:
@@ -481,12 +511,7 @@ def _render_leg_side(label: str, side: Mapping[str, Any]) -> None:
     parsed_ops = side.get("parsed_operational_restrictions") if isinstance(side, Mapping) else None
     _render_operational_restrictions(parsed_ops if isinstance(parsed_ops, Mapping) else None)
     raw_notes = side.get("raw_operational_notes") if isinstance(side, Mapping) else None
-    if isinstance(raw_notes, Sequence) and not isinstance(raw_notes, (str, bytes)) and raw_notes:
-        with st.expander(f"{label} {icao} raw notes"):
-            for entry in raw_notes:
-                text = _format_note_text(entry)
-                if text:
-                    st.markdown(f"- {text}")
+    _render_raw_operational_notes(raw_notes)
 
 
 def _collect_key_issues(result: Mapping[str, Any]) -> List[str]:

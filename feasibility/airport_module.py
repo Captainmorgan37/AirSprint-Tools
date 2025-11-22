@@ -147,7 +147,7 @@ class AirportSideResult:
     parsed_operational_restrictions: ParsedRestrictions
     parsed_customs_notes: ParsedCustoms
     planned_time_local: Optional[str] = None
-    raw_operational_notes: List[str] = field(default_factory=list)
+    raw_operational_notes: List[Any] = field(default_factory=list)
 
     def iter_category_results(self) -> Sequence[Tuple[str, CategoryResult]]:
         return (
@@ -173,7 +173,10 @@ class AirportSideResult:
             "parsed_operational_restrictions": dict(self.parsed_operational_restrictions),
             "parsed_customs_notes": dict(self.parsed_customs_notes),
             "planned_time_local": self.planned_time_local,
-            "raw_operational_notes": list(self.raw_operational_notes),
+            "raw_operational_notes": [
+                dict(entry) if isinstance(entry, Mapping) else entry
+                for entry in self.raw_operational_notes
+            ],
         }
 
 
@@ -670,11 +673,13 @@ def evaluate_airport_side(
     customs_texts, operational_texts = split_customs_operational_notes(operational_notes)
     parsed_customs_notes = parse_customs_notes(customs_texts)
     parsed_operational_restrictions = parse_operational_restrictions(operational_texts)
-    raw_note_texts: List[str] = []
+    raw_note_entries: List[Any] = []
     for entry in operational_notes:
-        text = note_text(entry)
-        if text:
-            raw_note_texts.append(text)
+        if isinstance(entry, Mapping):
+            raw_note_entries.append(dict(entry))
+        else:
+            text = note_text(entry)
+            raw_note_entries.append(text or entry)
 
     suitability = evaluate_suitability(airport_profile, leg, operational_notes, side)
     deice = evaluate_deice(
@@ -713,7 +718,7 @@ def evaluate_airport_side(
         parsed_operational_restrictions=parsed_operational_restrictions,
         parsed_customs_notes=parsed_customs_notes,
         planned_time_local=planned_time_local,
-        raw_operational_notes=raw_note_texts,
+        raw_operational_notes=raw_note_entries,
     )
 
 
