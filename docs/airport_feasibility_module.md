@@ -409,8 +409,6 @@ def summarize_operational_notes(
     """
     Scans the notes for:
       - closures (runway/taxiway/apron)
-      - deice issues
-      - customs restrictions
       - GA restrictions
       - curfew / noise
       - any 'ALERT' or 'WARNING'-type entries.
@@ -427,8 +425,6 @@ This function should rely on a configurable list of keyword → severity mapping
 “closed”, “not available” → possible FAIL
 
 “limited”, “capacity”, “expect delay” → CAUTION
-
-“deicing not available” during winter months → CAUTION/FAIL
 
 6. Error Handling / Fallbacks
 
