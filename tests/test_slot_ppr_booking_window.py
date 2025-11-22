@@ -62,3 +62,19 @@ def test_ssa_category_does_not_infer_slot_or_ppr() -> None:
 
     assert profile.slot_required is False
     assert profile.ppr_required is False
+
+
+def test_generic_category_notes_are_ignored_in_slot_ppr_details() -> None:
+    categories = {
+        "CYYC": AirportCategoryRecord(
+            icao="CYYC", category="STANDARD", notes="Primary service area airport with no special handling required."
+        )
+    }
+
+    profile = _build_slot_ppr_profile("CYYC", categories)
+    leg = _build_leg(3)
+
+    result = evaluate_slot_ppr(profile, leg, "DEP", None, {})
+
+    assert profile.notes is None
+    assert "Primary service area airport with no special handling required." not in result.issues

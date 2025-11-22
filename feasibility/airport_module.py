@@ -218,6 +218,13 @@ RUNWAY_REQUIREMENTS_FT: Mapping[str, int] = {
 
 SLOT_KEYWORDS = ("SLOT", "ATC SLOT")
 PPR_KEYWORDS = ("PPR", "PRIOR PERMISSION")
+IGNORED_SLOT_PPR_NOTES = {
+    "PRIMARY SERVICE AREA AIRPORT WITH NO SPECIAL HANDLING REQUIRED.",
+    "SSA REGION AIRPORT; SSA HANDLING ONLY.",
+    "OUTSIDE SERVICE AREA; FINAL FEASIBILITY MUST BE DETERMINED IN FL3XX.",
+    "ALASKA AIRPORT TREATED AS SSA; SSA HANDLING ONLY.",
+    "NUNAVUT AIRPORT TREATED AS SSA; SSA HANDLING ONLY.",
+}
 
 _RUNWAYS_PATH = Path(__file__).resolve().parents[1] / "runways.csv"
 _STATUS_PRIORITY: Mapping[CategoryStatus, int] = {
@@ -525,13 +532,15 @@ def _build_slot_ppr_profile(icao: str, airport_categories: Mapping[str, AirportC
     slot_required = any(keyword in notes_upper for keyword in SLOT_KEYWORDS)
     ppr_required = any(keyword in notes_upper for keyword in PPR_KEYWORDS)
     lead_days = _extract_lead_days(notes)
+    normalized_notes = notes_upper.strip()
+    slot_ppr_notes = None if normalized_notes in IGNORED_SLOT_PPR_NOTES else notes
     return SlotPprProfile(
         icao=icao,
         slot_required=slot_required,
         ppr_required=ppr_required,
         slot_lead_days=lead_days,
         ppr_lead_days=lead_days,
-        notes=notes,
+        notes=slot_ppr_notes,
     )
 
 
