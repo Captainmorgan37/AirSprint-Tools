@@ -50,6 +50,7 @@ st.write(
 STATUS_EMOJI = {"PASS": "✅", "CAUTION": "⚠️", "FAIL": "❌"}
 SECTION_ORDER = [
     "suitability",
+    "day_ops",
     "deice",
     "customs",
     "slot_ppr",
@@ -59,6 +60,7 @@ SECTION_ORDER = [
 ]
 SECTION_LABELS = {
     "suitability": "Suitability",
+    "day_ops": "Day Ops",
     "deice": "Deice",
     "customs": "Customs",
     "slot_ppr": "Slot / PPR",
@@ -66,7 +68,7 @@ SECTION_LABELS = {
     "overflight": "Overflight",
     "operational_notes": "Other Operational Notes",
 }
-KEY_ISSUE_SECTIONS = {"customs", "deice", "overflight"}
+KEY_ISSUE_SECTIONS = {"customs", "day_ops", "deice", "overflight"}
 RESERVE_CALENDAR_DATES = set(TARGET_DATES)
 DEPARTURE_AIRPORT_KEYS = (
     "departure_airport",
@@ -647,7 +649,7 @@ def _render_full_quote_result(result: FullFeasibilityResult) -> None:
         for issue in key_issues:
             st.markdown(f"- {issue}")
     else:
-        st.caption("No customs, deice, duty, or permit cautions detected.")
+        st.caption("No customs, day-ops, deice, duty, or permit cautions detected.")
 
     with st.expander("Duty Day Evaluation", expanded=duty.get("status") != "PASS"):
         status = duty.get("status", "PASS")
