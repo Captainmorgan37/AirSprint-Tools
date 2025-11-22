@@ -356,3 +356,41 @@ def test_split_duty_extension_extends_allowable_window() -> None:
     assert result["status"] == "PASS"
     assert result["split_duty_possible"] is True
     assert any("allows" in issue for issue in result["issues"])
+
+
+def test_reset_duty_day_allows_new_segments() -> None:
+    legs = [
+        {
+            "leg_id": "1",
+            "departure_icao": "CYYC",
+            "arrival_icao": "CYEG",
+            "departure_date_utc": "2025-01-01T08:00:00Z",
+            "arrival_date_utc": "2025-01-01T10:00:00Z",
+        },
+        {
+            "leg_id": "2",
+            "departure_icao": "CYEG",
+            "arrival_icao": "CYYC",
+            "departure_date_utc": "2025-01-01T22:00:00Z",
+            "arrival_date_utc": "2025-01-02T02:00:00Z",
+        },
+    ]
+    day = cast(
+        DayContext,
+        {
+            "quote_id": "Q3",
+            "bookingIdentifier": "GHI",
+            "aircraft_type": "Test",
+            "aircraft_category": "",
+            "legs": legs,
+            "sales_contact": None,
+            "createdDate": None,
+        },
+    )
+
+    result = evaluate_generic_duty_day(day)
+
+    assert result["total_duty"] == 1155
+    assert result["status"] == "PASS"
+    assert result["reset_duty_possible"] is True
+    assert "Reset duty day" in result["summary"]
