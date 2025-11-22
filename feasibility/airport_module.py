@@ -859,7 +859,15 @@ def _is_closure_caution_exempt(icao: str, body: str) -> bool:
     exemptions = CLOSURE_CAUTIONS_TO_IGNORE.get(icao)
     if not exemptions:
         return False
-    return any(exemption in body for exemption in exemptions)
+    body_normalized = _normalize_text(body)
+    return any(
+        normalized_exemption and normalized_exemption in body_normalized
+        for normalized_exemption in (_normalize_text(exemption) for exemption in exemptions)
+    )
+
+
+def _normalize_text(value: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", value.lower())).strip()
 
 
 def _parse_iso_date(value: Optional[str]) -> Optional[date]:
