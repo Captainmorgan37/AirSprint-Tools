@@ -41,7 +41,12 @@ def _build_default_tz_provider() -> Callable[[str], Optional[str]]:
     return provider
 
 
-def _build_leg_contexts(quote: Mapping[str, Any], airport_metadata: AirportMetadataLookup) -> List[LegContext]:
+def _build_leg_contexts(
+    quote: Mapping[str, Any],
+    airport_metadata: AirportMetadataLookup,
+    *,
+    pax_details_fetcher: Optional[Callable[[str], Mapping[str, Any]]] = None,
+) -> List[LegContext]:
     quote_id = quote.get("id") or quote.get("quoteId") or quote.get("quoteNumber")
     options = build_quote_leg_options(quote, quote_id=str(quote_id) if quote_id is not None else None)
     aircraft = quote.get("aircraftObj")
@@ -54,6 +59,17 @@ def _build_leg_contexts(quote: Mapping[str, Any], airport_metadata: AirportMetad
             continue
         context = build_leg_context_from_flight(flight, airport_metadata=airport_metadata)
         if context:
+            if pax_details_fetcher:
+                flight_id = _coerce_str(flight.get("flightId") or flight.get("id"))
+                if flight_id:
+                    try:
+                        pax_payload = pax_details_fetcher(flight_id)
+                        context["pax_payload_source"] = "api"
+                    except Exception:
+                        pax_payload = None
+                        context["pax_payload_source"] = "api_error"
+                    if isinstance(pax_payload, Mapping):
+                        context["pax_payload"] = pax_payload
             if not context.get("aircraft_type") and quote_aircraft_type:
                 context["aircraft_type"] = quote_aircraft_type
             if not context.get("aircraft_category") and quote_aircraft_category:
@@ -202,7 +218,12 @@ def run_feasibility_phase1(request: FeasibilityRequest) -> FullFeasibilityResult
         raise ValueError("request must include a 'quote' mapping")
 
     airport_metadata = load_airport_metadata_lookup()
-    legs = _build_leg_contexts(quote, airport_metadata)
+    pax_details_fetcher = request.get("pax_details_fetcher")
+    legs = _build_leg_contexts(
+        quote,
+        airport_metadata,
+        pax_details_fetcher=pax_details_fetcher if callable(pax_details_fetcher) else None,
+    )
     if not legs:
         raise ValueError("Quote does not contain any valid legs.")
 
