@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, cast
 
+import pandas as pd
+
 import streamlit as st
 
 from flight_leg_utils import FlightDataError, build_fl3xx_api_config
@@ -204,58 +206,28 @@ def _format_note_text(note: Any) -> str:
     return str(note)
 
 
-def _format_note_datetime(value: Any) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, str):
-        return value
-    if isinstance(value, (datetime, date)):
-        return value.isoformat()
-    return str(value)
-
-
 def _render_raw_operational_notes(notes: Sequence[Any] | Any) -> None:
     if not isinstance(notes, Sequence) or isinstance(notes, (str, bytes)) or not notes:
         return
 
-    rows: list[dict[str, str]] = []
+    rows: list[dict[str, str | bool]] = []
     for note in notes:
-        start = end = alert = countrywide = category = title = ""
+        alert_flag = False
         if isinstance(note, Mapping):
-            start = _format_note_datetime(
-                note.get("start")
-                or note.get("startDate")
-                or note.get("start_date")
-                or note.get("from")
-            )
-            end = _format_note_datetime(
-                note.get("end")
-                or note.get("endDate")
-                or note.get("end_date")
-                or note.get("to")
-            )
-            alert = "Yes" if note.get("alert") else ""
-            countrywide = "Yes" if note.get("countrywide") else ""
-            category_val = note.get("category") or note.get("type")
-            if isinstance(category_val, str):
-                category = category_val
-            title_val = note.get("title")
-            if isinstance(title_val, str):
-                title = title_val
-        rows.append(
-            {
-                "Category": category,
-                "Title": title,
-                "Start": start,
-                "End": end,
-                "Alert": alert,
-                "Countrywide": countrywide,
-                "Note": _format_note_text(note),
-            }
-        )
+            alert_flag = bool(note.get("alert"))
+        rows.append({"Note": _format_note_text(note), "__alert": alert_flag})
 
     st.markdown("**FL3XX Operational Notes**")
-    st.dataframe(rows, use_container_width=True, hide_index=True)
+    dataframe = pd.DataFrame(rows, columns=["Note", "__alert"])
+
+    def _highlight_alert(row: pd.Series) -> list[str]:
+        color = "background-color: #ffe5e5" if bool(row.get("__alert")) else ""
+        return [color, ""]
+
+    styled = (
+        dataframe.style.apply(_highlight_alert, axis=1).hide(axis="columns", subset=["__alert"])
+    )
+    st.dataframe(styled, use_container_width=True, hide_index=True)
 
 
 def _format_hours_entry(entry: Mapping[str, Any]) -> Optional[str]:
