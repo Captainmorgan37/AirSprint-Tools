@@ -5,12 +5,14 @@ from __future__ import annotations
 import csv
 import re
 from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, TypedDict
 
 import pytz
+from astral import LocationInfo
+from astral.sun import sun
 
 from deice_info_helper import DeiceRecord, get_deice_record
 from flight_leg_utils import load_airport_metadata_lookup, safe_parse_dt
@@ -142,6 +144,7 @@ class AirportSideResult:
     customs: CategoryResult
     slot_ppr: CategoryResult
     osa_ssa: CategoryResult
+    day_ops: CategoryResult
     overflight: CategoryResult
     operational_notes: CategoryResult
     parsed_operational_restrictions: ParsedRestrictions
@@ -156,6 +159,7 @@ class AirportSideResult:
             ("Customs", self.customs),
             ("Slot / PPR", self.slot_ppr),
             ("OSA / SSA", self.osa_ssa),
+            ("Day Ops", self.day_ops),
             ("Overflight", self.overflight),
             ("Operational Notes", self.operational_notes),
         )
@@ -168,6 +172,7 @@ class AirportSideResult:
             "customs": self.customs.as_dict(),
             "slot_ppr": self.slot_ppr.as_dict(),
             "osa_ssa": self.osa_ssa.as_dict(),
+            "day_ops": self.day_ops.as_dict(),
             "overflight": self.overflight.as_dict(),
             "operational_notes": self.operational_notes.as_dict(),
             "parsed_operational_restrictions": dict(self.parsed_operational_restrictions),
@@ -639,6 +644,7 @@ def evaluate_airport_feasibility_for_leg(
         side="DEP",
         planned_time_local=dep_time_local,
         tz_name=dep_tz,
+        airport_metadata=airport_metadata.get(dep_icao.upper(), {}),
     )
     arrival_side = evaluate_airport_side(
         icao=arr_icao,
@@ -654,6 +660,7 @@ def evaluate_airport_feasibility_for_leg(
         side="ARR",
         planned_time_local=arr_time_local,
         tz_name=arr_tz,
+        airport_metadata=airport_metadata.get(arr_icao.upper(), {}),
     )
 
     aircraft_result = _evaluate_aircraft_endurance(leg)
@@ -701,6 +708,7 @@ def evaluate_airport_side(
     side: str,
     planned_time_local: Optional[str] = None,
     tz_name: Optional[str] = None,
+    airport_metadata: Mapping[str, object] | None = None,
 ) -> AirportSideResult:
     customs_texts, operational_texts = split_customs_operational_notes(operational_notes)
     parsed_customs_notes = parse_customs_notes(customs_texts)
@@ -722,6 +730,17 @@ def evaluate_airport_side(
         date_local=date_local,
         parsed_restrictions=parsed_operational_restrictions,
     )
+    if parsed_operational_restrictions.get("night_ops_allowed") is False:
+        day_ops = evaluate_day_ops(
+            icao=icao,
+            parsed_restrictions=parsed_operational_restrictions,
+            tz_name=tz_name,
+            leg_time_utc=leg.get("departure_date_utc") if side == "DEP" else leg.get("arrival_date_utc"),
+            side=side,
+            metadata_record=airport_metadata or {},
+        )
+    else:
+        day_ops = CategoryResult(status="PASS", summary="No day-ops restriction noted", issues=[])
     customs = evaluate_customs(
         customs_profile,
         leg,
@@ -752,6 +771,7 @@ def evaluate_airport_side(
         customs=customs,
         slot_ppr=slot_ppr,
         osa_ssa=osa_ssa,
+        day_ops=day_ops,
         overflight=overflight_result,
         operational_notes=operational_notes_result,
         parsed_operational_restrictions=parsed_operational_restrictions,
@@ -924,6 +944,127 @@ def evaluate_deice(
 
     return CategoryResult(
         status=status, summary=summary, issues=_dedupe_preserve_order(issues)
+    )
+
+
+def _coerce_coordinate(value: object) -> Optional[float]:
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _format_time(dt: datetime, tz_name: str | None) -> str:
+    label = dt.strftime("%H:%M")
+    return f"{label} ({tz_name})" if tz_name else label
+
+
+def _format_offset(delta: timedelta) -> str:
+    minutes = int(abs(delta.total_seconds()) // 60)
+    direction = "after" if delta.total_seconds() > 0 else "before"
+    return f"{minutes} mins {direction}"
+
+
+def evaluate_day_ops(
+    *,
+    icao: str,
+    parsed_restrictions: ParsedRestrictions,
+    tz_name: Optional[str],
+    leg_time_utc: Optional[str],
+    side: str,
+    metadata_record: Mapping[str, object],
+) -> CategoryResult:
+    if parsed_restrictions.get("night_ops_allowed") is not False:
+        return CategoryResult(status="PASS", summary="No day-ops restriction noted", issues=[])
+
+    planned_label = "Departure" if side == "DEP" else "Arrival"
+
+    lat = _coerce_coordinate(metadata_record.get("lat")) if metadata_record else None
+    lon = _coerce_coordinate(metadata_record.get("lon")) if metadata_record else None
+    if lat is None or lon is None:
+        return CategoryResult(
+            status="CAUTION",
+            summary="Day ops airport but missing coordinates",
+            issues=[f"Cannot compute sunrise/sunset for {icao}"],
+        )
+
+    if not tz_name:
+        return CategoryResult(
+            status="CAUTION",
+            summary="Day ops airport but missing timezone",
+            issues=[f"No timezone available for {icao}"],
+        )
+
+    try:
+        leg_dt = safe_parse_dt(leg_time_utc) if leg_time_utc else None
+        if leg_dt is None:
+            raise ValueError("Missing planned time")
+        leg_dt_local = leg_dt.astimezone(pytz.timezone(tz_name))
+    except Exception:
+        return CategoryResult(
+            status="CAUTION",
+            summary="Unable to evaluate day ops timing",
+            issues=["Planned time missing or invalid for day-ops check."],
+        )
+
+    try:
+        location = LocationInfo(latitude=lat, longitude=lon, timezone=tz_name)
+        sun_times = sun(location.observer, date=leg_dt_local.date(), tzinfo=location.timezone)
+        sunrise = sun_times["sunrise"]
+        sunset = sun_times["sunset"]
+    except Exception:
+        return CategoryResult(
+            status="CAUTION",
+            summary="Unable to compute sunrise/sunset",
+            issues=["Astronomical data unavailable for this airport."],
+        )
+
+    buffer = timedelta(hours=1)
+    sunrise_diff = leg_dt_local - sunrise
+    sunset_diff = leg_dt_local - sunset
+
+    if leg_dt_local < sunrise:
+        return CategoryResult(
+            status="FAIL",
+            summary=f"{planned_label} before sunrise",
+            issues=[
+                f"Sunrise {_format_time(sunrise, tz_name)}",
+                f"Planned {planned_label.lower()} {_format_time(leg_dt_local, tz_name)}",
+            ],
+        )
+
+    if leg_dt_local > sunset:
+        return CategoryResult(
+            status="FAIL",
+            summary=f"{planned_label} after sunset",
+            issues=[
+                f"Sunset {_format_time(sunset, tz_name)}",
+                f"Planned {planned_label.lower()} {_format_time(leg_dt_local, tz_name)}",
+            ],
+        )
+
+    if abs(sunrise_diff) <= buffer:
+        return CategoryResult(
+            status="CAUTION",
+            summary="Near sunrise window",
+            issues=[
+                f"Sunrise {_format_time(sunrise, tz_name)} — {planned_label} {_format_time(leg_dt_local, tz_name)} ({_format_offset(-sunrise_diff)})",
+            ],
+        )
+
+    if abs(sunset_diff) <= buffer:
+        return CategoryResult(
+            status="CAUTION",
+            summary="Near sunset window",
+            issues=[
+                f"Sunset {_format_time(sunset, tz_name)} — {planned_label} {_format_time(leg_dt_local, tz_name)} ({_format_offset(sunset_diff)})",
+            ],
+        )
+
+    return CategoryResult(
+        status="PASS",
+        summary="Day ops verified",
+        issues=[f"Sunrise {_format_time(sunrise, tz_name)}, Sunset {_format_time(sunset, tz_name)}"],
     )
 
 
