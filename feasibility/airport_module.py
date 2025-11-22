@@ -980,6 +980,7 @@ def evaluate_customs(
     issues: List[str] = []
     status: CategoryStatus = "PASS"
     summary = "Customs available"
+    parsed = parsed_customs
 
     if side == "DEP":
         return CategoryResult(status=status, summary="Not required for departure", issues=issues)
@@ -989,9 +990,12 @@ def evaluate_customs(
         return CategoryResult(status=status, summary=summary, issues=issues)
 
     if customs_profile is None:
-        status = "CAUTION"
-        summary = "No customs intel"
-        issues.append("No customs record available; confirm with airport directly.")
+        if not parsed or not parsed.get("customs_available"):
+            status = "CAUTION"
+            summary = "No customs intel"
+            issues.append("No customs record available; confirm with airport directly.")
+        else:
+            summary = "Customs available per operational notes"
     else:
         service_type = customs_profile.service_type or "UNKNOWN"
         issues.append(f"Customs service type: {service_type}.")
@@ -1006,7 +1010,6 @@ def evaluate_customs(
         if customs_profile.notes:
             issues.append(customs_profile.notes)
 
-    parsed = parsed_customs
     if parsed:
         if parsed["canpass_only"]:
             status = _combine_status(status, "CAUTION")
