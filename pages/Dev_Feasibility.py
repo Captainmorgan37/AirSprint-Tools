@@ -210,23 +210,26 @@ def _render_raw_operational_notes(notes: Sequence[Any] | Any) -> None:
     if not isinstance(notes, Sequence) or isinstance(notes, (str, bytes)) or not notes:
         return
 
-    rows: list[dict[str, str | bool]] = []
+    note_texts: list[str] = []
+    alert_flags: list[bool] = []
     for note in notes:
         alert_flag = False
         if isinstance(note, Mapping):
             alert_flag = bool(note.get("alert"))
-        rows.append({"Note": _format_note_text(note), "__alert": alert_flag})
+        note_texts.append(_format_note_text(note))
+        alert_flags.append(alert_flag)
 
     st.markdown("**FL3XX Operational Notes**")
-    dataframe = pd.DataFrame(rows, columns=["Note", "__alert"])
+    dataframe = pd.DataFrame({"Note": note_texts})
 
     def _highlight_alert(row: pd.Series) -> list[str]:
-        color = "background-color: #ffe5e5" if bool(row.get("__alert")) else ""
-        return [color, ""]
+        if alert_flags[row.name]:
+            return [
+                "background-color: rgba(220, 38, 38, 0.18); color: #ef4444; font-weight: 600;"
+            ]
+        return [""]
 
-    styled = (
-        dataframe.style.apply(_highlight_alert, axis=1).hide(axis="columns", subset=["__alert"])
-    )
+    styled = dataframe.style.apply(_highlight_alert, axis=1)
     st.dataframe(styled, use_container_width=True, hide_index=True)
 
 
