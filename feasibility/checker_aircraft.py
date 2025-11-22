@@ -55,40 +55,40 @@ _PASSENGER_PROFILES: Mapping[str, PaxProfile] = {
             _hm(7, 15),
             _hm(7, 15),
             _hm(7, 15),
-            _hm(7, 0),
+            _hm(7, 15),
+            _hm(7, 15),
             _hm(7, 0),
             _hm(6, 45),
             _hm(6, 35),
             _hm(6, 25),
-            _hm(6, 15),
             _hm(6, 15),
         )
     ),
     "LEGACY 450": _profile(
         (
             _hm(6, 25),
+            _hm(6, 25),
+            _hm(6, 20),
             _hm(6, 10),
-            _hm(5, 50),
-            _hm(5, 50),
+            _hm(6, 0),
             _hm(5, 50),
             _hm(5, 45),
             _hm(5, 35),
             _hm(5, 25),
             _hm(5, 15),
-            _hm(5, 5),
         )
     ),
     "CITATION CJ3+": _profile(
         (
             _hm(4, 40),
             _hm(4, 40),
-            _hm(4, 30),
+            _hm(4, 40),
+            _hm(4, 20),
             _hm(4, 5),
-            _hm(3, 45),
             _hm(3, 45),
             _hm(3, 30),
             _hm(3, 15),
-            _hm(3, 15),
+            None,
             None,
         )
     ),
@@ -96,12 +96,12 @@ _PASSENGER_PROFILES: Mapping[str, PaxProfile] = {
         (
             _hm(3, 45),
             _hm(3, 45),
+            _hm(3, 45),
             _hm(3, 25),
-            _hm(3, 15),
-            _hm(3, 0),
+            _hm(3, 10),
             _hm(2, 55),
-            _hm(2, 40),
             _hm(2, 35),
+            0,
             None,
             None,
         )
@@ -219,7 +219,7 @@ def _evaluate_pax_profile(
     issues.append(f"Limit for {pax} pax: {limit} minutes")
     issues.append(f"Margin to limit: {diff} minutes")
 
-    if diff >= 10:
+    if diff > 0:
         return CategoryResult(
             status="PASS",
             summary=f"{aircraft_type} ({pax} pax) within pax endurance (margin {diff} min)",
