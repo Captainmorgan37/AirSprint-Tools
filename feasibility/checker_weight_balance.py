@@ -149,68 +149,106 @@ def _standard_pax_weight(season: str, category: str) -> float:
 
 
 def _iter_tickets(payload: Mapping[str, Any]) -> Iterable[Mapping[str, Any]]:
-    candidates: list[Any] = []
-    if isinstance(payload, Mapping):
-        candidates.extend(
-            [
-                payload,
-                payload.get("pax"),
-                payload.get("pax_details"),
-                payload.get("paxDetails"),
-                payload.get("paxPayload"),
-                payload.get("passengers"),
-            ]
-        )
+    """Yield ticket mappings from many possible pax payload shapes.
 
-    seen_ids: set[int] = set()
+    FL3XX responses sometimes nest ``tickets`` under several layers (e.g.
+    ``payload`` → ``paxPayload`` → ``tickets``). We traverse mappings/lists
+    breadth-first and emit each unique ticket mapping once.
+    """
 
-    for candidate in candidates:
-        if isinstance(candidate, Mapping):
-            entries = candidate.get("tickets")
-        elif isinstance(candidate, Iterable) and not isinstance(candidate, (str, bytes)):
-            entries = candidate
-        else:
+    search_queue: list[Any] = []
+    if payload is not None:
+        search_queue.append(payload)
+
+    visited: set[int] = set()
+    yielded: set[int] = set()
+
+    while search_queue:
+        current = search_queue.pop(0)
+        marker = id(current)
+        if marker in visited:
             continue
+        visited.add(marker)
 
-        for entry in entries or []:
-            if isinstance(entry, Mapping):
-                marker = id(entry)
-                if marker in seen_ids:
-                    continue
-                seen_ids.add(marker)
-                yield entry
+        if isinstance(current, Mapping):
+            entries = current.get("tickets")
+            if isinstance(entries, Iterable) and not isinstance(entries, (str, bytes)):
+                for entry in entries:
+                    if isinstance(entry, Mapping):
+                        entry_marker = id(entry)
+                        if entry_marker in yielded:
+                            continue
+                        yielded.add(entry_marker)
+                        yield entry
+
+            for key in (
+                "pax",
+                "pax_details",
+                "paxDetails",
+                "paxPayload",
+                "passengers",
+                "payload",
+            ):
+                child = current.get(key)
+                if child is not None:
+                    search_queue.append(child)
+
+            for child in current.values():
+                if isinstance(child, (Mapping, list, tuple, set)):
+                    search_queue.append(child)
+
+        elif isinstance(current, Iterable) and not isinstance(current, (str, bytes)):
+            for child in current:
+                if isinstance(child, (Mapping, list, tuple, set)):
+                    search_queue.append(child)
 
 
 def _iter_cargo(payload: Mapping[str, Any]) -> Iterable[Mapping[str, Any]]:
-    candidates: list[Any] = []
-    if isinstance(payload, Mapping):
-        candidates.extend(
-            [
-                payload.get("cargo"),
-                payload.get("cargoItems"),
-                payload.get("cargo_items"),
-            ]
-        )
-        nested = payload.get("pax") if isinstance(payload.get("pax"), Mapping) else None
-        if nested:
-            candidates.extend(
-                [
-                    nested.get("cargo"),
-                    nested.get("cargoItems"),
-                    nested.get("cargo_items"),
-                ]
-            )
+    """Yield cargo item mappings from nested payload structures."""
 
-    seen_ids: set[int] = set()
-    for candidate in candidates:
-        if isinstance(candidate, Iterable) and not isinstance(candidate, (str, bytes)):
-            for entry in candidate:
-                if isinstance(entry, Mapping):
-                    marker = id(entry)
-                    if marker in seen_ids:
-                        continue
-                    seen_ids.add(marker)
-                    yield entry
+    search_queue: list[Any] = []
+    if payload is not None:
+        search_queue.append(payload)
+
+    visited: set[int] = set()
+    yielded: set[int] = set()
+    cargo_keys = {"cargo", "cargoItems", "cargo_items"}
+
+    while search_queue:
+        current = search_queue.pop(0)
+        marker = id(current)
+        if marker in visited:
+            continue
+        visited.add(marker)
+
+        if isinstance(current, Mapping):
+            for key in cargo_keys:
+                entries = current.get(key)
+                if isinstance(entries, Iterable) and not isinstance(entries, (str, bytes)):
+                    for entry in entries:
+                        if isinstance(entry, Mapping):
+                            entry_marker = id(entry)
+                            if entry_marker in yielded:
+                                continue
+                            yielded.add(entry_marker)
+                            yield entry
+
+            for child in (
+                current.get("pax"),
+                current.get("paxPayload"),
+                current.get("payload"),
+            ):
+                if isinstance(child, (Mapping, list, tuple, set)):
+                    search_queue.append(child)
+
+            for child in current.values():
+                if isinstance(child, (Mapping, list, tuple, set)):
+                    search_queue.append(child)
+
+        elif isinstance(current, Iterable) and not isinstance(current, (str, bytes)):
+            for child in current:
+                if isinstance(child, (Mapping, list, tuple, set)):
+                    search_queue.append(child)
 
 
 def _extract_ticket_stats(ticket: Mapping[str, Any], season: str) -> tuple[float, str]:
