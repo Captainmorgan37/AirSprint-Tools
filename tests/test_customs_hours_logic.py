@@ -125,3 +125,27 @@ def test_aoe_canpass_requires_canpass_for_clearance() -> None:
     assert result.status == "FAIL"
     assert "AOE/CANPASS" in result.summary
     assert any("all passengers must hold CANPASS" in issue for issue in result.issues)
+
+
+def test_aoe_with_canpass_notes_passes_within_hours() -> None:
+    note = (
+        "CUSTOMS - AOE\n\n"
+        "Location: Execaire FBO\n"
+        "Hours of Operation: 24/7\n"
+        "Phone: 1-888-226-7277 / 514-633-7752\n"
+        "Fax: 905-679-3300\n\n"
+        "Proceed with standard CANPASS arrival set up process.\n"
+    )
+    parsed = parse_customs_notes([note])
+
+    result = evaluate_customs(
+        CustomsProfile(icao="CYUL", service_type="AOE", notes=None),
+        _build_leg("2024-01-02T15:00:00Z"),
+        "ARR",
+        [],
+        parsed_customs=parsed,
+        tz_name="America/Toronto",
+    )
+
+    assert result.status == "PASS"
+    assert "CANPASS arrival" not in (result.summary or "")

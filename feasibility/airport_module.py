@@ -1269,6 +1269,15 @@ def evaluate_customs(
         summary = "Domestic leg"
         return CategoryResult(status=status, summary=summary, issues=issues)
 
+    hours_result: Optional[bool] = None
+
+    if parsed:
+        hours_result = _is_within_customs_hours(arrival_dt_local, parsed["customs_hours"])
+
+    suppress_canpass_caution = (
+        parsed and parsed.get("aoe_type") == "AOE" and hours_result is not False
+    )
+
     if customs_profile is None:
         if not parsed or not parsed.get("customs_available"):
             status = "FAIL"
@@ -1284,14 +1293,14 @@ def evaluate_customs(
             summary = "No customs service"
             issues.append("International arrival requires customs; arrange alternate field.")
         elif "CANPASS" in service_type.upper() and side == "ARR":
-            status = _combine_status(status, "CAUTION")
-            summary = "CANPASS arrival"
+            if not suppress_canpass_caution:
+                status = _combine_status(status, "CAUTION")
+                summary = summary or "CANPASS arrival"
             issues.append("Ensure CANPASS paperwork and notice are completed.")
         if customs_profile.notes:
             issues.append(customs_profile.notes)
 
     if parsed:
-        hours_result = _is_within_customs_hours(arrival_dt_local, parsed["customs_hours"])
         if hours_result is False:
             if parsed.get("aoe_type") == "AOE":
                 status = _combine_status(status, "FAIL")
@@ -1313,8 +1322,9 @@ def evaluate_customs(
                 )
 
         if parsed["canpass_only"]:
-            status = _combine_status(status, "CAUTION")
-            summary = "CANPASS arrival"
+            if not suppress_canpass_caution:
+                status = _combine_status(status, "CAUTION")
+                summary = summary or "CANPASS arrival"
             issues.append("Operational notes: CANPASS-only clearance.")
         if parsed["customs_prior_notice_hours"]:
             status = _combine_status(status, "CAUTION")
@@ -1350,6 +1360,7 @@ def evaluate_customs(
         if parsed["crew_requirements"]:
             status = _combine_status(status, "CAUTION")
             issues.extend(parsed["crew_requirements"])
+        summary = summary or "Customs available per operational notes"
         summary = _build_customs_summary(summary, parsed)
     else:
         note_text = " ".join(
