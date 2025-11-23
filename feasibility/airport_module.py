@@ -11,8 +11,13 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, TypedDict
 
 import pytz
-from astral import LocationInfo
-from astral.sun import sun
+
+try:  # Optional dependency; fallback behavior handled in evaluate_day_ops
+    from astral import LocationInfo
+    from astral.sun import sun
+except ModuleNotFoundError:  # pragma: no cover - exercised indirectly
+    LocationInfo = None  # type: ignore[assignment]
+    sun = None  # type: ignore[assignment]
 
 from deice_info_helper import DeiceRecord, get_deice_record
 from flight_leg_utils import load_airport_metadata_lookup, safe_parse_dt
@@ -1027,6 +1032,13 @@ def evaluate_day_ops(
             issues=["Planned time missing or invalid for day-ops check."],
         )
 
+    if LocationInfo is None or sun is None:
+        return CategoryResult(
+            status="CAUTION",
+            summary="Unable to compute sunrise/sunset",
+            issues=["Astronomical data unavailable for this airport."],
+        )
+
     try:
         location = LocationInfo(latitude=lat, longitude=lon, timezone=tz_name)
         sun_times = sun(location.observer, date=leg_dt_local.date(), tzinfo=location.timezone)
@@ -1281,7 +1293,14 @@ def evaluate_customs(
     if parsed:
         hours_result = _is_within_customs_hours(arrival_dt_local, parsed["customs_hours"])
         if hours_result is False:
-            if parsed["customs_afterhours_not_available"]:
+            if parsed.get("aoe_type") == "AOE":
+                status = _combine_status(status, "FAIL")
+                summary = "AOE arrival outside customs hours"
+                issues.append(
+                    "Arrival time is outside customs hours; AOE clearance requires all passengers to hold CANPASS for 24/7 availability."
+                )
+                issues.extend(parsed.get("aoe_notes") or [])
+            elif parsed["customs_afterhours_not_available"]:
                 status = "FAIL"
                 summary = "Customs unavailable at planned time"
                 issues.append(
@@ -1313,6 +1332,15 @@ def evaluate_customs(
         if parsed["customs_afterhours_available"]:
             issues.append("Afterhours customs available; verify call-out requirements.")
             issues.extend(parsed["customs_afterhours_requirements"])
+        if parsed.get("aoe_type") == "AOE/15":
+            status = _combine_status(status, "CAUTION")
+            issues.append("Airport designated AOE/15; operations outside posted hours may be unavailable.")
+            issues.extend(parsed.get("aoe_notes") or [])
+        if parsed.get("aoe_type") == "AOE/CANPASS":
+            status = _combine_status(status, "FAIL")
+            summary = "AOE/CANPASS arrival"
+            issues.append("Airport is AOE/CANPASS; all passengers must hold CANPASS for customs clearance.")
+            issues.extend(parsed.get("aoe_notes") or [])
         if parsed["location_to_clear"]:
             issues.append(f"Clear customs at {parsed['location_to_clear']}.")
             issues.extend(parsed["location_notes"])
@@ -1498,6 +1526,8 @@ CLOSURE_CAUTIONS_TO_IGNORE: Mapping[str, tuple[str, ...]] = {
     "CYLW": (
         "crews to review notams prior to every operation. taxiway and airport closures are common."
         " crews to contact phone number prior to departure for permission to operate if required by notam",
+        "crews to review notams prior to every operation taxiway airport closures are common"
+        " contact phone number prior to departure if required by notam",
     ),
 }
 
