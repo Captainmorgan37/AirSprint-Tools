@@ -77,13 +77,13 @@ _STATUS_PRIORITY: Mapping[CategoryStatus, int] = {
 }
 
 SLOT_KEYWORDS = ("slot", "slots", "reservation", "reservations", "ecvrs", "ocs")
-WINTER_KEYWORDS = (
-    "winter",
-    "snow",
-    "ice",
-    "contaminated",
-    "rwy contamination",
-    "limited winter maintenance",
+WINTER_PATTERNS = (
+    re.compile(r"\bwinter\b", re.IGNORECASE),
+    re.compile(r"\bsnow\b", re.IGNORECASE),
+    re.compile(r"\bice\b", re.IGNORECASE),
+    re.compile(r"\bcontaminated\b", re.IGNORECASE),
+    re.compile(r"\brwy contamination\b", re.IGNORECASE),
+    re.compile(r"\blimited winter maintenance\b", re.IGNORECASE),
 )
 FUEL_KEYWORDS = ("fuel not available", "fuel unavailable", "no fuel")
 DEICE_KEYWORDS = ("deice", "antice", "de-ice")
@@ -107,6 +107,12 @@ RUNWAY_RESTRICTION_TERMS = (
     "limitation",
 )
 RUNWAY_CONTAMINATION_TERMS = ("contaminated", "contamination")
+NON_RESTRICTIVE_GENERIC_PATTERNS = (
+    re.compile(r"\bturn time\b", re.IGNORECASE),
+    re.compile(r"\bclosest airport\b", re.IGNORECASE),
+    re.compile(r"^notes?:", re.IGNORECASE),
+    re.compile(r"\bfbo information\b", re.IGNORECASE),
+)
 CUSTOMS_NOTE_KEYWORDS = (
     "customs",
     "canpass",
@@ -238,6 +244,12 @@ def _contains_keyword(text: str, keywords: Sequence[str]) -> bool:
     return any(keyword in lower for keyword in keywords)
 
 
+def _contains_winter_keyword(text: str) -> bool:
+    if not text:
+        return False
+    return any(pattern.search(text) for pattern in WINTER_PATTERNS)
+
+
 def _is_customs_contact_instruction(text: str) -> bool:
     """Detect whether a note explicitly directs contacting customs/CBSA.
 
@@ -327,7 +339,7 @@ def _classify_operational_note(note: str) -> set[str]:
         categories.add("slot")
     if is_ppr_note(lower):
         categories.add("ppr")
-    if _contains_keyword(lower, WINTER_KEYWORDS):
+    if _contains_winter_keyword(note):
         categories.add("winter")
     if _contains_keyword(lower, DEICE_KEYWORDS):
         categories.add("deice")
@@ -585,6 +597,10 @@ def _extract_generic(note: str, out: ParsedRestrictions) -> None:
         out["generic_restrictions"].append(note)
 
 
+def _is_non_restrictive_generic(note: str) -> bool:
+    return any(pattern.search(note) for pattern in NON_RESTRICTIVE_GENERIC_PATTERNS)
+
+
 DAY_KEYWORDS = (
     ("mon", "Mon"),
     ("tue", "Tue"),
@@ -759,7 +775,10 @@ def summarize_operational_notes(
             add_issue(f"Weather limitation: {weather_note}", "CAUTION")
 
     for note in restrictions["generic_restrictions"]:
-        add_issue(f"Operational restriction: {note}", "CAUTION")
+        if _is_non_restrictive_generic(note):
+            add_issue(f"Operational note: {note}", "INFO")
+        else:
+            add_issue(f"Operational restriction: {note}", "CAUTION")
 
     summary = "Operational notes reviewed"
     if status == "CAUTION":

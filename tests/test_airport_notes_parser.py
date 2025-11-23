@@ -2,6 +2,21 @@
 
 from pathlib import Path
 import sys
+import types
+
+if "astral" not in sys.modules:
+    astral_stub = types.ModuleType("astral")
+    astral_stub.LocationInfo = object
+
+    sun_stub = types.ModuleType("astral.sun")
+
+    def _sun_stub(*args, **kwargs):
+        return {}
+
+    sun_stub.sun = _sun_stub
+    sys.modules["astral.sun"] = sun_stub
+    astral_stub.sun = sun_stub
+    sys.modules["astral"] = astral_stub
 
 if str(Path(__file__).resolve().parents[1]) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -117,3 +132,53 @@ def test_weather_limitation_included_in_summary() -> None:
 
     assert summary.status == "CAUTION"
     assert any("Weather limitation" in issue for issue in summary.issues)
+
+
+def test_non_restrictive_generic_notes_do_not_trigger_caution() -> None:
+    notes = [
+        {"note": "1 hr turn time required"},
+        {"note": "NOTES: Closest airport with minimal or no restrictions KCHA 25nm NW (45 min drive)"},
+    ]
+
+    summary = summarize_operational_notes("KCHA", notes)
+
+    assert summary.status == "INFO"
+    assert summary.summary.startswith("Operational notes available")
+    assert all(issue.startswith("Operational note:") for issue in summary.issues)
+
+
+def test_precision_spelling_not_treated_as_winter_sensitivity() -> None:
+    note = (
+        "CUSTOMS [23FEB25]: Available Thursday - Monday. Afterhours is available. "
+        "Customs Ramp located between Atlantic West and Precision Jet FBO's."
+    )
+
+    parsed = parse_operational_restrictions([note])
+
+    assert parsed["winter_sensitivity"] is False
+    assert parsed["winter_notes"] == []
+
+
+def test_fbo_information_summarized_as_informational() -> None:
+    notes = [
+        {
+            "note": (
+                "CUSTOMS [23FEB25]: Available Thursday - Monday - 1100L - 1900L. Afterhours available."
+                " Location: Customs Ramp between Atlantic West and Precision Jet FBO's."
+            )
+        },
+        {
+            "note": (
+                "FBO INFORMATION [22MAY24]: Atlantic Aviation. Hours of operation: 0600L - 2200L 7 days/wk."
+                " After-hours call out available: $60.00/hour/line person. Hangar space available."
+            )
+        },
+        {"note": "1 hr turn time required"},
+    ]
+
+    summary = summarize_operational_notes("KSUA", notes)
+
+    assert summary.status == "INFO"
+    assert summary.summary.startswith("Operational notes available")
+    assert all(issue.startswith("Operational note:") for issue in summary.issues)
+    assert not any("Winter operations sensitivity" in issue for issue in summary.issues)
