@@ -393,8 +393,20 @@ def split_customs_operational_notes(
         is_customs = any(keyword in lower for keyword in CUSTOMS_NOTE_KEYWORDS)
         if lower.startswith("crew notes"):
             continue
-        if "crew" in lower:
-            is_customs = True
+        if not is_customs and "crew" in lower:
+            crew_customs_terms = (
+                "customs",
+                "cbp",
+                "cbsa",
+                "eapis",
+                "e-apis",
+                "ap is",
+                "canpass",
+                "aoe",
+                "landing rights",
+            )
+            if any(term in lower for term in crew_customs_terms):
+                is_customs = True
         if is_customs:
             customs.append(text)
         else:

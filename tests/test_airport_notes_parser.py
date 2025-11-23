@@ -24,6 +24,7 @@ if str(Path(__file__).resolve().parents[1]) not in sys.path:
 from feasibility.airport_notes_parser import (
     parse_customs_notes,
     parse_operational_restrictions,
+    split_customs_operational_notes,
     summarize_operational_notes,
 )
 
@@ -116,6 +117,15 @@ def test_customs_contact_number_not_treated_as_contact_requirement() -> None:
     assert parsed["customs_contact_required"] is False
     assert parsed["customs_contact_notes"] == []
     assert note in parsed["raw_notes"]
+
+
+def test_general_crew_note_is_not_classified_as_customs() -> None:
+    notes = [{"note": "Crew may park on west apron; call FBO for a code."}]
+
+    customs, operational = split_customs_operational_notes(notes)
+
+    assert customs == []
+    assert operational == [notes[0]["note"]]
 
 
 def test_deice_limited_not_triggered_by_holdover_language() -> None:
