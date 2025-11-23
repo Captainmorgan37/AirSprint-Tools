@@ -56,6 +56,9 @@ class ParsedCustoms(TypedDict):
     customs_contact_required: bool
     customs_contact_notes: list[str]
 
+    aoe_type: str | None
+    aoe_notes: list[str]
+
     canpass_only: bool
     canpass_notes: list[str]
 
@@ -228,6 +231,8 @@ def _empty_parsed_customs() -> ParsedCustoms:
         "customs_prior_notice_days": None,
         "customs_contact_required": False,
         "customs_contact_notes": [],
+        "aoe_type": None,
+        "aoe_notes": [],
         "canpass_only": False,
         "canpass_notes": [],
         "location_to_clear": None,
@@ -659,6 +664,15 @@ def parse_customs_notes(notes: Sequence[str]) -> ParsedCustoms:
         primary = _select_primary_customs_category(categories)
         if "customs" in lower or "clearing customs" in lower or "aoe" in lower:
             parsed["customs_available"] = True
+        if re.search(r"\baoe\s*/\s*canpass\b", lower):
+            parsed["aoe_type"] = "AOE/CANPASS"
+            parsed["aoe_notes"].append(text)
+        elif re.search(r"\baoe\s*/\s*15\b", lower):
+            parsed["aoe_type"] = "AOE/15"
+            parsed["aoe_notes"].append(text)
+        elif "aoe" in lower:
+            parsed["aoe_type"] = parsed["aoe_type"] or "AOE"
+            parsed["aoe_notes"].append(text)
         if "24/7" in lower or "24 hrs" in lower or "24hours" in lower or "24 hours" in lower:
             parsed["customs_hours"].append({"start": "0000", "end": "2400", "days": ["Daily"]})
         if "canpass" in lower:
