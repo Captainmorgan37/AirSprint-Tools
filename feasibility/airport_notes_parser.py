@@ -436,7 +436,13 @@ def parse_operational_restrictions(notes: Sequence[str]) -> ParsedRestrictions:
         if "contaminated" in lower:
             parsed["surface_contamination"] = True
         if "slot" in categories:
-            _extract_slot_details(text, parsed, add_note=primary == "slot")
+            _extract_slot_details(
+                text,
+                parsed,
+                # Slot note text is still captured, but _extract_slot_details trims
+                # out unrelated caution verbiage before storing the note text.
+                add_note=primary == "slot",
+            )
         if "ppr" in categories:
             _extract_ppr_details(text, parsed, add_note=primary == "ppr")
         if "winter" in categories:
@@ -448,8 +454,8 @@ def parse_operational_restrictions(notes: Sequence[str]) -> ParsedRestrictions:
         if "night" in categories:
             _extract_night_details(text, parsed, add_note=primary == "night")
         if "runway" in categories:
-            _extract_runway_details(text, parsed, add_note=primary == "runway")
-            _extract_aircraft_limits(text, parsed, add_note=primary == "runway")
+            _extract_runway_details(text, parsed, add_note=True)
+            _extract_aircraft_limits(text, parsed, add_note=True)
         if "weather" in categories:
             _extract_weather_limitations(text, parsed)
         if not categories:
@@ -475,7 +481,17 @@ def _extract_slot_details(
     if WITHIN_HOUR_RE.search(lower):
         out["slot_validity_minutes"] = 60
     if add_note:
-        out["slot_notes"].append(note)
+        lines = [line.strip() for line in note.splitlines() if line.strip()]
+        slot_lines: list[str] = []
+        for line in lines:
+            if not _contains_keyword(line, SLOT_KEYWORDS):
+                continue
+            cleaned = re.split(r"\bcautions?\b", line, flags=re.IGNORECASE)[0].strip(" -:;\t")
+            slot_lines.append(cleaned or line)
+        if slot_lines:
+            out["slot_notes"].append("\n".join(slot_lines))
+        else:
+            out["slot_notes"].append(note)
 
 
 def _extract_ppr_details(
@@ -572,6 +588,7 @@ def _extract_runway_details(
 ) -> None:
     lower = note.lower()
     actionable = False
+    relevant_lines: list[str] = []
     if _contains_keyword(lower, RUNWAY_RESTRICTION_TERMS):
         actionable = True
     if _has_weight_limitation(lower):
@@ -579,8 +596,16 @@ def _extract_runway_details(
     if _contains_keyword(lower, RUNWAY_CONTAMINATION_TERMS):
         out["surface_contamination"] = True
         actionable = True
+    for line in note.splitlines():
+        line_lower = line.lower()
+        if any(keyword in line_lower for keyword in ("rwy", "runway", "caution", "hot spot", "hotspot", "hold short")):
+            cleaned = line.strip()
+            if cleaned:
+                relevant_lines.append(cleaned)
+    if relevant_lines:
+        actionable = True
     if actionable and add_note:
-        out["runway_limitations"].append(note)
+        out["runway_limitations"].append("\n".join(relevant_lines) if relevant_lines else note)
 
 
 def _extract_aircraft_limits(
@@ -740,20 +765,8 @@ def summarize_operational_notes(
 
     restrictions = parsed_restrictions or _empty_parsed_restrictions()
 
-    if restrictions["slot_required"]:
-        detail = "Slot required"
-        if restrictions["slot_lead_days"]:
-            detail += f" ({restrictions['slot_lead_days']} day lead)"
-        elif restrictions["slot_lead_hours"]:
-            detail += f" ({restrictions['slot_lead_hours']} hour lead)"
-        add_issue(detail, "CAUTION")
-    if restrictions["ppr_required"]:
-        detail = "PPR required"
-        if restrictions["ppr_lead_days"]:
-            detail += f" ({restrictions['ppr_lead_days']} day notice)"
-        elif restrictions["ppr_lead_hours"]:
-            detail += f" ({restrictions['ppr_lead_hours']} hour notice)"
-        add_issue(detail, "CAUTION")
+    # Slot/PPR requirements should be surfaced exclusively in the Slot/PPR category
+    # to avoid duplicated cautions in the "Other Operational Notes" section.
     if restrictions["fuel_available"] is False:
         add_issue("Fuel unavailable per operational notes", "CAUTION")
     if restrictions["night_ops_allowed"] is False and not restrictions["hour_notes"]:

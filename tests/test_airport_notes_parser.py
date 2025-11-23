@@ -50,6 +50,24 @@ def test_primary_category_prevents_duplicate_notes() -> None:
     assert parsed["ppr_notes"] == []
 
 
+def test_slot_caution_runs_to_operational_section_not_slot() -> None:
+    note = (
+        "Slot required for arrivals.\n"
+        "Cautions:\n"
+        "Multiple hot spots near threshold RWY 28\n"
+        "Hold short line on A3 set far back from runway – use caution in poor weather."
+    )
+
+    parsed = parse_operational_restrictions([note])
+
+    assert parsed["slot_notes"] == ["Slot required for arrivals."]
+    assert parsed["runway_limitations"] == [
+        "Cautions:\n"
+        "Multiple hot spots near threshold RWY 28\n"
+        "Hold short line on A3 set far back from runway – use caution in poor weather."
+    ]
+
+
 def test_customs_note_assigned_to_single_section() -> None:
     note = (
         "CUSTOMS: Available with 24hr notice. Hrs: 0800-1700 Mon-Fri. Call CBP to request."
