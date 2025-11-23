@@ -107,6 +107,11 @@ RUNWAY_RESTRICTION_TERMS = (
     "limitation",
 )
 RUNWAY_CONTAMINATION_TERMS = ("contaminated", "contamination")
+NON_RESTRICTIVE_GENERIC_PATTERNS = (
+    re.compile(r"\\bturn time\\b", re.IGNORECASE),
+    re.compile(r"\\bclosest airport\\b", re.IGNORECASE),
+    re.compile(r"^notes?:", re.IGNORECASE),
+)
 CUSTOMS_NOTE_KEYWORDS = (
     "customs",
     "canpass",
@@ -585,6 +590,10 @@ def _extract_generic(note: str, out: ParsedRestrictions) -> None:
         out["generic_restrictions"].append(note)
 
 
+def _is_non_restrictive_generic(note: str) -> bool:
+    return any(pattern.search(note) for pattern in NON_RESTRICTIVE_GENERIC_PATTERNS)
+
+
 DAY_KEYWORDS = (
     ("mon", "Mon"),
     ("tue", "Tue"),
@@ -759,7 +768,10 @@ def summarize_operational_notes(
             add_issue(f"Weather limitation: {weather_note}", "CAUTION")
 
     for note in restrictions["generic_restrictions"]:
-        add_issue(f"Operational restriction: {note}", "CAUTION")
+        if _is_non_restrictive_generic(note):
+            add_issue(f"Operational note: {note}", "INFO")
+        else:
+            add_issue(f"Operational restriction: {note}", "CAUTION")
 
     summary = "Operational notes reviewed"
     if status == "CAUTION":

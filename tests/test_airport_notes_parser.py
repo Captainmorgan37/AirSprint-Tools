@@ -117,3 +117,16 @@ def test_weather_limitation_included_in_summary() -> None:
 
     assert summary.status == "CAUTION"
     assert any("Weather limitation" in issue for issue in summary.issues)
+
+
+def test_non_restrictive_generic_notes_do_not_trigger_caution() -> None:
+    notes = [
+        {"note": "1 hr turn time required"},
+        {"note": "NOTES: Closest airport with minimal or no restrictions KCHA 25nm NW (45 min drive)"},
+    ]
+
+    summary = summarize_operational_notes("KCHA", notes)
+
+    assert summary.status == "INFO"
+    assert summary.summary.startswith("Operational notes available")
+    assert all(issue.startswith("Operational note:") for issue in summary.issues)
