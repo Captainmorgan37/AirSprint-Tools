@@ -512,13 +512,16 @@ def _render_operational_restrictions(parsed: Mapping[str, Any] | None) -> None:
         )
 
 
-def _render_category_block(label: str, category: Mapping[str, Any]) -> None:
+def _render_category_block(
+    label: str, category: Mapping[str, Any], *, expanded: bool | None = None
+) -> None:
     status = str(category.get("status", "PASS"))
     summary = category.get("summary") or status
     st.markdown(f"**{label}:** {status_icon(status)} {summary}")
     issues = [str(issue) for issue in category.get("issues", []) if issue]
+    expanded_state = expanded if expanded is not None else status != "PASS"
     if issues:
-        with st.expander(f"{label} details", expanded=status != "PASS"):
+        with st.expander(f"{label} details", expanded=expanded_state):
             for issue in issues:
                 st.markdown(f"- {issue}")
 
@@ -564,7 +567,11 @@ def _render_leg_side(label: str, side: Mapping[str, Any]) -> None:
             display = SECTION_LABELS.get(key, key.title())
             category = side.get(key) if isinstance(side, Mapping) else None
             if isinstance(category, Mapping):
-                _render_category_block(display, category)
+                _render_category_block(
+                    display,
+                    category,
+                    expanded=False if key == "operational_notes" else None,
+                )
         parsed_customs = side.get("parsed_customs_notes") if isinstance(side, Mapping) else None
         _render_customs_details(
             parsed_customs if isinstance(parsed_customs, Mapping) else None,
