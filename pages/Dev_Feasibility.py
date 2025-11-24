@@ -397,8 +397,20 @@ def st_flight_route_map(route_data: Mapping[str, Any], *, height: int = 430) -> 
         airports,
         get_position=["lon", "lat"],
         get_fill_color="color",
-        get_radius=50000,
+        get_radius=25000,
         pickable=True,
+    )
+
+    labels_layer = pdk.Layer(
+        "TextLayer",
+        airports,
+        get_position=["lon", "lat"],
+        get_text="icao",
+        get_color=[230, 230, 230],
+        get_size=18,
+        get_angle=0,
+        get_text_anchor="middle",
+        get_alignment_baseline="top",
     )
 
     view_state = pdk.ViewState(
@@ -410,7 +422,7 @@ def st_flight_route_map(route_data: Mapping[str, Any], *, height: int = 430) -> 
     )
 
     deck = pdk.Deck(
-        layers=[route_layer, airports_layer],
+        layers=[route_layer, airports_layer, labels_layer],
         initial_view_state=view_state,
         tooltip={"text": "{icao}"},
         map_style="mapbox://styles/mapbox/dark-v10",
