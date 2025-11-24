@@ -159,7 +159,7 @@ CLOSED_BETWEEN_RE = re.compile(r"closed between\s*(\d{3,4})[-–](\d{3,4})")
 RUNWAY_NUM_RE = re.compile(r"rwy\s*(\d{2}[lrc]?)", re.IGNORECASE)
 ACFT_LIMIT_RE = re.compile(r"(embraer|cj2|cj3|legacy|challenger|global)", re.IGNORECASE)
 
-HOURS_RE = re.compile(r"(\d{3,4})\s*[-–]\s*(\d{3,4})")
+HOURS_RE = re.compile(r"(\d{1,2}:?\d{2})\s*[a-z]{0,3}\s*[-–]\s*(\d{1,2}:?\d{2})", re.IGNORECASE)
 PRIOR_HOURS_RE = re.compile(r"(\d+)\s*(?:hours|hrs)\s*(?:notice|prior)")
 PRIOR_DAYS_RE = re.compile(r"(\d+)\s*(?:days?)\s*(?:notice|prior)")
 LOCATION_RE = re.compile(
@@ -721,7 +721,11 @@ def parse_customs_notes(notes: Sequence[str]) -> ParsedCustoms:
         elif "aoe" in lower:
             parsed["aoe_type"] = parsed["aoe_type"] or "AOE"
             parsed["aoe_notes"].append(text)
-        if "24/7" in lower or "24 hrs" in lower or "24hours" in lower or "24 hours" in lower:
+        mentions_24_7 = "24/7" in lower or "24 hrs" in lower or "24hours" in lower or "24 hours" in lower
+        references_other_airport = any(
+            phrase in lower for phrase in ("another airport", "other airport", "alternate airport")
+        )
+        if mentions_24_7 and not references_other_airport:
             parsed["customs_hours"].append({"start": "0000", "end": "2400", "days": ["Daily"]})
         if "canpass" in lower:
             if "only" in lower or "canpass arrival" in lower or "arrival by canpass" in lower:
