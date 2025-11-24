@@ -765,6 +765,7 @@ def _inject_leg_styles() -> None:
                 font-size: 0.9rem;
                 font-weight: 800;
                 letter-spacing: 0.06em;
+                color: #0b1f33;
             }
             .leg-card__icao {
                 font-size: 1.1rem;
@@ -781,12 +782,12 @@ def _inject_leg_styles() -> None:
                 display: inline-flex;
                 align-items: center;
                 gap: 0.35rem;
-                padding: 0.25rem 0.65rem;
+                padding: 0.3rem 0.85rem;
                 border-radius: 999px;
                 background: rgba(255, 255, 255, 0.65);
                 border: 1px solid var(--leg-border, #d0d7de);
                 font-weight: 700;
-                font-size: 0.85rem;
+                font-size: 1.05rem;
                 color: #0b1f33;
             }
             .leg-card__chip-outline {
@@ -830,7 +831,26 @@ def _render_leg_side(label: str, side: Mapping[str, Any]) -> None:
     header_chip = planned_time_local or (
         side.get("local_date") if isinstance(side, Mapping) else None
     ) or "Local time pending"
-    status_chip = side.get("status", "READY") if isinstance(side, Mapping) else "READY"
+
+    if planned_time_local:
+        try:
+            parsed_dt = safe_parse_dt(planned_time_local)
+            weekday = parsed_dt.strftime("%A")
+            month = parsed_dt.strftime("%B")
+            day = parsed_dt.day
+            year = parsed_dt.year
+            tz_abbrev = parsed_dt.strftime("%Z")
+
+            def _ordinal(n: int) -> str:
+                if 10 <= n % 100 <= 20:
+                    suffix = "th"
+                else:
+                    suffix = {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+                return f"{n}{suffix}"
+
+            header_chip = f"{weekday}, {month} {_ordinal(day)}, {year} {parsed_dt.strftime('%H:%M')} {tz_abbrev}"
+        except Exception:
+            pass
     with st.container():
         st.markdown(
             f"""
@@ -845,7 +865,6 @@ def _render_leg_side(label: str, side: Mapping[str, Any]) -> None:
                     </div>
                     <div class="leg-card__chips">
                         <span class="leg-card__chip">{header_chip}</span>
-                        <span class="leg-card__chip leg-card__chip-outline">{status_chip}</span>
                     </div>
                 </div>
                 <div class="leg-card__body">
