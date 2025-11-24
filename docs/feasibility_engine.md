@@ -178,6 +178,7 @@ Category rules (applied inside `evaluate_airport_side`):
 * **OSA / SSA** — classifies the airport region and warns when Jeppesen ITP is mandatory.
 * **Overflight** — runs a rough great-circle path against known permit regions so we can note upcoming permit requirements early in the planning flow.
 * **Operational notes** — summarized text plus raw notes so the IOCC team has the latest hazards/changes without leaving the tool.
+  * **Status logic** — operational notes are surfaced for context only. The category stays informational (PASS/INFO) even when notes mention curfews, night restrictions, or similar limitations so that these items only appear in the Operational Notes section and do not drive a CAUTION banner. (See `summarize_operational_notes` in `feasibility/airport_notes_parser.py`.)
 
 By centralizing all of the above, the airport feasibility check now acts as a single source of truth for runway suitability, customs/deice status, and regulatory requirements.  The main Feasibility Engine simply consumes the category summaries (PASS/CAUTION/FAIL with issues) so no other module needs to duplicate this logic.
 

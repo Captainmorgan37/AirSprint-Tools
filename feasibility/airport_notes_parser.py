@@ -784,55 +784,47 @@ def summarize_operational_notes(
     status: CategoryStatus = "PASS"
     issues: list[str] = []
 
-    def add_issue(message: str, severity: CategoryStatus = "INFO") -> None:
-        nonlocal status
+    def add_issue(message: str) -> None:
+        """Record an informational note without escalating severity."""
+
         issues.append(message)
-        status = _combine_status(status, severity)
 
     restrictions = parsed_restrictions or _empty_parsed_restrictions()
 
     # Slot/PPR requirements should be surfaced exclusively in the Slot/PPR category
     # to avoid duplicated cautions in the "Other Operational Notes" section.
     if restrictions["fuel_available"] is False:
-        add_issue("Fuel unavailable per operational notes", "CAUTION")
+        add_issue("Fuel unavailable per operational notes")
     if restrictions["night_ops_allowed"] is False and not restrictions["hour_notes"]:
-        add_issue("Night operations prohibited", "CAUTION")
+        add_issue("Night operations prohibited")
     if restrictions["curfew"]:
-        add_issue("Curfew in effect per operational notes", "CAUTION")
+        add_issue("Curfew in effect per operational notes")
     if restrictions["surface_contamination"]:
-        add_issue("Surface contamination reported in operational notes", "CAUTION")
+        add_issue("Surface contamination reported in operational notes")
     for runway_note in restrictions["runway_limitations"]:
-        add_issue(f"Runway restriction: {runway_note}", "CAUTION")
+        add_issue(f"Runway restriction: {runway_note}")
     for acft_note in restrictions["aircraft_type_limits"]:
-        add_issue(f"Aircraft limit: {acft_note}", "CAUTION")
+        add_issue(f"Aircraft limit: {acft_note}")
 
     if restrictions["winter_sensitivity"] and status == "PASS":
-        add_issue("Winter operations sensitivity reported", "INFO")
+        add_issue("Winter operations sensitivity reported")
 
     if restrictions["weather_limitations"]:
         for weather_note in restrictions["weather_limitations"]:
-            add_issue(f"Weather limitation: {weather_note}", "CAUTION")
+            add_issue(f"Weather limitation: {weather_note}")
 
     for note in restrictions["generic_restrictions"]:
         if _is_non_restrictive_generic(note):
-            add_issue(f"Operational note: {note}", "INFO")
+            add_issue(f"Operational note: {note}")
         else:
-            add_issue(f"Operational restriction: {note}", "CAUTION")
+            add_issue(f"Operational restriction: {note}")
 
-    summary = "Operational notes reviewed"
-    if status == "CAUTION":
-        summary = "Operational restrictions detected"
-    elif status == "INFO":
-        summary = "Operational notes available — no restrictions detected."
-
+    summary = "Operational notes available for context"
     if not issues and has_raw_notes:
         issues.append(summary)
-        status = _combine_status(status, "INFO")
-    elif status == "PASS" and has_raw_notes:
+    if issues:
         status = "INFO"
-        summary = "Operational notes available — no restrictions detected."
-        if not issues:
-            issues.append(summary)
+        summary = "Operational notes available for context"
 
     return CategoryResult(status=status, summary=summary, issues=issues)
 
