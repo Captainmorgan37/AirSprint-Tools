@@ -407,11 +407,15 @@ def st_flight_route_map(route_data: Mapping[str, Any], *, height: int = 430) -> 
         airports,
         get_position=["lon", "lat"],
         get_text="icao",
-        get_color=[230, 230, 230],
+        get_color=[245, 245, 245],
         get_size=18,
+        size_units="pixels",
+        size_min_pixels=14,
+        billboard=True,
         get_angle=0,
         get_text_anchor="middle",
         get_alignment_baseline="top",
+        get_pixel_offset=[0, 16],
     )
 
     view_state = pdk.ViewState(
@@ -583,10 +587,6 @@ def _render_customs_details(
         return
     contact_notes = _collect_entries(parsed.get("customs_contact_notes"), explode=True)
     _render_bullet_section("Contact Instructions", contact_notes)
-    _render_bullet_section(
-        "Passenger Requirements",
-        _collect_entries(parsed.get("pax_requirements"), explode=True),
-    )
     _render_bullet_section(
         "Crew Requirements",
         _collect_entries(parsed.get("crew_requirements"), explode=True),
