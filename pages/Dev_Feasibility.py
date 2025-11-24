@@ -514,8 +514,13 @@ def _render_category_block(
 ) -> None:
     status = str(category.get("status", "PASS"))
     summary = category.get("summary") or status
-    st.markdown(f"**{label}:** {status_icon(status)} {summary}")
     issues = [str(issue) for issue in category.get("issues", []) if issue]
+    extra_note = None
+    if "Operational Notes" in label and issues:
+        extra_note = issues[0]
+
+    detail_suffix = f"  \n - {extra_note}" if extra_note else ""
+    st.markdown(f"**{label}:** {status_icon(status)} {summary}{detail_suffix}")
     expanded_state = expanded if expanded is not None else status != "PASS"
     if issues:
         with st.expander(f"{label} details", expanded=expanded_state):
