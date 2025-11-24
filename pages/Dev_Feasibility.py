@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+import re
 import os
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, cast
 
@@ -765,6 +766,7 @@ def _inject_leg_styles() -> None:
                 font-size: 0.9rem;
                 font-weight: 800;
                 letter-spacing: 0.06em;
+                color: #0b1f33;
             }
             .leg-card__icao {
                 font-size: 1.1rem;
@@ -781,12 +783,12 @@ def _inject_leg_styles() -> None:
                 display: inline-flex;
                 align-items: center;
                 gap: 0.35rem;
-                padding: 0.25rem 0.65rem;
+                padding: 0.3rem 0.85rem;
                 border-radius: 999px;
                 background: rgba(255, 255, 255, 0.65);
                 border: 1px solid var(--leg-border, #d0d7de);
                 font-weight: 700;
-                font-size: 0.85rem;
+                font-size: 1.05rem;
                 color: #0b1f33;
             }
             .leg-card__chip-outline {
@@ -822,15 +824,42 @@ def _render_leg_side(label: str, side: Mapping[str, Any]) -> None:
     tokens = _leg_visual_tokens(label)
     icao = side.get("icao", "???") if isinstance(side, Mapping) else "???"
     planned_time_local = None
+    header_source: Optional[str] = None
     if isinstance(side, Mapping):
         planned_value = side.get("planned_time_local") or side.get("plannedTimeLocal")
         if planned_value:
             planned_time_local = str(planned_value)
 
-    header_chip = planned_time_local or (
-        side.get("local_date") if isinstance(side, Mapping) else None
-    ) or "Local time pending"
-    status_chip = side.get("status", "READY") if isinstance(side, Mapping) else "READY"
+        header_source = planned_time_local or side.get("local_date")
+
+    header_chip = header_source or "Local time pending"
+
+    if header_source:
+        try:
+            tz_abbrev: Optional[str] = None
+            dt_source = header_source.strip()
+            tz_match = re.match(r"^(.*?)(?:\s+([A-Za-z]{2,5}))?$", dt_source)
+            if tz_match:
+                dt_source = tz_match.group(1).strip()
+                tz_abbrev = tz_match.group(2)
+
+            parsed_dt = safe_parse_dt(dt_source)
+            weekday = parsed_dt.strftime("%A")
+            month = parsed_dt.strftime("%B")
+            day = parsed_dt.day
+            year = parsed_dt.year
+            tz_abbrev = tz_abbrev or parsed_dt.strftime("%Z") or "UTC"
+
+            def _ordinal(n: int) -> str:
+                if 10 <= n % 100 <= 20:
+                    suffix = "th"
+                else:
+                    suffix = {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+                return f"{n}{suffix}"
+
+            header_chip = f"{weekday}, {month} {_ordinal(day)}, {year} {parsed_dt.strftime('%H:%M')} {tz_abbrev}"
+        except Exception:
+            pass
     with st.container():
         st.markdown(
             f"""
@@ -845,7 +874,6 @@ def _render_leg_side(label: str, side: Mapping[str, Any]) -> None:
                     </div>
                     <div class="leg-card__chips">
                         <span class="leg-card__chip">{header_chip}</span>
-                        <span class="leg-card__chip leg-card__chip-outline">{status_chip}</span>
                     </div>
                 </div>
                 <div class="leg-card__body">
