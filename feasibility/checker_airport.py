@@ -181,7 +181,7 @@ def evaluate_airport(
     if arr:
         deice = has_deice_available(icao=arr)
         if deice is False:
-            alerts.append(("CAUTION", f"No deice available at {arr}"))
+            alerts.append(("INFO", f"No deice available at {arr}"))
             issues.append(f"Arrange alternate deice support for {arr} or plan tech stop.")
         elif deice is None:
             issues.append(f"No deice intel for {arr}; monitor forecast if icing possible.")
