@@ -255,4 +255,5 @@ def test_to_separated_hours_are_parsed_before_inline_warning() -> None:
 
     assert parsed["customs_hours"][0]["start"].startswith("8")
     assert parsed["customs_hours"][0]["end"].startswith("16")
+    assert parsed["customs_hours"][0]["days"] == ["Mon", "Tue", "Wed", "Thu", "Fri"]
     assert result.status == "PASS"

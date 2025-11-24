@@ -664,42 +664,64 @@ def _is_non_restrictive_generic(note: str) -> bool:
     return any(pattern.search(note) for pattern in NON_RESTRICTIVE_GENERIC_PATTERNS)
 
 
-DAY_KEYWORDS = (
-    ("mon", "Mon"),
-    ("tue", "Tue"),
-    ("wed", "Wed"),
-    ("thu", "Thu"),
-    ("fri", "Fri"),
-    ("sat", "Sat"),
-    ("sun", "Sun"),
-)
+DAY_ORDER = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+DAY_LABELS = {
+    "mon": "Mon",
+    "tue": "Tue",
+    "wed": "Wed",
+    "thu": "Thu",
+    "fri": "Fri",
+    "sat": "Sat",
+    "sun": "Sun",
+}
+DAY_ALIASES = {
+    "mon": "mon",
+    "monday": "mon",
+    "tue": "tue",
+    "tues": "tue",
+    "tuesday": "tue",
+    "wed": "wed",
+    "weds": "wed",
+    "wednesday": "wed",
+    "thu": "thu",
+    "thur": "thu",
+    "thurs": "thu",
+    "thursday": "thu",
+    "fri": "fri",
+    "friday": "fri",
+    "sat": "sat",
+    "saturday": "sat",
+    "sun": "sun",
+    "sunday": "sun",
+}
 
 
 def _detect_days(lower: str) -> list[str]:
     days_found: set[str] = set()
 
-    day_order = [token for token, _ in DAY_KEYWORDS]
-    label_lookup = {token: label for token, label in DAY_KEYWORDS}
+    alias_pattern = "|".join(DAY_ALIASES)
 
-    for match in re.finditer(r"(mon|tue|wed|thu|fri|sat|sun)\s*[-–]\s*(mon|tue|wed|thu|fri|sat|sun)", lower):
+    for match in re.finditer(rf"({alias_pattern})\s*(?:[-–]|to)\s*({alias_pattern})", lower):
         start_token, end_token = match.groups()
+        start_canonical = DAY_ALIASES[start_token]
+        end_canonical = DAY_ALIASES[end_token]
         try:
-            start_idx = day_order.index(start_token)
-            end_idx = day_order.index(end_token)
+            start_idx = DAY_ORDER.index(start_canonical)
+            end_idx = DAY_ORDER.index(end_canonical)
         except ValueError:
             continue
 
         if start_idx <= end_idx:
-            span = day_order[start_idx : end_idx + 1]
+            span = DAY_ORDER[start_idx : end_idx + 1]
         else:
-            span = day_order[start_idx:] + day_order[: end_idx + 1]
-        days_found.update(label_lookup[day] for day in span)
+            span = DAY_ORDER[start_idx:] + DAY_ORDER[: end_idx + 1]
+        days_found.update(DAY_LABELS[day] for day in span)
 
-    for token, label in DAY_KEYWORDS:
-        if re.search(rf"\b{token}\b", lower):
-            days_found.add(label)
+    for alias, canonical in DAY_ALIASES.items():
+        if re.search(rf"\b{alias}\b", lower):
+            days_found.add(DAY_LABELS[canonical])
 
-    return [label for _, label in DAY_KEYWORDS if label in days_found]
+    return [DAY_LABELS[token] for token in DAY_ORDER if DAY_LABELS[token] in days_found]
 
 
 def _is_plausible_time_range_value(value: str) -> bool:
