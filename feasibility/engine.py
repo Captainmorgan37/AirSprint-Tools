@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Mapping, MutableMapping, Optional
 
 from flight_leg_utils import load_airport_metadata_lookup
-from fl3xx_api import fetch_flight_pax_details
+from fl3xx_api import fetch_flight_pax_details, fetch_flight_planning_note
 
 from . import (
     checker_aircraft,
@@ -18,6 +18,7 @@ from . import (
 )
 from .data_access import load_customs_rules
 from .lookup import lookup_booking
+from .planning_notes import extract_planning_note_text
 from .schemas import CategoryResult, FeasibilityResult
 
 
@@ -99,10 +100,18 @@ def run_feasibility_for_booking(
         session=session,
     )
     pax_payload: Optional[Mapping[str, Any]] = None
+    planning_note: Optional[str] = None
     flight_id = lookup_result.flight.get("flightId") or lookup_result.flight.get("id")
     if flight_id:
         try:
             pax_payload = fetch_flight_pax_details(config, flight_id, session=session)
         except Exception:
             pax_payload = None
+        try:
+            raw_note = fetch_flight_planning_note(config, flight_id, session=session)
+            planning_note = extract_planning_note_text(raw_note)
+        except Exception:
+            planning_note = None
+    if planning_note:
+        lookup_result.flight["planningNotes"] = planning_note
     return evaluate_flight(lookup_result.flight, now=now, pax_payload=pax_payload)
