@@ -514,8 +514,13 @@ def _render_category_block(
 ) -> None:
     status = str(category.get("status", "PASS"))
     summary = category.get("summary") or status
-    st.markdown(f"**{label}:** {status_icon(status)} {summary}")
     issues = [str(issue) for issue in category.get("issues", []) if issue]
+    extra_note = None
+    if "Operational Notes" in label and issues:
+        extra_note = issues[0]
+
+    detail_suffix = f"  \n - {extra_note}" if extra_note else ""
+    st.markdown(f"**{label}:** {status_icon(status)} {summary}{detail_suffix}")
     expanded_state = expanded if expanded is not None else status != "PASS"
     if issues:
         with st.expander(f"{label} details", expanded=expanded_state):
@@ -755,6 +760,47 @@ def _collect_key_issues(result: Mapping[str, Any]) -> List[str]:
     return issues
 
 
+def _collect_operational_note_highlights(
+    legs: Sequence[Mapping[str, Any]] | Any,
+) -> List[Mapping[str, str]]:
+    highlights: List[Mapping[str, str]] = []
+    if not isinstance(legs, Sequence):
+        return highlights
+
+    for index, leg in enumerate(legs, start=1):
+        if not isinstance(leg, Mapping):
+            continue
+        departure = leg.get("departure", {}) if isinstance(leg, Mapping) else {}
+        arrival = leg.get("arrival", {}) if isinstance(leg, Mapping) else {}
+        dep_code = departure.get("icao", "???") if isinstance(departure, Mapping) else "???"
+        arr_code = arrival.get("icao", "???") if isinstance(arrival, Mapping) else "???"
+        leg_label = f"Leg {index} ({dep_code}→{arr_code})"
+
+        for side_name, side_label in (("departure", "Departure"), ("arrival", "Arrival")):
+            side = leg.get(side_name)
+            if not isinstance(side, Mapping):
+                continue
+            operational_notes = side.get("operational_notes")
+            if not isinstance(operational_notes, Mapping):
+                continue
+            status = operational_notes.get("status", "PASS")
+            if status == "PASS":
+                continue
+            summary = operational_notes.get("summary") or status
+            issues = [str(issue) for issue in operational_notes.get("issues", []) if issue]
+            first_issue = issues[0] if issues else ""
+            highlights.append(
+                {
+                    "leg_label": leg_label,
+                    "side_label": side_label,
+                    "summary": str(summary),
+                    "issue": first_issue,
+                }
+            )
+
+    return highlights
+
+
 def _render_full_quote_result(result: FullFeasibilityResult) -> None:
     legs = result.get("legs", [])
     duty = result.get("duty", {})
@@ -774,6 +820,16 @@ def _render_full_quote_result(result: FullFeasibilityResult) -> None:
     if summary:
         formatted = summary.strip().replace("\n", "  \n")
         st.markdown(formatted)
+
+    operational_note_flags = _collect_operational_note_highlights(legs)
+    if operational_note_flags:
+        st.markdown("**Operational Notes Flags**")
+        for entry in operational_note_flags:
+            st.markdown(
+                f"{entry['leg_label']} {entry['side_label']} Operational Notes: {entry['summary']}"
+            )
+            if entry["issue"]:
+                st.markdown(f" • {entry['issue']}")
 
     key_issues = _collect_key_issues(result)
     st.subheader("Key Issues")
