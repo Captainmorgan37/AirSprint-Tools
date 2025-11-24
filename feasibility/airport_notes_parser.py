@@ -378,6 +378,16 @@ def _select_primary_category(categories: set[str]) -> str | None:
     return None
 
 
+def is_explicit_deice_note(text: str) -> bool:
+    """Return True when the note is clearly labeled as deice guidance."""
+
+    if not text:
+        return False
+
+    first_line = text.strip().splitlines()[0].strip().lower()
+    return first_line.startswith("deice") or first_line.startswith("de-ice") or "deice/anti-ice" in first_line
+
+
 def split_customs_operational_notes(
     notes: Sequence[Mapping[str, object]]
 ) -> Tuple[list[str], list[str]]:
@@ -449,8 +459,11 @@ def parse_operational_restrictions(notes: Sequence[str]) -> ParsedRestrictions:
             continue
         parsed["raw_notes"].append(text)
         categories = _classify_operational_note(text)
-        if CLOSED_BETWEEN_RE.search(lower):
+        explicit_deice_only = "deice" in categories and is_explicit_deice_note(text)
+        if not explicit_deice_only and CLOSED_BETWEEN_RE.search(lower):
             categories.add("night")
+        if explicit_deice_only:
+            categories = {"deice"}
         primary = _select_primary_category(categories)
         if "contaminated" in lower:
             parsed["surface_contamination"] = True
