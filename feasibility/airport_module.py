@@ -858,6 +858,8 @@ def evaluate_suitability(
         if is_explicit_deice_note(text_body):
             continue
         body = text_body.lower()
+        if "customs" in body:
+            continue
         if any(keyword in body for keyword in closure_fail_keywords):
             if has_partial_closure:
                 closure_caution_found = True

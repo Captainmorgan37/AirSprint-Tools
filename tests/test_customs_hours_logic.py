@@ -174,3 +174,21 @@ def test_customs_hours_ignore_phone_numbers() -> None:
 
     assert any(hours.get("start") == "0600" for hours in parsed["customs_hours"])
     assert "676-4590" not in (result.summary or "")
+
+
+def test_24_7_reference_to_other_airport_not_treated_as_hours() -> None:
+    note = (
+        "CUSTOMS: Available - AOE/15\n"
+        "Hours of operation: 08:00L – 22:00L Mon-Fri."
+        " If clearance is needed outside of regular hours in the event of a diversion,"
+        " continuing to YUL or another airport with 24/7 clearance may be required."
+    )
+
+    parsed = parse_customs_notes([note])
+
+    assert parsed["customs_hours"][0]["start"] == "08:00"
+    assert parsed["customs_hours"][0]["end"] == "22:00"
+    assert not any(
+        entry.get("start") == "0000" and entry.get("end") == "2400"
+        for entry in parsed["customs_hours"]
+    )
