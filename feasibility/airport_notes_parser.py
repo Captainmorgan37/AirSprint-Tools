@@ -857,6 +857,10 @@ def summarize_operational_notes(
     if any("pic" in note and "duty pilot" in note for note in raw_notes):
         add_issue("PIC to contact Duty Pilot prior to operation", severity="INFO")
 
+    tfr_keywords = ("tfr", "temporary flight restriction")
+    if any(keyword in note and "no tfr" not in note for keyword in tfr_keywords for note in raw_notes):
+        add_issue("Active Temporary Flight Restriction (TFR) noted", severity="CAUTION")
+
     summary = "Operational notes present (no tracked flags)" if has_raw_notes else "No operational notes"
     if issues:
         summary = "Operational notes require review"
