@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-import re
 import os
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, cast
 
@@ -407,11 +406,15 @@ def st_flight_route_map(route_data: Mapping[str, Any], *, height: int = 430) -> 
         airports,
         get_position=["lon", "lat"],
         get_text="icao",
-        get_color=[230, 230, 230],
+        get_color=[245, 245, 245],
         get_size=18,
+        size_units="pixels",
+        size_min_pixels=14,
+        billboard=True,
         get_angle=0,
         get_text_anchor="middle",
         get_alignment_baseline="top",
+        get_pixel_offset=[0, 16],
     )
 
     view_state = pdk.ViewState(
