@@ -584,10 +584,6 @@ def _render_customs_details(
     contact_notes = _collect_entries(parsed.get("customs_contact_notes"), explode=True)
     _render_bullet_section("Contact Instructions", contact_notes)
     _render_bullet_section(
-        "Passenger Requirements",
-        _collect_entries(parsed.get("pax_requirements"), explode=True),
-    )
-    _render_bullet_section(
         "Crew Requirements",
         _collect_entries(parsed.get("crew_requirements"), explode=True),
     )
