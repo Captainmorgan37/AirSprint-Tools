@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import re
 from typing import Any, Callable, List, Mapping, Optional, Sequence
 
 from flight_leg_utils import load_airport_metadata_lookup, safe_parse_dt
@@ -17,6 +18,10 @@ from .airport_module import (
 from .common import OSA_CATEGORY, SSA_CATEGORY, classify_airport_category
 from .duty_module import evaluate_generic_duty_day
 from .models import DayContext, FeasibilityRequest, FullFeasibilityResult
+from .planning_notes import (
+    extract_requested_aircraft_from_note,
+    parse_route_entries_from_note,
+)
 from .quote_lookup import build_quote_leg_options
 from .schemas import CategoryStatus, combine_statuses
 
@@ -255,6 +260,140 @@ def _determine_overall_status(
     return combine_statuses(normalized)
 
 
+def _collect_planning_note_feedback(day: DayContext) -> tuple[List[str], List[str]]:
+    issues: List[str] = []
+    confirmations: List[str] = []
+
+    def _route_contains_segment(route: Sequence[str], dep: str, arr: str) -> bool:
+        for idx, code in enumerate(route[:-1]):
+            if code == dep and route[idx + 1] == arr:
+                return True
+        return False
+
+    for index, leg in enumerate(day.get("legs", []), start=1):
+        note = leg.get("planning_notes")
+        if not note:
+            continue
+        dep = (leg.get("departure_icao") or "").upper()
+        arr = (leg.get("arrival_icao") or "").upper()
+        dep_dt = (
+            safe_parse_dt(leg.get("departure_date_utc")) if leg.get("departure_date_utc") else None
+        )
+        entries = parse_route_entries_from_note(note, default_year=dep_dt.year if dep_dt else None)
+        if not entries or dep_dt is None:
+            continue
+
+        matching = [(entry_date, route) for entry_date, route in entries if entry_date == dep_dt.date()]
+        if not matching:
+            nearest_date = min(entries, key=lambda entry: abs(entry[0] - dep_dt.date()))[0]
+            issues.append(
+                f"Leg {index} {dep}→{arr}: Planning notes route date {nearest_date.isoformat()} "
+                f"does not match booked {dep_dt.date().isoformat()}."
+            )
+            continue
+
+        entry_date, route = matching[0]
+        if _route_contains_segment(route, dep, arr):
+            confirmations.append(
+                f"Leg {index} {dep}→{arr}: Planning notes route for {entry_date.isoformat()} matches booked {dep}→{arr}."
+            )
+        else:
+            route_label = "-".join(route)
+            issues.append(
+                f"Leg {index} {dep}→{arr}: Planning notes route for {entry_date.isoformat()} ({route_label}) does not match booked {dep}→{arr}."
+            )
+    return issues, confirmations
+
+
+def _normalize_aircraft_label(label: str) -> str:
+    return re.sub(r"[^A-Z0-9]", "", label or "").upper()
+
+
+def _canonical_aircraft_label(label: str) -> str:
+    normalized = _normalize_aircraft_label(label)
+    if not normalized:
+        return ""
+
+    emb_variants = {"E545", "E500", "E550", "P500", "EMB"}
+    if normalized in emb_variants:
+        return "EMB"
+
+    equivalents = {
+        "C25A": "CJ2",
+        "CJ2": "CJ2",
+        "C25B": "CJ3",
+        "CJ3": "CJ3",
+    }
+    return equivalents.get(normalized, normalized)
+
+
+def _labels_match(requested: str, actual: str) -> bool:
+    requested_canonical = _canonical_aircraft_label(requested)
+    actual_canonical = _canonical_aircraft_label(actual)
+    if not requested_canonical or not actual_canonical:
+        return False
+    if requested_canonical == actual_canonical:
+        return True
+    return requested_canonical in actual_canonical or actual_canonical in requested_canonical
+
+
+def _extract_requested_aircraft_type(quote: Mapping[str, Any]) -> Optional[str]:
+    for key in (
+        "requestedAircraftType",
+        "requested_aircraft_type",
+        "requestedType",
+        "requestedAircraft",
+        "requestedEquipment",
+    ):
+        value = _coerce_str(quote.get(key))
+        if value:
+            return value
+
+    aircraft = quote.get("aircraftObj")
+    if isinstance(aircraft, Mapping):
+        for nested_key in (
+            "requestedType",
+            "requestedAircraftType",
+            "requestedEquipment",
+            "requested",
+        ):
+            value = _coerce_str(aircraft.get(nested_key))
+            if value:
+                return value
+
+    planning_sources: List[str] = []
+    for key in ("planningNotes", "planningNote", "notes"):
+        text = _coerce_str(quote.get(key))
+        if text:
+            planning_sources.append(text)
+
+    legs = quote.get("legs")
+    if isinstance(legs, Sequence):
+        for leg in legs:
+            if not isinstance(leg, Mapping):
+                continue
+            text = _coerce_str(leg.get("planningNotes") or leg.get("planningNote"))
+            if text:
+                planning_sources.append(text)
+
+    for note in planning_sources:
+        requested = extract_requested_aircraft_from_note(note)
+        if requested:
+            return requested
+    return None
+
+
+def _build_requested_type_issue(quote: Mapping[str, Any], aircraft_type: str) -> Optional[str]:
+    requested = _extract_requested_aircraft_type(quote)
+    if not requested or not aircraft_type:
+        return None
+    if _labels_match(requested, aircraft_type):
+        return None
+    return (
+        f"Requested aircraft type '{requested}' does not match quoted aircraft '{aircraft_type}'."
+    )
+
+
 def run_feasibility_phase1(request: FeasibilityRequest) -> FullFeasibilityResult:
     quote = request.get("quote")
     if not isinstance(quote, Mapping):
@@ -290,6 +429,13 @@ def run_feasibility_phase1(request: FeasibilityRequest) -> FullFeasibilityResult
     flight_category = _determine_flight_category(day["legs"], airport_metadata)
     overall_status = _determine_overall_status(leg_results, duty_result)
     issues = _collect_issues(day, leg_results, duty_result)
+    planning_note_issues, planning_note_confirmations = _collect_planning_note_feedback(day)
+    validation_checks = list(planning_note_confirmations) + list(planning_note_issues)
+    requested_issue = _build_requested_type_issue(quote, day.get("aircraft_type", ""))
+    if requested_issue:
+        validation_checks.append(requested_issue)
+        issues.append(requested_issue)
+    issues.extend(planning_note_issues)
     summary = _build_summary(day, leg_results, duty_result)
 
     return FullFeasibilityResult(
@@ -301,6 +447,7 @@ def run_feasibility_phase1(request: FeasibilityRequest) -> FullFeasibilityResult
         legs=[result.as_dict() for result in leg_results],
         duty=duty_result,
         overall_status=overall_status,
+        validation_checks=validation_checks,
         issues=issues,
         summary=summary,
     )
