@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+import re
 import os
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, cast
 
@@ -834,12 +835,19 @@ def _render_leg_side(label: str, side: Mapping[str, Any]) -> None:
 
     if planned_time_local:
         try:
-            parsed_dt = safe_parse_dt(planned_time_local)
+            tz_abbrev: Optional[str] = None
+            dt_source = planned_time_local.strip()
+            tz_match = re.match(r"^(.*?)(?:\s+([A-Za-z]{2,5}))?$", dt_source)
+            if tz_match:
+                dt_source = tz_match.group(1).strip()
+                tz_abbrev = tz_match.group(2)
+
+            parsed_dt = safe_parse_dt(dt_source)
             weekday = parsed_dt.strftime("%A")
             month = parsed_dt.strftime("%B")
             day = parsed_dt.day
             year = parsed_dt.year
-            tz_abbrev = parsed_dt.strftime("%Z")
+            tz_abbrev = tz_abbrev or parsed_dt.strftime("%Z") or "UTC"
 
             def _ordinal(n: int) -> str:
                 if 10 <= n % 100 <= 20:
