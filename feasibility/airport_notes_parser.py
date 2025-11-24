@@ -159,7 +159,7 @@ CLOSED_BETWEEN_RE = re.compile(r"closed between\s*(\d{3,4})[-–](\d{3,4})")
 RUNWAY_NUM_RE = re.compile(r"rwy\s*(\d{2}[lrc]?)", re.IGNORECASE)
 ACFT_LIMIT_RE = re.compile(r"(embraer|cj2|cj3|legacy|challenger|global)", re.IGNORECASE)
 
-HOURS_RE = re.compile(r"(\d{3,4})\s*[-–]\s*(\d{3,4})")
+HOURS_RE = re.compile(r"(\d{1,2}:?\d{2})\s*[a-z]{0,3}\s*[-–]\s*(\d{1,2}:?\d{2})", re.IGNORECASE)
 PRIOR_HOURS_RE = re.compile(r"(\d+)\s*(?:hours|hrs)\s*(?:notice|prior)")
 PRIOR_DAYS_RE = re.compile(r"(\d+)\s*(?:days?)\s*(?:notice|prior)")
 LOCATION_RE = re.compile(
@@ -673,11 +673,30 @@ DAY_KEYWORDS = (
 
 
 def _detect_days(lower: str) -> list[str]:
-    days: list[str] = []
+    days_found: set[str] = set()
+
+    day_order = [token for token, _ in DAY_KEYWORDS]
+    label_lookup = {token: label for token, label in DAY_KEYWORDS}
+
+    for match in re.finditer(r"(mon|tue|wed|thu|fri|sat|sun)\s*[-–]\s*(mon|tue|wed|thu|fri|sat|sun)", lower):
+        start_token, end_token = match.groups()
+        try:
+            start_idx = day_order.index(start_token)
+            end_idx = day_order.index(end_token)
+        except ValueError:
+            continue
+
+        if start_idx <= end_idx:
+            span = day_order[start_idx : end_idx + 1]
+        else:
+            span = day_order[start_idx:] + day_order[: end_idx + 1]
+        days_found.update(label_lookup[day] for day in span)
+
     for token, label in DAY_KEYWORDS:
-        if token in lower:
-            days.append(label)
-    return days
+        if re.search(rf"\b{token}\b", lower):
+            days_found.add(label)
+
+    return [label for _, label in DAY_KEYWORDS if label in days_found]
 
 
 def _is_plausible_time_range_value(value: str) -> bool:
@@ -721,7 +740,11 @@ def parse_customs_notes(notes: Sequence[str]) -> ParsedCustoms:
         elif "aoe" in lower:
             parsed["aoe_type"] = parsed["aoe_type"] or "AOE"
             parsed["aoe_notes"].append(text)
-        if "24/7" in lower or "24 hrs" in lower or "24hours" in lower or "24 hours" in lower:
+        mentions_24_7 = "24/7" in lower or "24 hrs" in lower or "24hours" in lower or "24 hours" in lower
+        references_other_airport = any(
+            phrase in lower for phrase in ("another airport", "other airport", "alternate airport")
+        )
+        if mentions_24_7 and not references_other_airport:
             parsed["customs_hours"].append({"start": "0000", "end": "2400", "days": ["Daily"]})
         if "canpass" in lower:
             if "only" in lower or "canpass arrival" in lower or "arrival by canpass" in lower:
@@ -770,10 +793,18 @@ def parse_customs_notes(notes: Sequence[str]) -> ParsedCustoms:
             parsed["customs_afterhours_available"] = True
             if primary == "afterhours":
                 parsed["customs_afterhours_requirements"].append(text)
+        notice_applies_after_hours = mentions_after_hours or "outside these hours" in lower
+
         if match := re.search(PRIOR_HOURS_RE, lower):
-            parsed["customs_prior_notice_hours"] = int(match.group(1))
+            if notice_applies_after_hours:
+                parsed["customs_afterhours_requirements"].append(text)
+            else:
+                parsed["customs_prior_notice_hours"] = int(match.group(1))
         if match := re.search(PRIOR_DAYS_RE, lower):
-            parsed["customs_prior_notice_days"] = int(match.group(1))
+            if notice_applies_after_hours:
+                parsed["customs_afterhours_requirements"].append(text)
+            else:
+                parsed["customs_prior_notice_days"] = int(match.group(1))
         if _is_customs_contact_instruction(text):
             parsed["customs_contact_required"] = True
             if primary == "contact":

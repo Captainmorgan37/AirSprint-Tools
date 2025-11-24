@@ -858,6 +858,8 @@ def evaluate_suitability(
         if is_explicit_deice_note(text_body):
             continue
         body = text_body.lower()
+        if "customs" in body:
+            continue
         if any(keyword in body for keyword in closure_fail_keywords):
             if has_partial_closure:
                 closure_caution_found = True
@@ -1373,9 +1375,12 @@ def evaluate_customs(
             issues.append("Afterhours customs available; verify call-out requirements.")
             issues.extend(parsed["customs_afterhours_requirements"])
         if parsed.get("aoe_type") == "AOE/15":
-            status = _combine_status(status, "CAUTION")
-            issues.append("Airport designated AOE/15; operations outside posted hours may be unavailable.")
-            issues.extend(parsed.get("aoe_notes") or [])
+            if hours_result in (False, None):
+                status = _combine_status(status, "CAUTION")
+                issues.append(
+                    "Airport designated AOE/15; operations outside posted hours may be unavailable."
+                )
+                issues.extend(parsed.get("aoe_notes") or [])
         if parsed.get("aoe_type") == "AOE/CANPASS":
             status = _combine_status(status, "FAIL")
             summary = "AOE/CANPASS arrival"

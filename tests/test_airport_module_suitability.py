@@ -148,3 +148,26 @@ def test_cylw_operational_closure_reminder_is_ignored_despite_punctuation() -> N
     assert result.status == "PASS"
     assert result.summary == "Fl3xx category A approved"
     assert result.issues == []
+
+
+def test_customs_closure_note_not_treated_as_operational_closure() -> None:
+    profile = _default_profile()
+    leg = {"aircraft_category": "SUPER_MIDSIZE_JET"}
+    notes = [
+        {
+            "note": (
+                "CUSTOMS: Available - AOE/15. Customs closed on federal holidays; after hours may be requested."
+            )
+        }
+    ]
+
+    result = evaluate_suitability(
+        airport_profile=profile,
+        leg=leg,
+        operational_notes=notes,
+        side="arrival",
+    )
+
+    assert result.status == "PASS"
+    assert result.summary == "Fl3xx category A approved"
+    assert result.issues == []
