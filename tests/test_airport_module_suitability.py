@@ -58,6 +58,31 @@ def test_operational_closed_keyword_still_fails() -> None:
     ]
 
 
+def test_closed_between_hours_does_not_fail() -> None:
+    profile = _default_profile()
+    leg = {"aircraft_category": "SUPER_MIDSIZE_JET"}
+    notes = [
+        {
+            "note": (
+                "DEICE/ANTI-ICE:\n\nExecutive Aviation\n• Type 1 (UCARXL 54) and 4 (UCAR INDULGENCE) available\n"
+                "• PH: Site office is 604-302-4929, Supervisor Duncan Lundy cell 778-548-3842\n"
+                "• Ice man freq: 129.20 \n• Hours of operation: Closed between 0100-0300. After hours service available w/ 24h notice"
+            )
+        }
+    ]
+
+    result = evaluate_suitability(
+        airport_profile=profile,
+        leg=leg,
+        operational_notes=notes,
+        side="arrival",
+    )
+
+    assert result.status == "PASS"
+    assert result.summary == "Fl3xx category A approved"
+    assert result.issues == []
+
+
 def test_cylw_operational_closure_reminder_is_ignored() -> None:
     profile = AirportProfile(
         icao="CYLW",

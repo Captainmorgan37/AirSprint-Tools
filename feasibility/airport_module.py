@@ -25,6 +25,7 @@ from flight_leg_utils import load_airport_metadata_lookup, safe_parse_dt
 from .airport_notes_parser import (
     ParsedCustoms,
     ParsedRestrictions,
+    is_explicit_deice_note,
     note_text,
     parse_customs_notes,
     parse_operational_restrictions,
@@ -726,7 +727,13 @@ def evaluate_airport_side(
             text = note_text(entry)
             raw_note_entries.append(text or entry)
 
-    suitability = evaluate_suitability(airport_profile, leg, operational_notes, side)
+    suitability = evaluate_suitability(
+        airport_profile,
+        leg,
+        operational_notes,
+        side,
+        parsed_restrictions=parsed_operational_restrictions,
+    )
     deice = evaluate_deice(
         deice_profile,
         operational_notes,
@@ -791,6 +798,8 @@ def evaluate_suitability(
     leg: LegContext,
     operational_notes: Sequence[Mapping[str, Any]],
     side: str,
+    *,
+    parsed_restrictions: ParsedRestrictions | None = None,
 ) -> CategoryResult:
     issues: List[str] = []
     status: CategoryStatus = "PASS"
@@ -832,13 +841,34 @@ def evaluate_suitability(
             f"Runway margin only {longest - required_length:,} ft; monitor performance numbers."
         )
 
+    if parsed_restrictions is None:
+        operational_texts = [note_text(note) for note in operational_notes]
+        parsed_restrictions = parse_operational_restrictions(operational_texts)
+
     closure_fail_keywords = ("closed", "no ga", "curfew")
     closure_caution_keywords = ("closure",)
     icao = (airport_profile.icao or "").strip().upper()
     closure_caution_found = False
+    has_partial_closure = bool(
+        (parsed_restrictions or {}).get("hours_of_operation")
+        or (parsed_restrictions or {}).get("curfew")
+    )
     for note in operational_notes:
-        body = " ".join(str(note.get(key) or "") for key in ("note", "title", "body")).lower()
+        text_body = " ".join(str(note.get(key) or "") for key in ("note", "title", "body"))
+        if is_explicit_deice_note(text_body):
+            continue
+        body = text_body.lower()
         if any(keyword in body for keyword in closure_fail_keywords):
+            if has_partial_closure:
+                closure_caution_found = True
+                status = _combine_status(status, "CAUTION")
+                if not summary_locked:
+                    summary = "Operational closure noted"
+                issues.append(
+                    "Operational notes mention closures; review Fl3xx note for timing before dispatch."
+                )
+                continue
+
             status = "FAIL"
             if not summary_locked:
                 summary = "Operational closure in effect"
