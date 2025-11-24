@@ -149,3 +149,28 @@ def test_aoe_with_canpass_notes_passes_within_hours() -> None:
 
     assert result.status == "PASS"
     assert "CANPASS arrival" not in (result.summary or "")
+
+
+def test_customs_hours_ignore_phone_numbers() -> None:
+    note = (
+        "CUSTOMS:\n"
+        "Available\n"
+        "Location: Proceed to the CBP ramp unless otherwise directed\n"
+        "PH: (813) 676-4590\n"
+        "HRS: 0600 - 2200, 7 days a week\n"
+        "Call Sector if unable to reach CBP directly"
+    )
+
+    parsed = parse_customs_notes([note])
+
+    result = evaluate_customs(
+        CustomsProfile(icao="KTPA", service_type="US", notes=None),
+        _build_leg("2024-01-01T12:00:00Z"),
+        "ARR",
+        [],
+        parsed_customs=parsed,
+        tz_name="America/New_York",
+    )
+
+    assert any(hours.get("start") == "0600" for hours in parsed["customs_hours"])
+    assert "676-4590" not in (result.summary or "")
