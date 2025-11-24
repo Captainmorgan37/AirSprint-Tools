@@ -449,6 +449,8 @@ def parse_operational_restrictions(notes: Sequence[str]) -> ParsedRestrictions:
             continue
         parsed["raw_notes"].append(text)
         categories = _classify_operational_note(text)
+        if CLOSED_BETWEEN_RE.search(lower):
+            categories.add("night")
         primary = _select_primary_category(categories)
         if "contaminated" in lower:
             parsed["surface_contamination"] = True
@@ -784,47 +786,59 @@ def summarize_operational_notes(
     status: CategoryStatus = "PASS"
     issues: list[str] = []
 
-    def add_issue(message: str) -> None:
-        """Record an informational note without escalating severity."""
+    def add_issue(message: str, *, severity: CategoryStatus = "INFO") -> None:
+        nonlocal status
 
         issues.append(message)
+        status = _combine_status(status, severity)
 
     restrictions = parsed_restrictions or _empty_parsed_restrictions()
+    raw_notes = [note.lower() for note in restrictions.get("raw_notes", [])]
 
-    # Slot/PPR requirements should be surfaced exclusively in the Slot/PPR category
-    # to avoid duplicated cautions in the "Other Operational Notes" section.
-    if restrictions["fuel_available"] is False:
-        add_issue("Fuel unavailable per operational notes")
-    if restrictions["night_ops_allowed"] is False and not restrictions["hour_notes"]:
-        add_issue("Night operations prohibited")
+    for entry in restrictions["hours_of_operation"]:
+        start = entry.get("closed_from") or entry.get("start")
+        end = entry.get("closed_to") or entry.get("end")
+        if start or end:
+            window = f"{start}-{end}" if start and end else start or end
+            add_issue(
+                f"Hours of Operation - Airport closed between {window}",
+                severity="CAUTION",
+            )
+
     if restrictions["curfew"]:
-        add_issue("Curfew in effect per operational notes")
-    if restrictions["surface_contamination"]:
-        add_issue("Surface contamination reported in operational notes")
-    for runway_note in restrictions["runway_limitations"]:
-        add_issue(f"Runway restriction: {runway_note}")
-    for acft_note in restrictions["aircraft_type_limits"]:
-        add_issue(f"Aircraft limit: {acft_note}")
+        curfew = restrictions["curfew"]
+        window: str | None = None
+        if isinstance(curfew, Mapping):
+            start = curfew.get("from") or curfew.get("start") or curfew.get("closed_from")
+            end = curfew.get("to") or curfew.get("end") or curfew.get("closed_to")
+            if start or end:
+                window = f"{start}-{end}" if start and end else start or end
+        detail = f"Curfew in effect{f' ({window})' if window else ''}"
+        add_issue(detail, severity="CAUTION")
 
-    if restrictions["winter_sensitivity"] and status == "PASS":
-        add_issue("Winter operations sensitivity reported")
+    for weather_note in restrictions["weather_limitations"]:
+        lower = weather_note.lower()
+        if "good weather" in lower or "vfr" in lower:
+            add_issue("Good Weather (VFR) only per operational notes", severity="CAUTION")
 
-    if restrictions["weather_limitations"]:
-        for weather_note in restrictions["weather_limitations"]:
-            add_issue(f"Weather limitation: {weather_note}")
+    if any("wet runway" in note for note in raw_notes):
+        add_issue("Wet runway may limit operations", severity="INFO")
 
-    for note in restrictions["generic_restrictions"]:
-        if _is_non_restrictive_generic(note):
-            add_issue(f"Operational note: {note}")
-        else:
-            add_issue(f"Operational restriction: {note}")
+    if any("duty pilot approval required" in note for note in raw_notes):
+        add_issue("Duty Pilot approval required", severity="INFO")
 
-    summary = "Operational notes available for context"
-    if not issues and has_raw_notes:
-        issues.append(summary)
+    if any("limited winter maintenance" in note for note in raw_notes):
+        add_issue("Limited winter maintenance", severity="INFO")
+
+    if restrictions["surface_contamination"] or any("runway contamination" in note for note in raw_notes):
+        add_issue("Runway contamination (snow/ice) may limit operations", severity="INFO")
+
+    if any("pic" in note and "duty pilot" in note for note in raw_notes):
+        add_issue("PIC to contact Duty Pilot prior to operation", severity="INFO")
+
+    summary = "Operational notes present (no tracked flags)" if has_raw_notes else "No operational notes"
     if issues:
-        status = "INFO"
-        summary = "Operational notes available for context"
+        summary = "Operational notes require review"
 
     return CategoryResult(status=status, summary=summary, issues=issues)
 

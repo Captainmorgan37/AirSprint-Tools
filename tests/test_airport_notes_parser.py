@@ -159,7 +159,7 @@ def test_weather_limitation_included_in_summary() -> None:
     summary = summarize_operational_notes("MYAM", [{"note": note}], parsed)
 
     assert summary.status == "CAUTION"
-    assert any("Weather limitation" in issue for issue in summary.issues)
+    assert any("Good Weather" in issue for issue in summary.issues)
 
 
 def test_non_restrictive_generic_notes_do_not_trigger_caution() -> None:
@@ -170,9 +170,9 @@ def test_non_restrictive_generic_notes_do_not_trigger_caution() -> None:
 
     summary = summarize_operational_notes("KCHA", notes)
 
-    assert summary.status == "INFO"
-    assert summary.summary.startswith("Operational notes available")
-    assert all(issue.startswith("Operational note:") for issue in summary.issues)
+    assert summary.status == "PASS"
+    assert summary.summary.startswith("Operational notes present")
+    assert summary.issues == []
 
 
 def test_precision_spelling_not_treated_as_winter_sensitivity() -> None:
@@ -206,7 +206,29 @@ def test_fbo_information_summarized_as_informational() -> None:
 
     summary = summarize_operational_notes("KSUA", notes)
 
+    assert summary.status == "PASS"
+    assert summary.summary.startswith("Operational notes present")
+    assert summary.issues == []
+    assert not summary.summary.startswith("Operational notes available")
+
+
+def test_hours_of_operation_closure_triggers_caution() -> None:
+    note = "Hours of Operation - Airport closed between 2300-0700L."
+
+    parsed = parse_operational_restrictions([note])
+
+    summary = summarize_operational_notes("TEST", [{"note": note}], parsed)
+
+    assert summary.status == "CAUTION"
+    assert any("Hours of Operation" in issue for issue in summary.issues)
+
+
+def test_wet_runway_is_informational() -> None:
+    note = "Wet Runway may limit operations."
+
+    parsed = parse_operational_restrictions([note])
+
+    summary = summarize_operational_notes("TEST", [{"note": note}], parsed)
+
     assert summary.status == "INFO"
-    assert summary.summary.startswith("Operational notes available")
-    assert all(issue.startswith("Operational note:") for issue in summary.issues)
-    assert not any("Winter operations sensitivity" in issue for issue in summary.issues)
+    assert "Wet runway" in summary.issues[0]
