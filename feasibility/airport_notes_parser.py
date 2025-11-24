@@ -459,11 +459,14 @@ def parse_operational_restrictions(notes: Sequence[str]) -> ParsedRestrictions:
             continue
         parsed["raw_notes"].append(text)
         categories = _classify_operational_note(text)
+        contains_winter = "winter" in categories
         explicit_deice_only = "deice" in categories and is_explicit_deice_note(text)
         if not explicit_deice_only and CLOSED_BETWEEN_RE.search(lower):
             categories.add("night")
         if explicit_deice_only:
             categories = {"deice"}
+            if contains_winter:
+                parsed["winter_sensitivity"] = True
         primary = _select_primary_category(categories)
         if "contaminated" in lower:
             parsed["surface_contamination"] = True
@@ -870,8 +873,8 @@ def summarize_operational_notes(
     if any("pic" in note and "duty pilot" in note for note in raw_notes):
         add_issue("PIC to contact Duty Pilot prior to operation", severity="INFO")
 
-    tfr_keywords = ("tfr", "temporary flight restriction")
-    if any(keyword in note and "no tfr" not in note for keyword in tfr_keywords for note in raw_notes):
+    tfr_pattern = re.compile(r"\b(tfrs?|temporary flight restriction)\b")
+    if any(tfr_pattern.search(note) and "no tfr" not in note for note in raw_notes):
         add_issue("Active Temporary Flight Restriction (TFR) noted", severity="CAUTION")
 
     summary = "Operational notes present (no tracked flags)" if has_raw_notes else "No operational notes"
