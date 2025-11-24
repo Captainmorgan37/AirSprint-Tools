@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+import os
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, cast
 
 import pytz
@@ -32,6 +33,10 @@ from feasibility.quote_lookup import (
 from Home import configure_page, password_gate, render_sidebar
 from feasibility.models import FullFeasibilityResult
 from reserve_calendar_checker import TARGET_DATES
+
+_MAPBOX_TOKEN = st.secrets.get("mapbox_token")  # type: ignore[attr-defined]
+if isinstance(_MAPBOX_TOKEN, str) and _MAPBOX_TOKEN.strip():
+    os.environ["MAPBOX_API_KEY"] = _MAPBOX_TOKEN.strip()
 
 configure_page(page_title="Feasibility Engine (Dev)")
 password_gate()
