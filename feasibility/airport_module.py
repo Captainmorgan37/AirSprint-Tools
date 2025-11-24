@@ -931,7 +931,7 @@ def evaluate_deice(
         )
 
     if deice_profile.deice_available is False:
-        status = "CAUTION"
+        status = "INFO"
         summary = "Deice unavailable"
         issues.append("Deice program indicates no deice at this airport.")
     elif deice_profile.deice_available is None:
@@ -942,10 +942,10 @@ def evaluate_deice(
     restriction_notes: Sequence[str] = []
     if restrictions:
         if restrictions["deice_unavailable"]:
-            status = _combine_status(status, "CAUTION")
+            status = _combine_status(status, "INFO")
             summary = "Operational note: deice unavailable"
         elif restrictions["deice_limited"]:
-            status = _combine_status(status, "CAUTION")
+            status = _combine_status(status, "INFO")
             summary = "Operational note: deice limited"
         if restrictions["winter_sensitivity"]:
             issues.append("Operational notes highlight winter sensitivity.")
@@ -958,7 +958,7 @@ def evaluate_deice(
             for note in operational_notes
         ).lower()
         if "deice" in note_text and "out" in note_text:
-            status = _combine_status(status, "CAUTION")
+            status = _combine_status(status, "INFO")
             summary = "Operational note: deice impacted"
             issues.append("Operational notes reference deice outages; confirm support.")
 
