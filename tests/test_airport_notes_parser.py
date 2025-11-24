@@ -232,3 +232,19 @@ def test_wet_runway_is_informational() -> None:
 
     assert summary.status == "INFO"
     assert "Wet runway" in summary.issues[0]
+
+
+def test_tfr_not_triggered_by_email_substring() -> None:
+    notes = [
+        {
+            "note": (
+                "FBO INFORMATION [10MAY24]:  Atlantic Aviation •  PH: 412-472-6700 • "
+                "Email: pitfrontdesk@atlanticaviation.com • Hours of operation: 24/7"
+            )
+        }
+    ]
+
+    summary = summarize_operational_notes("KPIT", notes)
+
+    assert summary.status == "PASS"
+    assert all("TFR" not in issue for issue in summary.issues)
