@@ -420,10 +420,6 @@ def _render_customs_details(
         "Crew Requirements",
         _collect_entries(parsed.get("crew_requirements"), explode=True),
     )
-    _render_bullet_section(
-        "Additional Customs Notes",
-        _collect_entries(parsed.get("general_customs_notes"), explode=True),
-    )
 
 
 def _render_operational_restrictions(parsed: Mapping[str, Any] | None) -> None:
