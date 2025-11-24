@@ -232,3 +232,27 @@ def test_afterhours_notice_does_not_trigger_caution_within_hours() -> None:
 
     assert result.status == "PASS"
     assert not any("prior notice" in issue for issue in result.issues)
+
+
+def test_to_separated_hours_are_parsed_before_inline_warning() -> None:
+    note = (
+        "CBSA free of charge service hours at Saguenay-Bagotville airport (CYBG) "
+        "are Monday to Friday 8h00 to 16h30 local time, except holidays. "
+        "Clearances between 1600-1630 can be more difficult to obtain as they "
+        "want to be able to be fully cleared and shutdown by 1630."
+    )
+
+    parsed = parse_customs_notes([note])
+
+    result = evaluate_customs(
+        CustomsProfile(icao="CYBG", service_type="AOE", notes=None),
+        _build_leg("2024-01-02T17:00:00Z"),
+        "ARR",
+        [],
+        parsed_customs=parsed,
+        tz_name="America/Toronto",
+    )
+
+    assert parsed["customs_hours"][0]["start"].startswith("8")
+    assert parsed["customs_hours"][0]["end"].startswith("16")
+    assert result.status == "PASS"
