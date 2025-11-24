@@ -1024,6 +1024,20 @@ def _render_full_quote_result(result: FullFeasibilityResult) -> None:
             formatted = summary.strip().replace("\n", "  \n")
             st.markdown(formatted)
 
+        validation_issues = [
+            str(issue)
+            for issue in result.get("validation_checks", [])
+            if isinstance(issue, str) and issue.strip()
+        ]
+        st.markdown("**Validation Checks**")
+        if validation_issues:
+            for entry in validation_issues:
+                st.markdown(f"- {entry}")
+        else:
+            st.caption(
+                "Planning note routes and requested aircraft type align with the quoted legs."
+            )
+
         operational_note_flags = _collect_operational_note_highlights(legs)
         if operational_note_flags:
             st.markdown("**Operational Notes Flags**")

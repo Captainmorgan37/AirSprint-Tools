@@ -5,7 +5,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Sequence, Tuple
 
-from fl3xx_api import Fl3xxApiConfig, fetch_quote_details
+from fl3xx_api import Fl3xxApiConfig, fetch_leg_details, fetch_quote_details
+
+from .planning_notes import extract_planning_note_text
 
 
 class QuoteLookupError(RuntimeError):
@@ -136,6 +138,7 @@ def _normalize_quote_leg(
     *,
     quote_id: Optional[str],
     index: int,
+    planning_notes: Optional[Mapping[str, str]] = None,
 ) -> Dict[str, Any]:
     flight: Dict[str, Any] = {}
     for key, value in leg.items():
@@ -239,6 +242,11 @@ def _normalize_quote_leg(
         flight.setdefault("flightId", synthetic_id)
         flight.setdefault("id", synthetic_id)
 
+    if planning_notes and leg_id and not flight.get("planningNotes"):
+        note = planning_notes.get(leg_id)
+        if note:
+            flight["planningNotes"] = note
+
     return flight
 
 
@@ -270,6 +278,7 @@ def build_quote_leg_options(
     quote_payload: Mapping[str, Any],
     *,
     quote_id: Optional[str] = None,
+    planning_notes: Optional[Mapping[str, str]] = None,
 ) -> List[Dict[str, Any]]:
     legs_raw = quote_payload.get("legs")
     if not isinstance(legs_raw, Sequence):
@@ -282,7 +291,13 @@ def build_quote_leg_options(
         status = _coerce_upper(leg.get("status"))
         if status in {"CANCELED", "CANCELLED"}:
             continue
-        flight = _normalize_quote_leg(quote_payload, leg, quote_id=quote_id, index=index)
+        flight = _normalize_quote_leg(
+            quote_payload,
+            leg,
+            quote_id=quote_id,
+            index=index,
+            planning_notes=planning_notes,
+        )
         identifier = _coalesce_str(leg.get("id"), leg.get("legId")) or f"LEG-{index + 1}"
         label = _format_leg_label(leg, index)
         options.append(
@@ -307,4 +322,28 @@ def fetch_quote_leg_options(
     session: Optional[Any] = None,
 ) -> Tuple[List[Dict[str, Any]], Mapping[str, Any]]:
     payload = fetch_quote_payload(config, quote_id, session=session)
-    return build_quote_leg_options(payload, quote_id=quote_id), payload
+    note_index: Dict[str, str] = {}
+    try:
+        details = fetch_leg_details(config, quote_id, session=session)
+    except Exception:
+        details = None
+    if isinstance(details, Mapping):
+        candidates = [details]
+        data = details.get("data")
+        if isinstance(data, list):
+            candidates.extend(item for item in data if isinstance(item, Mapping))
+    elif isinstance(details, Sequence):
+        candidates = [item for item in details if isinstance(item, Mapping)]
+    else:
+        candidates = []
+
+    for detail in candidates:
+        leg_id = _coalesce_str(detail.get("id"), detail.get("legId"), detail.get("flightId"))
+        note_text = extract_planning_note_text(detail)
+        if leg_id and note_text:
+            note_index[leg_id] = note_text
+
+    return (
+        build_quote_leg_options(payload, quote_id=quote_id, planning_notes=note_index or None),
+        payload,
+    )
