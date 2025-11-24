@@ -159,7 +159,10 @@ CLOSED_BETWEEN_RE = re.compile(r"closed between\s*(\d{3,4})[-–](\d{3,4})")
 RUNWAY_NUM_RE = re.compile(r"rwy\s*(\d{2}[lrc]?)", re.IGNORECASE)
 ACFT_LIMIT_RE = re.compile(r"(embraer|cj2|cj3|legacy|challenger|global)", re.IGNORECASE)
 
-HOURS_RE = re.compile(r"(\d{1,2}:?\d{2})\s*[a-z]{0,3}\s*[-–]\s*(\d{1,2}:?\d{2})", re.IGNORECASE)
+HOURS_RE = re.compile(
+    r"(\d{1,2}[:h]?\d{2})\s*(?:[a-z]{0,3}\s*[-–]\s*|\s+to\s+)(\d{1,2}[:h]?\d{2})",
+    re.IGNORECASE,
+)
 PRIOR_HOURS_RE = re.compile(r"(\d+)\s*(?:hours|hrs)\s*(?:notice|prior)")
 PRIOR_DAYS_RE = re.compile(r"(\d+)\s*(?:days?)\s*(?:notice|prior)")
 LOCATION_RE = re.compile(
