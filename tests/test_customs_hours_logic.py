@@ -105,8 +105,8 @@ def test_aoe15_triggers_caution_notice() -> None:
         tz_name="America/Edmonton",
     )
 
-    assert result.status == "CAUTION"
-    assert any("AOE/15" in issue for issue in result.issues)
+    assert result.status == "PASS"
+    assert all("AOE/15" not in issue for issue in result.issues)
 
 
 def test_aoe_canpass_requires_canpass_for_clearance() -> None:
@@ -125,6 +125,23 @@ def test_aoe_canpass_requires_canpass_for_clearance() -> None:
     assert result.status == "FAIL"
     assert "AOE/CANPASS" in result.summary
     assert any("all passengers must hold CANPASS" in issue for issue in result.issues)
+
+
+def test_aoe15_outside_hours_triggers_caution() -> None:
+    note = "Customs hours 0800-1700 Daily. Airport is AOE/15."
+    parsed = parse_customs_notes([note])
+
+    result = evaluate_customs(
+        CustomsProfile(icao="CYEG", service_type="AOE", notes=None),
+        _build_leg("2024-01-02T02:00:00Z"),
+        "ARR",
+        [],
+        parsed_customs=parsed,
+        tz_name="America/Edmonton",
+    )
+
+    assert result.status == "CAUTION"
+    assert any("AOE/15" in issue for issue in result.issues)
 
 
 def test_aoe_with_canpass_notes_passes_within_hours() -> None:
@@ -192,3 +209,26 @@ def test_24_7_reference_to_other_airport_not_treated_as_hours() -> None:
         entry.get("start") == "0000" and entry.get("end") == "2400"
         for entry in parsed["customs_hours"]
     )
+
+
+def test_afterhours_notice_does_not_trigger_caution_within_hours() -> None:
+    note = (
+        "CUSTOMS: Available - AOE/15\n"
+        "Hours of operation: 08:00L – 22:00L Mon-Fri, \n"
+        "Customs outside these hours must be arranged 72hrs business hours in advance by contacting the FBO. \n"
+        "After hours services are NOT guaranteed."
+    )
+
+    parsed = parse_customs_notes([note])
+
+    result = evaluate_customs(
+        CustomsProfile(icao="CYHU", service_type="AOE/15", notes=None),
+        _build_leg("2025-11-25T15:08:00Z"),
+        "ARR",
+        [],
+        parsed_customs=parsed,
+        tz_name="America/Toronto",
+    )
+
+    assert result.status == "PASS"
+    assert not any("prior notice" in issue for issue in result.issues)

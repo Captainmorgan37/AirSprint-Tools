@@ -673,11 +673,30 @@ DAY_KEYWORDS = (
 
 
 def _detect_days(lower: str) -> list[str]:
-    days: list[str] = []
+    days_found: set[str] = set()
+
+    day_order = [token for token, _ in DAY_KEYWORDS]
+    label_lookup = {token: label for token, label in DAY_KEYWORDS}
+
+    for match in re.finditer(r"(mon|tue|wed|thu|fri|sat|sun)\s*[-–]\s*(mon|tue|wed|thu|fri|sat|sun)", lower):
+        start_token, end_token = match.groups()
+        try:
+            start_idx = day_order.index(start_token)
+            end_idx = day_order.index(end_token)
+        except ValueError:
+            continue
+
+        if start_idx <= end_idx:
+            span = day_order[start_idx : end_idx + 1]
+        else:
+            span = day_order[start_idx:] + day_order[: end_idx + 1]
+        days_found.update(label_lookup[day] for day in span)
+
     for token, label in DAY_KEYWORDS:
-        if token in lower:
-            days.append(label)
-    return days
+        if re.search(rf"\b{token}\b", lower):
+            days_found.add(label)
+
+    return [label for _, label in DAY_KEYWORDS if label in days_found]
 
 
 def _is_plausible_time_range_value(value: str) -> bool:
@@ -774,10 +793,18 @@ def parse_customs_notes(notes: Sequence[str]) -> ParsedCustoms:
             parsed["customs_afterhours_available"] = True
             if primary == "afterhours":
                 parsed["customs_afterhours_requirements"].append(text)
+        notice_applies_after_hours = mentions_after_hours or "outside these hours" in lower
+
         if match := re.search(PRIOR_HOURS_RE, lower):
-            parsed["customs_prior_notice_hours"] = int(match.group(1))
+            if notice_applies_after_hours:
+                parsed["customs_afterhours_requirements"].append(text)
+            else:
+                parsed["customs_prior_notice_hours"] = int(match.group(1))
         if match := re.search(PRIOR_DAYS_RE, lower):
-            parsed["customs_prior_notice_days"] = int(match.group(1))
+            if notice_applies_after_hours:
+                parsed["customs_afterhours_requirements"].append(text)
+            else:
+                parsed["customs_prior_notice_days"] = int(match.group(1))
         if _is_customs_contact_instruction(text):
             parsed["customs_contact_required"] = True
             if primary == "contact":
