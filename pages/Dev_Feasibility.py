@@ -1,17 +1,20 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, cast
+import os
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, cast
 
 import pytz
 
 import pandas as pd
 
 import streamlit as st
+import pydeck as pdk
 
 from flight_leg_utils import (
     FlightDataError,
     build_fl3xx_api_config,
+    load_airport_metadata_lookup,
     load_airport_tz_lookup,
     safe_parse_dt,
 )
@@ -30,6 +33,10 @@ from feasibility.quote_lookup import (
 from Home import configure_page, password_gate, render_sidebar
 from feasibility.models import FullFeasibilityResult
 from reserve_calendar_checker import TARGET_DATES
+
+_MAPBOX_TOKEN = st.secrets.get("mapbox_token")  # type: ignore[attr-defined]
+if isinstance(_MAPBOX_TOKEN, str) and _MAPBOX_TOKEN.strip():
+    os.environ["MAPBOX_API_KEY"] = _MAPBOX_TOKEN.strip()
 
 configure_page(page_title="Feasibility Engine (Dev)")
 password_gate()
@@ -259,6 +266,173 @@ def _run_full_quote_day(quote: Mapping[str, Any]) -> Optional[FullFeasibilityRes
         except Exception as exc:  # pragma: no cover - UI safeguard
             st.exception(exc)
             return None
+
+
+def _lookup_airport_coordinates(
+    icao: str, *, metadata: Mapping[str, Mapping[str, object]]
+) -> Optional[Tuple[float, float]]:
+    record = metadata.get(icao.upper()) if metadata else None
+    if not isinstance(record, Mapping):
+        return None
+
+    try:
+        latitude = float(record.get("lat"))  # type: ignore[arg-type]
+        longitude = float(record.get("lon"))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+    if pd.isna(latitude) or pd.isna(longitude):
+        return None
+
+    return latitude, longitude
+
+
+def _build_route_map_payload(
+    legs: Sequence[Mapping[str, Any]] | Any,
+) -> Optional[Dict[str, Any]]:
+    if not isinstance(legs, Sequence) or isinstance(legs, (str, bytes)) or not legs:
+        return None
+
+    metadata = load_airport_metadata_lookup()
+    if not metadata:
+        return None
+
+    ordered_airports: List[str] = []
+    for leg in legs:
+        if not isinstance(leg, Mapping):
+            continue
+        departure = leg.get("departure", {}) if isinstance(leg, Mapping) else {}
+        arrival = leg.get("arrival", {}) if isinstance(leg, Mapping) else {}
+        dep_code = departure.get("icao") if isinstance(departure, Mapping) else None
+        arr_code = arrival.get("icao") if isinstance(arrival, Mapping) else None
+        if isinstance(dep_code, str) and dep_code.strip():
+            dep_clean = dep_code.strip().upper()
+            if not ordered_airports or ordered_airports[-1] != dep_clean:
+                ordered_airports.append(dep_clean)
+        if isinstance(arr_code, str) and arr_code.strip():
+            arr_clean = arr_code.strip().upper()
+            if not ordered_airports or ordered_airports[-1] != arr_clean:
+                ordered_airports.append(arr_clean)
+
+    coordinates: List[Tuple[float, float]] = []
+    airport_points: List[Dict[str, Any]] = []
+    seen_airports: set[str] = set()
+
+    for index, airport in enumerate(ordered_airports):
+        coords = _lookup_airport_coordinates(airport, metadata=metadata)
+        if not coords:
+            continue
+        lat, lon = coords
+        coordinates.append((lat, lon))
+        if airport in seen_airports:
+            continue
+        seen_airports.add(airport)
+        if index == 0:
+            color = [255, 200, 0]
+        elif index == len(ordered_airports) - 1:
+            color = [0, 200, 255]
+        else:
+            color = [120, 220, 255]
+        airport_points.append({"icao": airport, "lat": lat, "lon": lon, "color": color})
+
+    if len(coordinates) < 2:
+        return None
+
+    lats = [lat for lat, _ in coordinates]
+    lons = [lon for _, lon in coordinates]
+    center = (sum(lats) / len(lats), sum(lons) / len(lons))
+
+    path = [[lon, lat] for lat, lon in coordinates]
+
+    return {"airports": airport_points, "path": path, "center": center}
+
+
+def _estimate_zoom_level(path: Sequence[Sequence[float]]) -> float:
+    if not path:
+        return 3.5
+    lats = [point[1] for point in path]
+    lons = [point[0] for point in path]
+    lat_span = max(lats) - min(lats)
+    lon_span = max(lons) - min(lons)
+    max_span = max(lat_span, lon_span)
+
+    if max_span > 70:
+        return 2.0
+    if max_span > 40:
+        return 2.7
+    if max_span > 20:
+        return 3.2
+    if max_span > 10:
+        return 4.0
+    return 5.0
+
+
+def st_flight_route_map(route_data: Mapping[str, Any], *, height: int = 430) -> None:
+    center = route_data.get("center")
+    path = route_data.get("path")
+    airports = route_data.get("airports")
+    if not (
+        isinstance(center, tuple)
+        and len(center) == 2
+        and isinstance(path, Sequence)
+        and isinstance(airports, Sequence)
+    ):
+        st.caption("Route map unavailable.")
+        return
+
+    latitude, longitude = center
+    zoom = _estimate_zoom_level(path) if isinstance(path, Sequence) else 3.5
+
+    route_layer = pdk.Layer(
+        "PathLayer",
+        [{"path": path, "name": "Route"}],
+        get_path="path",
+        get_color=[0, 180, 255],
+        width_scale=10,
+        width_min_pixels=3,
+    )
+
+    airports_layer = pdk.Layer(
+        "ScatterplotLayer",
+        airports,
+        get_position=["lon", "lat"],
+        get_fill_color="color",
+        get_radius=25000,
+        pickable=True,
+    )
+
+    labels_layer = pdk.Layer(
+        "TextLayer",
+        airports,
+        get_position=["lon", "lat"],
+        get_text="icao",
+        get_color=[245, 245, 245],
+        get_size=18,
+        size_units="pixels",
+        size_min_pixels=14,
+        billboard=True,
+        get_angle=0,
+        get_text_anchor="middle",
+        get_alignment_baseline="top",
+        get_pixel_offset=[0, 16],
+    )
+
+    view_state = pdk.ViewState(
+        latitude=latitude,
+        longitude=longitude,
+        zoom=zoom,
+        bearing=0,
+        pitch=35,
+    )
+
+    deck = pdk.Deck(
+        layers=[route_layer, airports_layer, labels_layer],
+        initial_view_state=view_state,
+        tooltip={"text": "{icao}"},
+        map_style="mapbox://styles/mapbox/dark-v10",
+    )
+
+    st.pydeck_chart(deck, use_container_width=True, height=height)
 
 
 def _format_minutes(total_minutes: Optional[int]) -> str:
@@ -807,37 +981,51 @@ def _render_full_quote_result(result: FullFeasibilityResult) -> None:
     overall_status = result.get("overall_status", "PASS")
     emoji = STATUS_EMOJI.get(overall_status, "")
 
+    route_map_payload = _build_route_map_payload(legs)
+
     st.markdown("---")
-    st.subheader(f"{emoji} Full Quote Day Status: {overall_status}")
-    st.caption(
-        f"{result.get('bookingIdentifier', 'Unknown Quote')} • {len(legs)} leg(s) • {result.get('aircraft_type', 'Unknown Aircraft')}"
-    )
-    flight_category = result.get("flight_category")
-    if flight_category:
-        st.caption(f"Flight Category: {flight_category}")
+    summary_col, map_col = st.columns([1.6, 1])
 
-    summary = result.get("summary")
-    if summary:
-        formatted = summary.strip().replace("\n", "  \n")
-        st.markdown(formatted)
+    with summary_col:
+        st.subheader(f"{emoji} Full Quote Day Status: {overall_status}")
+        st.caption(
+            f"{result.get('bookingIdentifier', 'Unknown Quote')} • {len(legs)} leg(s) • {result.get('aircraft_type', 'Unknown Aircraft')}"
+        )
+        flight_category = result.get("flight_category")
+        if flight_category:
+            st.caption(f"Flight Category: {flight_category}")
 
-    operational_note_flags = _collect_operational_note_highlights(legs)
-    if operational_note_flags:
-        st.markdown("**Operational Notes Flags**")
-        for entry in operational_note_flags:
-            st.markdown(
-                f"{entry['leg_label']} {entry['side_label']} Operational Notes: {entry['summary']}"
+        summary = result.get("summary")
+        if summary:
+            formatted = summary.strip().replace("\n", "  \n")
+            st.markdown(formatted)
+
+        operational_note_flags = _collect_operational_note_highlights(legs)
+        if operational_note_flags:
+            st.markdown("**Operational Notes Flags**")
+            for entry in operational_note_flags:
+                st.markdown(
+                    f"{entry['leg_label']} {entry['side_label']} Operational Notes: {entry['summary']}"
+                )
+                if entry["issue"]:
+                    st.markdown(f" • {entry['issue']}")
+
+        key_issues = _collect_key_issues(result)
+        st.subheader("Key Issues")
+        if key_issues:
+            for issue in key_issues:
+                st.markdown(f"- {issue}")
+        else:
+            st.caption(
+                "No customs, day-ops, deice, duty, or permit cautions detected."
             )
-            if entry["issue"]:
-                st.markdown(f" • {entry['issue']}")
 
-    key_issues = _collect_key_issues(result)
-    st.subheader("Key Issues")
-    if key_issues:
-        for issue in key_issues:
-            st.markdown(f"- {issue}")
-    else:
-        st.caption("No customs, day-ops, deice, duty, or permit cautions detected.")
+    with map_col:
+        st.markdown("##### Route preview")
+        if route_map_payload:
+            st_flight_route_map(route_map_payload)
+        else:
+            st.caption("Route map unavailable for this quote.")
 
     with st.expander("Duty Day Evaluation", expanded=duty.get("status") != "PASS"):
         status = duty.get("status", "PASS")
