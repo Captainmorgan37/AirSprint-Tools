@@ -159,7 +159,7 @@ CLOSED_BETWEEN_RE = re.compile(r"closed between\s*(\d{3,4})[-–](\d{3,4})")
 RUNWAY_NUM_RE = re.compile(r"rwy\s*(\d{2}[lrc]?)", re.IGNORECASE)
 ACFT_LIMIT_RE = re.compile(r"(embraer|cj2|cj3|legacy|challenger|global)", re.IGNORECASE)
 
-HOURS_RE = re.compile(r"(\d{3,4})[-–](\d{3,4})")
+HOURS_RE = re.compile(r"(\d{3,4})\s*[-–]\s*(\d{3,4})")
 PRIOR_HOURS_RE = re.compile(r"(\d+)\s*(?:hours|hrs)\s*(?:notice|prior)")
 PRIOR_DAYS_RE = re.compile(r"(\d+)\s*(?:days?)\s*(?:notice|prior)")
 LOCATION_RE = re.compile(
@@ -664,6 +664,24 @@ def _detect_days(lower: str) -> list[str]:
     return days
 
 
+def _is_plausible_time_range_value(value: str) -> bool:
+    digits = re.sub(r"\D", "", value)
+    if len(digits) == 3:
+        digits = f"0{digits}"
+    if len(digits) != 4:
+        return False
+    try:
+        hours = int(digits[:2])
+        minutes = int(digits[2:])
+    except ValueError:
+        return False
+    if hours > 24 or minutes > 59:
+        return False
+    if hours == 24 and minutes != 0:
+        return False
+    return True
+
+
 def parse_customs_notes(notes: Sequence[str]) -> ParsedCustoms:
     parsed = _empty_parsed_customs()
     for raw in notes:
@@ -711,6 +729,9 @@ def parse_customs_notes(notes: Sequence[str]) -> ParsedCustoms:
                 continue
 
             start, end = match.groups()
+            if not (_is_plausible_time_range_value(start) and _is_plausible_time_range_value(end)):
+                continue
+
             days = _detect_days(lower)
             if not days:
                 days = ["unknown"]
