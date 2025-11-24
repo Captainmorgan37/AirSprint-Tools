@@ -221,6 +221,31 @@ def test_planning_notes_route_mismatch_flags_issue() -> None:
     )
 
 
+def test_planning_notes_route_date_mismatch_flags_issue() -> None:
+    quote = {
+        "bookingIdentifier": "ROUTE-DATE-MISMATCH",
+        "aircraftObj": {"type": "CJ3", "category": "LIGHT_JET"},
+        "legs": [
+            {
+                "id": "LEG-ROUTE",
+                "departureAirport": "CYYC",
+                "arrivalAirport": "CYVR",
+                "departureDateUTC": "2026-12-22T15:00:00Z",
+                "arrivalDateUTC": "2026-12-22T17:00:00Z",
+                "blockTime": 120,
+                "planningNotes": "23DEC CYYC - CYVR",
+            }
+        ],
+    }
+
+    result = run_feasibility_phase1({"quote": quote, "tz_provider": _tz_provider})
+
+    assert any("route date" in issue for issue in result["issues"])
+    assert any(
+        "route date" in entry for entry in result.get("validation_checks", [])
+    )
+
+
 def test_planning_notes_route_match_no_issue() -> None:
     quote = {
         "bookingIdentifier": "ROUTE-MATCH",

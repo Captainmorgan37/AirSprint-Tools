@@ -285,6 +285,11 @@ def _collect_planning_note_feedback(day: DayContext) -> tuple[List[str], List[st
 
         matching = [(entry_date, route) for entry_date, route in entries if entry_date == dep_dt.date()]
         if not matching:
+            nearest_date = min(entries, key=lambda entry: abs(entry[0] - dep_dt.date()))[0]
+            issues.append(
+                f"Leg {index} {dep}→{arr}: Planning notes route date {nearest_date.isoformat()} "
+                f"does not match booked {dep_dt.date().isoformat()}."
+            )
             continue
 
         entry_date, route = matching[0]

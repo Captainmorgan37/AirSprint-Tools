@@ -142,7 +142,11 @@ def find_route_mismatch(
         (entry_date, route) for entry_date, route in entries if entry_date == dep_dt.date()
     ]
     if not matching:
-        return None
+        nearest_date = min(entries, key=lambda entry: abs(entry[0] - dep_dt.date()))[0]
+        return (
+            "Planning notes route date "
+            f"{nearest_date.isoformat()} does not match booked {dep_dt.date().isoformat()}."
+        )
 
     def _route_contains_segment(route: Sequence[str]) -> bool:
         for idx, code in enumerate(route[:-1]):
