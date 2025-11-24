@@ -70,6 +70,7 @@ SECTION_LABELS = {
 }
 KEY_ISSUE_SECTIONS = {"customs", "day_ops", "deice", "overflight"}
 RESERVE_CALENDAR_DATES = set(TARGET_DATES)
+_LEG_STYLES_INJECTED = False
 DEPARTURE_AIRPORT_KEYS = (
     "departure_airport",
     "dep_airport",
@@ -545,24 +546,144 @@ def _render_aircraft_category(
             st.write("No issues recorded.")
 
 
-def _render_leg_side(label: str, side: Mapping[str, Any]) -> None:
+def _leg_visual_tokens(label: str) -> Mapping[str, str]:
     side_lower = label.lower()
-    background_color = "rgba(46, 132, 208, 0.10)" if side_lower == "departure" else "rgba(94, 186, 125, 0.10)"
-    border_color = "rgba(46, 132, 208, 0.35)" if side_lower == "departure" else "rgba(94, 186, 125, 0.35)"
+    is_departure = side_lower == "departure"
+    return {
+        "accent": "#2E84D0" if is_departure else "#5EBA7D",
+        "band": "#E7F1FB" if is_departure else "#E7F7EE",
+        "border": "rgba(46, 132, 208, 0.25)" if is_departure else "rgba(94, 186, 125, 0.25)",
+        "icon": "⬆️" if is_departure else "⬇️",
+        "label": label.upper(),
+    }
+
+
+def _inject_leg_styles() -> None:
+    global _LEG_STYLES_INJECTED
+    if _LEG_STYLES_INJECTED:
+        return
+    st.markdown(
+        """
+        <style>
+            .leg-card {
+                border-radius: 14px;
+                border: 1px solid var(--leg-border, #d0d7de);
+                margin-bottom: 1rem;
+                overflow: hidden;
+                box-shadow: 0 6px 20px rgba(0, 0, 0, 0.06);
+            }
+            .leg-card__band {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 0.75rem;
+                padding: 0.75rem 1rem;
+                background: var(--leg-band, #eef3f8);
+                border-bottom: 1px solid var(--leg-border, #d0d7de);
+            }
+            .leg-card__left {
+                display: flex;
+                align-items: center;
+                gap: 0.75rem;
+            }
+            .leg-card__icon {
+                font-size: 1.4rem;
+                line-height: 1;
+            }
+            .leg-card__title {
+                font-size: 0.9rem;
+                font-weight: 800;
+                letter-spacing: 0.06em;
+            }
+            .leg-card__icao {
+                font-size: 1.1rem;
+                font-weight: 700;
+                color: #0b1f33;
+            }
+            .leg-card__chips {
+                display: flex;
+                align-items: center;
+                gap: 0.4rem;
+                flex-wrap: wrap;
+            }
+            .leg-card__chip {
+                display: inline-flex;
+                align-items: center;
+                gap: 0.35rem;
+                padding: 0.25rem 0.65rem;
+                border-radius: 999px;
+                background: rgba(255, 255, 255, 0.65);
+                border: 1px solid var(--leg-border, #d0d7de);
+                font-weight: 700;
+                font-size: 0.85rem;
+                color: #0b1f33;
+            }
+            .leg-card__chip-outline {
+                background: transparent;
+                border: 1px dashed var(--leg-border, #d0d7de);
+            }
+            .leg-card__body {
+                position: relative;
+                padding: 1rem 1rem 0.25rem 1.25rem;
+                background: radial-gradient(circle at 20% 20%, rgba(255,255,255,0.9), #f8fbff);
+            }
+            .leg-card__timeline {
+                position: absolute;
+                inset: 0 auto 0 0.35rem;
+                width: 6px;
+                border-radius: 999px;
+                background: linear-gradient(180deg, var(--leg-accent, #4b7bec), rgba(255,255,255,0));
+                opacity: 0.75;
+            }
+            .leg-card__body > div {
+                position: relative;
+                z-index: 1;
+            }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    _LEG_STYLES_INJECTED = True
+
+
+def _render_leg_side(label: str, side: Mapping[str, Any]) -> None:
+    _inject_leg_styles()
+    tokens = _leg_visual_tokens(label)
     icao = side.get("icao", "???") if isinstance(side, Mapping) else "???"
+    planned_time_local = None
+    if isinstance(side, Mapping):
+        planned_value = side.get("planned_time_local") or side.get("plannedTimeLocal")
+        if planned_value:
+            planned_time_local = str(planned_value)
+
+    header_chip = planned_time_local or (
+        side.get("local_date") if isinstance(side, Mapping) else None
+    ) or "Local time pending"
+    status_chip = side.get("status", "READY") if isinstance(side, Mapping) else "READY"
     with st.container():
         st.markdown(
             f"""
-            <div style="background: {background_color}; border: 1px solid {border_color}; padding: 1rem; border-radius: 0.75rem;">
+            <div class="leg-card" style="--leg-accent: {tokens['accent']}; --leg-band: {tokens['band']}; --leg-border: {tokens['border']};">
+                <div class="leg-card__band">
+                    <div class="leg-card__left">
+                        <span class="leg-card__icon">{tokens['icon']}</span>
+                        <div>
+                            <div class="leg-card__title">{tokens['label']}</div>
+                            <div class="leg-card__icao">{icao}</div>
+                        </div>
+                    </div>
+                    <div class="leg-card__chips">
+                        <span class="leg-card__chip">{header_chip}</span>
+                        <span class="leg-card__chip leg-card__chip-outline">{status_chip}</span>
+                    </div>
+                </div>
+                <div class="leg-card__body">
+                    <div class="leg-card__timeline"></div>
+                    <div>
             """,
             unsafe_allow_html=True,
         )
-        st.markdown(f"**{label} {icao}**")
-        planned_time_local = None
-        if side_lower == "arrival" and isinstance(side, Mapping):
-            planned_value = side.get("planned_time_local")
-            if planned_value:
-                planned_time_local = str(planned_value)
+
         for key in SECTION_ORDER:
             display = SECTION_LABELS.get(key, key.title())
             category = side.get(key) if isinstance(side, Mapping) else None
@@ -581,7 +702,15 @@ def _render_leg_side(label: str, side: Mapping[str, Any]) -> None:
         _render_operational_restrictions(parsed_ops if isinstance(parsed_ops, Mapping) else None)
         raw_notes = side.get("raw_operational_notes") if isinstance(side, Mapping) else None
         _render_raw_operational_notes(raw_notes)
-        st.markdown("</div>", unsafe_allow_html=True)
+
+        st.markdown(
+            """
+                    </div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
 
 def _collect_key_issues(result: Mapping[str, Any]) -> List[str]:
