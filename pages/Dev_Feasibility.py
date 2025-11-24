@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+import re
 import os
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, cast
 
@@ -823,19 +824,20 @@ def _render_leg_side(label: str, side: Mapping[str, Any]) -> None:
     tokens = _leg_visual_tokens(label)
     icao = side.get("icao", "???") if isinstance(side, Mapping) else "???"
     planned_time_local = None
+    header_source: Optional[str] = None
     if isinstance(side, Mapping):
         planned_value = side.get("planned_time_local") or side.get("plannedTimeLocal")
         if planned_value:
             planned_time_local = str(planned_value)
 
-    header_chip = planned_time_local or (
-        side.get("local_date") if isinstance(side, Mapping) else None
-    ) or "Local time pending"
+        header_source = planned_time_local or side.get("local_date")
 
-    if planned_time_local:
+    header_chip = header_source or "Local time pending"
+
+    if header_source:
         try:
             tz_abbrev: Optional[str] = None
-            dt_source = planned_time_local.strip()
+            dt_source = header_source.strip()
             tz_match = re.match(r"^(.*?)(?:\s+([A-Za-z]{2,5}))?$", dt_source)
             if tz_match:
                 dt_source = tz_match.group(1).strip()
