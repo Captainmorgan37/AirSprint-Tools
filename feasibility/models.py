@@ -56,5 +56,6 @@ class FullFeasibilityResult(TypedDict):
     legs: Sequence[Mapping[str, Any]]
     duty: DutyFeasibilityResult
     overall_status: CategoryStatus
+    validation_checks: List[str]
     issues: List[str]
     summary: str

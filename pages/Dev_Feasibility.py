@@ -1025,7 +1025,9 @@ def _render_full_quote_result(result: FullFeasibilityResult) -> None:
             st.markdown(formatted)
 
         validation_issues = [
-            str(issue) for issue in result.get("issues", []) if isinstance(issue, str) and issue.strip()
+            str(issue)
+            for issue in result.get("validation_checks", [])
+            if isinstance(issue, str) and issue.strip()
         ]
         st.markdown("**Validation Checks**")
         if validation_issues:

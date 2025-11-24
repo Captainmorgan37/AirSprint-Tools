@@ -216,6 +216,9 @@ def test_planning_notes_route_mismatch_flags_issue() -> None:
     result = run_feasibility_phase1({"quote": quote, "tz_provider": _tz_provider})
 
     assert any("Planning notes route" in issue for issue in result["issues"])
+    assert any(
+        "Planning notes route" in entry for entry in result.get("validation_checks", [])
+    )
 
 
 def test_planning_notes_route_match_no_issue() -> None:
@@ -260,6 +263,10 @@ def test_requested_aircraft_type_mismatch_flags_issue() -> None:
     result = run_feasibility_phase1({"quote": quote, "tz_provider": _tz_provider})
 
     assert any("Requested aircraft type" in issue for issue in result["issues"])
+    assert any(
+        "Requested aircraft type" in entry
+        for entry in result.get("validation_checks", [])
+    )
 
 
 def test_flight_category_highlights_osa_routes() -> None:

@@ -380,10 +380,11 @@ def run_feasibility_phase1(request: FeasibilityRequest) -> FullFeasibilityResult
     flight_category = _determine_flight_category(day["legs"], airport_metadata)
     overall_status = _determine_overall_status(leg_results, duty_result)
     issues = _collect_issues(day, leg_results, duty_result)
-    issues.extend(_collect_planning_note_issues(day))
+    validation_checks = _collect_planning_note_issues(day)
     requested_issue = _build_requested_type_issue(quote, day.get("aircraft_type", ""))
     if requested_issue:
-        issues.append(requested_issue)
+        validation_checks.append(requested_issue)
+    issues.extend(validation_checks)
     summary = _build_summary(day, leg_results, duty_result)
 
     return FullFeasibilityResult(
@@ -395,6 +396,7 @@ def run_feasibility_phase1(request: FeasibilityRequest) -> FullFeasibilityResult
         legs=[result.as_dict() for result in leg_results],
         duty=duty_result,
         overall_status=overall_status,
+        validation_checks=validation_checks,
         issues=issues,
         summary=summary,
     )
