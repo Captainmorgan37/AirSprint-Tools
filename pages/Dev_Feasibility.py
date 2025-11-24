@@ -13,6 +13,7 @@ import pydeck as pdk
 from flight_leg_utils import (
     FlightDataError,
     build_fl3xx_api_config,
+    load_airport_metadata_lookup,
     load_airport_tz_lookup,
     safe_parse_dt,
 )
