@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import pytz
 from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Sequence, Tuple
 
+from flight_leg_utils import load_airport_tz_lookup, safe_parse_dt
 from fl3xx_api import Fl3xxApiConfig, fetch_leg_details, fetch_quote_details
 
 from .planning_notes import extract_planning_note_text
@@ -59,6 +61,24 @@ def _format_datetime_value(value: Any) -> Optional[str]:
     return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _format_local_datetime_value(value: Any, airport_code: Optional[str]) -> Optional[str]:
+    iso_value = _format_datetime_value(value)
+    if not iso_value:
+        return None
+    try:
+        dt = safe_parse_dt(iso_value)
+    except Exception:
+        return iso_value
+    tz_lookup = load_airport_tz_lookup()
+    tz_name = tz_lookup.get((airport_code or "").upper())
+    if tz_name:
+        try:
+            dt = dt.astimezone(pytz.timezone(tz_name))
+        except Exception:
+            pass
+    return dt.isoformat()
+
+
 def _format_label_time(value: Any) -> Optional[str]:
     iso_value = _format_datetime_value(value)
     if not iso_value:
@@ -68,6 +88,17 @@ def _format_label_time(value: Any) -> Optional[str]:
     except ValueError:
         return iso_value
     return dt.strftime("%Y-%m-%d %H:%MZ")
+
+
+def _format_label_time_local(value: Any, airport_code: Optional[str]) -> Optional[str]:
+    iso_value = _format_local_datetime_value(value, airport_code)
+    if not iso_value:
+        return None
+    try:
+        dt = datetime.fromisoformat(iso_value.replace("Z", "+00:00"))
+    except ValueError:
+        return iso_value
+    return dt.strftime("%Y-%m-%d %H:%M %Z")
 
 
 def _resolve_airport_code(leg: Mapping[str, Any], prefix: str) -> Optional[str]:
@@ -139,7 +170,7 @@ def _normalize_quote_leg(
     quote_id: Optional[str],
     index: int,
     planning_notes: Optional[Mapping[str, str]] = None,
-) -> Dict[str, Any]:
+    ) -> Dict[str, Any]:
     flight: Dict[str, Any] = {}
     for key, value in leg.items():
         if isinstance(value, Mapping):
@@ -176,13 +207,25 @@ def _normalize_quote_leg(
     if custom_workflow:
         flight.setdefault("workflowCustomName", custom_workflow)
 
-    dep_time = _format_datetime_value(leg.get("departureDateUTC") or leg.get("departureDate"))
+    dep_airport = _resolve_airport_code(leg, "departure")
+    arr_airport = _resolve_airport_code(leg, "arrival")
+
+    dep_time_raw = leg.get("departureDateUTC") or leg.get("departureDate")
+    dep_time = _format_datetime_value(dep_time_raw)
     if dep_time:
         flight.setdefault("dep_time", dep_time)
         flight.setdefault("departureTime", dep_time)
-    arr_time = _format_datetime_value(leg.get("arrivalDateUTC") or leg.get("arrivalDate"))
+    dep_time_local = _format_local_datetime_value(dep_time_raw, dep_airport)
+    if dep_time_local:
+        flight.setdefault("departureDateLocal", dep_time_local)
+
+    arr_time_raw = leg.get("arrivalDateUTC") or leg.get("arrivalDate")
+    arr_time = _format_datetime_value(arr_time_raw)
     if arr_time:
         flight.setdefault("arrivalTime", arr_time)
+    arr_time_local = _format_local_datetime_value(arr_time_raw, arr_airport)
+    if arr_time_local:
+        flight.setdefault("arrivalDateLocal", arr_time_local)
 
     block_minutes = leg.get("blockTime")
     if block_minutes is None:
@@ -254,7 +297,9 @@ def _format_leg_label(leg: Mapping[str, Any], index: int) -> str:
     dep = _resolve_airport_code(leg, "departure") or "???"
     arr = _resolve_airport_code(leg, "arrival") or "???"
     label = f"Leg {index + 1}: {dep} → {arr}"
-    dep_time = _format_label_time(leg.get("departureDateUTC") or leg.get("departureDate"))
+    dep_time = _format_label_time_local(
+        leg.get("departureDateUTC") or leg.get("departureDate"), dep
+    )
     if dep_time:
         label = f"{label} ({dep_time})"
     return label
