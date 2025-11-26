@@ -178,6 +178,13 @@ def _build_preflight_endpoint(base_url: str, flight_id: Any) -> str:
     return f"{base}/{flight_id}/preflight"
 
 
+def _build_pax_details_endpoint(base_url: str, flight_id: Any) -> str:
+    base = base_url.rstrip("/")
+    if base.lower().endswith("/flights"):
+        base = base[: -len("/flights")]
+    return f"{base}/{flight_id}/pax_details"
+
+
 def _build_notification_endpoint(base_url: str, flight_id: Any) -> str:
     base = base_url.rstrip("/")
     if base.lower().endswith("/flights"):
@@ -351,6 +358,64 @@ def fetch_preflight(
         )
         response.raise_for_status()
         return response.json()
+    finally:
+        if close_session:
+            try:
+                http.close()
+            except AttributeError:
+                pass
+
+
+def fetch_flight_pax_details(
+    config: Fl3xxApiConfig,
+    flight_id: Any,
+    *,
+    session: Optional[requests.Session] = None,
+) -> Any:
+    """Return the pax_details payload for a specific flight.
+
+    This issues a GET to ``{base_url}/{flight_id}/pax_details`` (with the
+    default base pointing at the external ``/flight/flights`` host) and is
+    the source used by feasibility to read passenger genders and types.
+    """
+
+    url = _build_pax_details_endpoint(config.base_url, flight_id)
+    http = session or requests.Session()
+    close_session = session is None
+    response: Optional[requests.Response] = None
+    try:
+        response = http.get(
+            url,
+            headers=config.build_headers(),
+            timeout=config.timeout,
+            verify=config.verify_ssl,
+        )
+        response.raise_for_status()
+        return response.json()
+    except requests.HTTPError as exc:
+        status = None
+        reason = None
+        body_snippet = None
+        if exc.response is not None:
+            status = exc.response.status_code
+            reason = exc.response.reason
+            try:
+                body_snippet = exc.response.text
+            except Exception:
+                body_snippet = None
+        detail_parts = ["pax_details GET failed"]
+        if status is not None:
+            detail_parts.append(f"HTTP {status}")
+        if reason:
+            detail_parts.append(str(reason))
+        if body_snippet:
+            trimmed = " ".join(body_snippet.split())[:500]
+            if trimmed:
+                detail_parts.append(f"response: {trimmed}")
+        detail = " | ".join(detail_parts)
+        raise RuntimeError(f"{detail} for {url}") from exc
+    except Exception as exc:
+        raise RuntimeError(f"pax_details GET failed for {url}: {exc}") from exc
     finally:
         if close_session:
             try:
@@ -1326,6 +1391,7 @@ __all__ = [
     "fetch_flight_crew",
     "fetch_postflight",
     "fetch_preflight",
+    "fetch_flight_pax_details",
     "fetch_flight_services",
     "fetch_operational_notes",
     "fetch_flight_planning_note",

@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from dataclasses import replace
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from math import inf
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -221,12 +221,18 @@ chunk_metadata: List[Dict[str, Any]] = []
 
 with st.spinner(f"Fetching flights from FL3XX in {_CHUNK_SIZE_DAYS}-day batches..."):
     for idx, (chunk_start, chunk_end) in enumerate(chunks, start=1):
+        request_end = chunk_end + timedelta(days=1)
+        window_start = datetime.combine(chunk_start, time.min).replace(tzinfo=timezone.utc)
+        window_end = (
+            datetime.combine(request_end, time.min).replace(tzinfo=timezone.utc)
+            - timedelta(microseconds=1)
+        )
         try:
             chunk_df, chunk_meta, _ = fetch_legs_dataframe(
                 config,
                 from_date=chunk_start,
-                to_date=chunk_end,
-                departure_window=None,
+                to_date=request_end,
+                departure_window=(window_start, window_end),
                 fetch_crew=False,
             )
         except Exception as exc:
@@ -244,7 +250,7 @@ with st.spinner(f"Fetching flights from FL3XX in {_CHUNK_SIZE_DAYS}-day batches.
                 "chunk_index": idx,
                 "request_range": {
                     "from": chunk_start.isoformat(),
-                    "to": chunk_end.isoformat(),
+                    "to": request_end.isoformat(),
                 },
                 "response": chunk_meta,
             }

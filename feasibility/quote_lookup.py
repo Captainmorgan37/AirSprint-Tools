@@ -5,7 +5,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Sequence, Tuple
 
-from fl3xx_api import Fl3xxApiConfig, fetch_quote_details
+from fl3xx_api import Fl3xxApiConfig, fetch_leg_details, fetch_quote_details
+
+from .planning_notes import extract_planning_note_text
 
 
 class QuoteLookupError(RuntimeError):
@@ -136,6 +138,7 @@ def _normalize_quote_leg(
     *,
     quote_id: Optional[str],
     index: int,
+    planning_notes: Optional[Mapping[str, str]] = None,
 ) -> Dict[str, Any]:
     flight: Dict[str, Any] = {}
     for key, value in leg.items():
@@ -209,7 +212,28 @@ def _normalize_quote_leg(
     _apply_airport_code(flight, leg, "departure")
     _apply_airport_code(flight, leg, "arrival")
 
-    leg_id = _coalesce_str(leg.get("id"), leg.get("legId"))
+    # Prefer a concrete flight identifier from the API payload (often nested under
+    # ``flight``) so we can call pax-details endpoints for quotes that already have
+    # flight records behind them.
+    nested_flight = leg.get("flight") if isinstance(leg.get("flight"), Mapping) else None
+    nested_flight_id = None
+    if nested_flight:
+        nested_flight_id = _coalesce_str(nested_flight.get("id"), nested_flight.get("flightId"))
+
+    nested_flight_info = leg.get("flightInfo") if isinstance(leg.get("flightInfo"), Mapping) else None
+    nested_flight_info_id = None
+    if nested_flight_info:
+        nested_flight_info_id = _coalesce_str(
+            nested_flight_info.get("flightId"), nested_flight_info.get("id")
+        )
+
+    leg_id = _coalesce_str(
+        nested_flight_id,
+        nested_flight_info_id,
+        leg.get("flightId"),
+        leg.get("id"),
+        leg.get("legId"),
+    )
     if leg_id:
         flight.setdefault("flightId", leg_id)
         flight.setdefault("id", leg_id)
@@ -217,6 +241,11 @@ def _normalize_quote_leg(
         synthetic_id = f"{resolved_quote_id}-LEG-{index + 1}"
         flight.setdefault("flightId", synthetic_id)
         flight.setdefault("id", synthetic_id)
+
+    if planning_notes and leg_id and not flight.get("planningNotes"):
+        note = planning_notes.get(leg_id)
+        if note:
+            flight["planningNotes"] = note
 
     return flight
 
@@ -249,6 +278,7 @@ def build_quote_leg_options(
     quote_payload: Mapping[str, Any],
     *,
     quote_id: Optional[str] = None,
+    planning_notes: Optional[Mapping[str, str]] = None,
 ) -> List[Dict[str, Any]]:
     legs_raw = quote_payload.get("legs")
     if not isinstance(legs_raw, Sequence):
@@ -258,7 +288,16 @@ def build_quote_leg_options(
     for index, leg in enumerate(legs_raw):
         if not isinstance(leg, Mapping):
             continue
-        flight = _normalize_quote_leg(quote_payload, leg, quote_id=quote_id, index=index)
+        status = _coerce_upper(leg.get("status"))
+        if status in {"CANCELED", "CANCELLED"}:
+            continue
+        flight = _normalize_quote_leg(
+            quote_payload,
+            leg,
+            quote_id=quote_id,
+            index=index,
+            planning_notes=planning_notes,
+        )
         identifier = _coalesce_str(leg.get("id"), leg.get("legId")) or f"LEG-{index + 1}"
         label = _format_leg_label(leg, index)
         options.append(
@@ -283,4 +322,28 @@ def fetch_quote_leg_options(
     session: Optional[Any] = None,
 ) -> Tuple[List[Dict[str, Any]], Mapping[str, Any]]:
     payload = fetch_quote_payload(config, quote_id, session=session)
-    return build_quote_leg_options(payload, quote_id=quote_id), payload
+    note_index: Dict[str, str] = {}
+    try:
+        details = fetch_leg_details(config, quote_id, session=session)
+    except Exception:
+        details = None
+    if isinstance(details, Mapping):
+        candidates = [details]
+        data = details.get("data")
+        if isinstance(data, list):
+            candidates.extend(item for item in data if isinstance(item, Mapping))
+    elif isinstance(details, Sequence):
+        candidates = [item for item in details if isinstance(item, Mapping)]
+    else:
+        candidates = []
+
+    for detail in candidates:
+        leg_id = _coalesce_str(detail.get("id"), detail.get("legId"), detail.get("flightId"))
+        note_text = extract_planning_note_text(detail)
+        if leg_id and note_text:
+            note_index[leg_id] = note_text
+
+    return (
+        build_quote_leg_options(payload, quote_id=quote_id, planning_notes=note_index or None),
+        payload,
+    )

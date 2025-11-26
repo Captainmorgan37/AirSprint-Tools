@@ -6,10 +6,19 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Mapping, MutableMapping, Optional
 
 from flight_leg_utils import load_airport_metadata_lookup
+from fl3xx_api import fetch_flight_pax_details, fetch_flight_planning_note
 
-from . import checker_aircraft, checker_airport, checker_duty, checker_overflight, checker_trip
+from . import (
+    checker_aircraft,
+    checker_airport,
+    checker_duty,
+    checker_overflight,
+    checker_trip,
+    checker_weight_balance,
+)
 from .data_access import load_customs_rules
 from .lookup import lookup_booking
+from .planning_notes import extract_planning_note_text
 from .schemas import CategoryResult, FeasibilityResult
 
 
@@ -32,10 +41,13 @@ def evaluate_flight(
     *,
     now: Optional[datetime] = None,
     airport_lookup: Optional[Mapping[str, Mapping[str, Optional[str]]]] = None,
+    pax_payload: Optional[Mapping[str, Any]] = None,
 ) -> FeasibilityResult:
     reference_time = now or datetime.now(timezone.utc)
     airport_lookup = airport_lookup or load_airport_metadata_lookup()
     customs_rules = load_customs_rules()
+
+    season = checker_weight_balance.determine_season(flight.get("departureTime") or flight)
 
     categories: Dict[str, CategoryResult] = {
         "aircraft": checker_aircraft.evaluate_aircraft(flight),
@@ -49,6 +61,12 @@ def evaluate_flight(
             flight, airport_lookup=airport_lookup
         ),
         "overflight": checker_overflight.evaluate_overflight(flight, now=reference_time),
+        "weightBalance": checker_weight_balance.evaluate_weight_balance(
+            flight,
+            pax_payload=pax_payload,
+            aircraft_type=flight.get("aircraftType"),
+            season=season,
+        ),
     }
 
     booking_identifier = str(flight.get("bookingIdentifier") or flight.get("bookingCode") or "").strip()
@@ -81,4 +99,19 @@ def run_feasibility_for_booking(
         cache=cache,
         session=session,
     )
-    return evaluate_flight(lookup_result.flight, now=now)
+    pax_payload: Optional[Mapping[str, Any]] = None
+    planning_note: Optional[str] = None
+    flight_id = lookup_result.flight.get("flightId") or lookup_result.flight.get("id")
+    if flight_id:
+        try:
+            pax_payload = fetch_flight_pax_details(config, flight_id, session=session)
+        except Exception:
+            pax_payload = None
+        try:
+            raw_note = fetch_flight_planning_note(config, flight_id, session=session)
+            planning_note = extract_planning_note_text(raw_note)
+        except Exception:
+            planning_note = None
+    if planning_note:
+        lookup_result.flight["planningNotes"] = planning_note
+    return evaluate_flight(lookup_result.flight, now=now, pax_payload=pax_payload)

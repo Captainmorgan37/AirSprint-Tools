@@ -140,7 +140,7 @@ def _airport_tz_path(filename: str = AIRPORT_TZ_FILENAME) -> Path:
 
 
 @lru_cache(maxsize=1)
-def load_airport_metadata_lookup() -> Dict[str, Dict[str, Optional[str]]]:
+def load_airport_metadata_lookup() -> Dict[str, Dict[str, Optional[Any]]]:
     path = _airport_tz_path()
     if not path.exists():
         return {}
@@ -149,7 +149,7 @@ def load_airport_metadata_lookup() -> Dict[str, Dict[str, Optional[str]]]:
     except Exception:
         return {}
 
-    lookup: Dict[str, Dict[str, Optional[str]]] = {}
+    lookup: Dict[str, Dict[str, Optional[Any]]] = {}
     for _, row in df.iterrows():
         tz: Optional[str] = None
         tz_value = row.get("tz")
@@ -166,6 +166,26 @@ def load_airport_metadata_lookup() -> Dict[str, Dict[str, Optional[str]]]:
         if isinstance(subd_value, str) and subd_value.strip():
             subdivision = subd_value.strip()
 
+        latitude: Optional[float] = None
+        lat_value = row.get("lat")
+        if isinstance(lat_value, (int, float)) and not pd.isna(lat_value):
+            latitude = float(lat_value)
+        elif isinstance(lat_value, str) and lat_value.strip():
+            try:
+                latitude = float(lat_value)
+            except ValueError:
+                latitude = None
+
+        longitude: Optional[float] = None
+        lon_value = row.get("lon")
+        if isinstance(lon_value, (int, float)) and not pd.isna(lon_value):
+            longitude = float(lon_value)
+        elif isinstance(lon_value, str) and lon_value.strip():
+            try:
+                longitude = float(lon_value)
+            except ValueError:
+                longitude = None
+
         if tz is None and country is None and subdivision is None:
             continue
         for key in ("icao", "iata", "lid"):
@@ -175,6 +195,8 @@ def load_airport_metadata_lookup() -> Dict[str, Dict[str, Optional[str]]]:
                     "tz": tz,
                     "country": country,
                     "subd": subdivision,
+                    "lat": latitude,
+                    "lon": longitude,
                 }
     return lookup
 

@@ -239,7 +239,7 @@ def evaluate_suitability(
 ) -> CategoryResult:
     """
     Checks:
-      - airport_profile.is_approved_for_ops
+      - Fl3xx category from data/Airports_Fl3xx_Categories.csv (A/B/C pass; NC/P/blank fail)
       - runway length vs aircraft type requirements
       - operational notes for closures, restricted runways, 'no GA', curfew, etc.
     """
@@ -247,7 +247,7 @@ def evaluate_suitability(
 
 Rules (typical):
 
-If is_approved_for_ops is False → FAIL
+If Fl3xx category is NC, P, or missing → FAIL with a Fl3xx category issue
 
 If required_runway_ft(leg.aircraft_type, leg.pax, leg.distance_nm) > airport_profile.longest_runway_ft → FAIL
 
@@ -256,6 +256,8 @@ If operationalNotes indicate:
 full closure during ETA → FAIL
 
 partial closure impacting runway length → CAUTION/FAIL depending on margin
+
+generic "closure" wording (no explicit closed/curfew) → CAUTION to review Fl3xx note timing
 
 Else → PASS (with possible notes if marginal).
 
@@ -409,8 +411,6 @@ def summarize_operational_notes(
     """
     Scans the notes for:
       - closures (runway/taxiway/apron)
-      - deice issues
-      - customs restrictions
       - GA restrictions
       - curfew / noise
       - any 'ALERT' or 'WARNING'-type entries.
@@ -427,8 +427,6 @@ This function should rely on a configurable list of keyword → severity mapping
 “closed”, “not available” → possible FAIL
 
 “limited”, “capacity”, “expect delay” → CAUTION
-
-“deicing not available” during winter months → CAUTION/FAIL
 
 6. Error Handling / Fallbacks
 

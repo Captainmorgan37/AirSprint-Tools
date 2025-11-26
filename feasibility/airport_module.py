@@ -5,12 +5,19 @@ from __future__ import annotations
 import csv
 import re
 from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, TypedDict
 
 import pytz
+
+try:  # Optional dependency; fallback behavior handled in evaluate_day_ops
+    from astral import LocationInfo
+    from astral.sun import sun
+except ModuleNotFoundError:  # pragma: no cover - exercised indirectly
+    LocationInfo = None  # type: ignore[assignment]
+    sun = None  # type: ignore[assignment]
 
 from deice_info_helper import DeiceRecord, get_deice_record
 from flight_leg_utils import load_airport_metadata_lookup, safe_parse_dt
@@ -18,18 +25,26 @@ from flight_leg_utils import load_airport_metadata_lookup, safe_parse_dt
 from .airport_notes_parser import (
     ParsedCustoms,
     ParsedRestrictions,
+    is_explicit_deice_note,
     note_text,
     parse_customs_notes,
     parse_operational_restrictions,
     split_customs_operational_notes,
     summarize_operational_notes,
 )
-from . import checker_aircraft
+from . import checker_aircraft, checker_weight_balance
 from .common import extract_airport_code
-from .data_access import AirportCategoryRecord, CustomsRule, load_airport_categories, load_customs_rules
+from .data_access import (
+    AirportCategoryRecord,
+    CustomsRule,
+    Fl3xxAirportCategory,
+    load_airport_categories,
+    load_customs_rules,
+    load_fl3xx_airport_categories,
+)
 from .schemas import CategoryResult, CategoryStatus
 
-AirportMetadataLookup = Mapping[str, Mapping[str, Optional[str]]]
+AirportMetadataLookup = Mapping[str, Mapping[str, Optional[object]]]
 
 
 class LegContext(TypedDict, total=False):
@@ -39,6 +54,7 @@ class LegContext(TypedDict, total=False):
     departure_date_utc: str
     arrival_date_utc: str
     pax: int
+    pax_payload: Mapping[str, Any]
     block_time_minutes: int
     flight_time_minutes: int
     distance_nm: float
@@ -73,6 +89,7 @@ class AirportProfile:
     longest_runway_ft: Optional[int]
     is_approved_for_ops: bool
     category: Optional[str]
+    fl3xx_category: Optional[str]
     elevation_ft: Optional[int]
     country: Optional[str]
 
@@ -133,12 +150,13 @@ class AirportSideResult:
     customs: CategoryResult
     slot_ppr: CategoryResult
     osa_ssa: CategoryResult
+    day_ops: CategoryResult
     overflight: CategoryResult
     operational_notes: CategoryResult
     parsed_operational_restrictions: ParsedRestrictions
     parsed_customs_notes: ParsedCustoms
     planned_time_local: Optional[str] = None
-    raw_operational_notes: List[str] = field(default_factory=list)
+    raw_operational_notes: List[Any] = field(default_factory=list)
 
     def iter_category_results(self) -> Sequence[Tuple[str, CategoryResult]]:
         return (
@@ -147,6 +165,7 @@ class AirportSideResult:
             ("Customs", self.customs),
             ("Slot / PPR", self.slot_ppr),
             ("OSA / SSA", self.osa_ssa),
+            ("Day Ops", self.day_ops),
             ("Overflight", self.overflight),
             ("Operational Notes", self.operational_notes),
         )
@@ -159,12 +178,16 @@ class AirportSideResult:
             "customs": self.customs.as_dict(),
             "slot_ppr": self.slot_ppr.as_dict(),
             "osa_ssa": self.osa_ssa.as_dict(),
+            "day_ops": self.day_ops.as_dict(),
             "overflight": self.overflight.as_dict(),
             "operational_notes": self.operational_notes.as_dict(),
             "parsed_operational_restrictions": dict(self.parsed_operational_restrictions),
             "parsed_customs_notes": dict(self.parsed_customs_notes),
             "planned_time_local": self.planned_time_local,
-            "raw_operational_notes": list(self.raw_operational_notes),
+            "raw_operational_notes": [
+                dict(entry) if isinstance(entry, Mapping) else entry
+                for entry in self.raw_operational_notes
+            ],
         }
 
 
@@ -174,10 +197,12 @@ class AirportFeasibilityResult:
     departure: AirportSideResult
     arrival: AirportSideResult
     aircraft: CategoryResult
+    weight_balance: CategoryResult
 
     def iter_all_categories(self) -> Sequence[Tuple[str, CategoryResult]]:
         entries: List[Tuple[str, CategoryResult]] = []
         entries.append(("Aircraft", self.aircraft))
+        entries.append(("Weight / Balance", self.weight_balance))
         for prefix, side in (("Departure", self.departure), ("Arrival", self.arrival)):
             for label, result in side.iter_category_results():
                 entries.append((f"{prefix} {label}", result))
@@ -189,6 +214,7 @@ class AirportFeasibilityResult:
             "departure": self.departure.as_dict(),
             "arrival": self.arrival.as_dict(),
             "aircraft": self.aircraft.as_dict(),
+            "weightBalance": self.weight_balance.as_dict(),
         }
 
 
@@ -203,9 +229,21 @@ RUNWAY_REQUIREMENTS_FT: Mapping[str, int] = {
 
 SLOT_KEYWORDS = ("SLOT", "ATC SLOT")
 PPR_KEYWORDS = ("PPR", "PRIOR PERMISSION")
+IGNORED_SLOT_PPR_NOTES = {
+    "PRIMARY SERVICE AREA AIRPORT WITH NO SPECIAL HANDLING REQUIRED.",
+    "SSA REGION AIRPORT; SSA HANDLING ONLY.",
+    "OUTSIDE SERVICE AREA; FINAL FEASIBILITY MUST BE DETERMINED IN FL3XX.",
+    "ALASKA AIRPORT TREATED AS SSA; SSA HANDLING ONLY.",
+    "NUNAVUT AIRPORT TREATED AS SSA; SSA HANDLING ONLY.",
+}
 
 _RUNWAYS_PATH = Path(__file__).resolve().parents[1] / "runways.csv"
-_STATUS_PRIORITY: Mapping[CategoryStatus, int] = {"PASS": 0, "CAUTION": 1, "FAIL": 2}
+_STATUS_PRIORITY: Mapping[CategoryStatus, int] = {
+    "PASS": 0,
+    "INFO": 1,
+    "CAUTION": 2,
+    "FAIL": 3,
+}
 
 
 def _default_operational_notes_fetcher(icao: str, date_local: Optional[str]) -> Sequence[Mapping[str, Any]]:
@@ -404,32 +442,60 @@ def _build_airport_profile(
     icao: str,
     *,
     airport_categories: Mapping[str, AirportCategoryRecord],
+    fl3xx_categories: Mapping[str, Fl3xxAirportCategory],
     metadata: AirportMetadataLookup,
 ) -> AirportProfile:
     longest_runways = _load_longest_runways()
     category_record = airport_categories.get(icao)
+    fl3xx_category_record = fl3xx_categories.get(icao)
     metadata_record = metadata.get(icao, {}) if metadata else {}
+    fl3xx_category = fl3xx_category_record.category if fl3xx_category_record else None
     return AirportProfile(
         icao=icao,
         name=None,
         longest_runway_ft=longest_runways.get(icao),
-        is_approved_for_ops=True,
+        is_approved_for_ops=fl3xx_category in {"A", "B", "C"},
         category=category_record.category if category_record else None,
+        fl3xx_category=fl3xx_category,
         elevation_ft=None,
         country=str(metadata_record.get("country") or "").strip() or None,
     )
 
 
-def _build_deice_profile(icao: str) -> DeiceProfile:
+def _build_deice_profile(
+    icao: str, *, metadata: AirportMetadataLookup | None = None
+) -> DeiceProfile:
     record: Optional[DeiceRecord] = get_deice_record(icao=icao)
+    latitude = record.latitude if record else None
+    longitude = record.longitude if record else None
+
+    if metadata and (latitude is None or longitude is None):
+        meta_record = metadata.get(icao.upper(), {}) if metadata else {}
+
+        def _parse_coordinate(value: object) -> Optional[float]:
+            if value is None:
+                return None
+            try:
+                parsed = float(value)
+            except (TypeError, ValueError):
+                return None
+            return parsed
+
+        if latitude is None:
+            latitude = _parse_coordinate(meta_record.get("lat"))
+        if longitude is None:
+            longitude = _parse_coordinate(meta_record.get("lon"))
+
     if not record:
-        return DeiceProfile(icao=icao, deice_available=None, notes=None)
+        return DeiceProfile(
+            icao=icao, deice_available=None, notes=None, latitude=latitude, longitude=longitude
+        )
     return DeiceProfile(
         icao=icao,
         deice_available=record.has_deice,
         notes=record.deice_info,
-        latitude=record.latitude,
-        longitude=record.longitude,
+        latitude=latitude,
+        longitude=longitude,
     )
 
 
@@ -476,18 +542,16 @@ def _build_slot_ppr_profile(icao: str, airport_categories: Mapping[str, AirportC
     notes_upper = notes.upper() if notes else ""
     slot_required = any(keyword in notes_upper for keyword in SLOT_KEYWORDS)
     ppr_required = any(keyword in notes_upper for keyword in PPR_KEYWORDS)
-    # Airports classified as OSA/SSA often require coordination
-    if record and record.category in {"OSA", "SSA"}:
-        slot_required = True
-        ppr_required = True
     lead_days = _extract_lead_days(notes)
+    normalized_notes = notes_upper.strip()
+    slot_ppr_notes = None if normalized_notes in IGNORED_SLOT_PPR_NOTES else notes
     return SlotPprProfile(
         icao=icao,
         slot_required=slot_required,
         ppr_required=ppr_required,
         slot_lead_days=lead_days,
         ppr_lead_days=lead_days,
-        notes=notes,
+        notes=slot_ppr_notes,
     )
 
 
@@ -525,10 +589,12 @@ def evaluate_airport_feasibility_for_leg(
     operational_notes_fetcher: Optional[Callable[[str, Optional[str]], Sequence[Mapping[str, Any]]]] = None,
     airport_metadata: Optional[AirportMetadataLookup] = None,
     airport_categories: Optional[Mapping[str, AirportCategoryRecord]] = None,
+    fl3xx_categories: Optional[Mapping[str, Fl3xxAirportCategory]] = None,
     customs_rules: Optional[Mapping[str, CustomsRule]] = None,
     now: Optional[datetime] = None,
 ) -> AirportFeasibilityResult:
     airport_categories = airport_categories or load_airport_categories()
+    fl3xx_categories = fl3xx_categories or load_fl3xx_airport_categories()
     customs_rules = customs_rules or load_customs_rules()
     airport_metadata = airport_metadata or load_airport_metadata_lookup()
     tz_provider = tz_provider or _get_timezone_provider(airport_metadata)
@@ -538,11 +604,15 @@ def evaluate_airport_feasibility_for_leg(
     dep_icao = leg["departure_icao"]
     arr_icao = leg["arrival_icao"]
 
-    dep_profile = _build_airport_profile(dep_icao, airport_categories=airport_categories, metadata=airport_metadata)
-    arr_profile = _build_airport_profile(arr_icao, airport_categories=airport_categories, metadata=airport_metadata)
+    dep_profile = _build_airport_profile(
+        dep_icao, airport_categories=airport_categories, fl3xx_categories=fl3xx_categories, metadata=airport_metadata
+    )
+    arr_profile = _build_airport_profile(
+        arr_icao, airport_categories=airport_categories, fl3xx_categories=fl3xx_categories, metadata=airport_metadata
+    )
 
-    dep_deice = _build_deice_profile(dep_icao)
-    arr_deice = _build_deice_profile(arr_icao)
+    dep_deice = _build_deice_profile(dep_icao, metadata=airport_metadata)
+    arr_deice = _build_deice_profile(arr_icao, metadata=airport_metadata)
 
     dep_customs = _build_customs_profile(dep_icao, customs_rules)
     arr_customs = _build_customs_profile(arr_icao, customs_rules)
@@ -579,6 +649,8 @@ def evaluate_airport_feasibility_for_leg(
         overflight_result=overflight_result,
         side="DEP",
         planned_time_local=dep_time_local,
+        tz_name=dep_tz,
+        airport_metadata=airport_metadata.get(dep_icao.upper(), {}),
     )
     arrival_side = evaluate_airport_side(
         icao=arr_icao,
@@ -593,15 +665,37 @@ def evaluate_airport_feasibility_for_leg(
         overflight_result=overflight_result,
         side="ARR",
         planned_time_local=arr_time_local,
+        tz_name=arr_tz,
+        airport_metadata=airport_metadata.get(arr_icao.upper(), {}),
     )
 
     aircraft_result = _evaluate_aircraft_endurance(leg)
+
+    pax_payload = leg.get("pax_payload") if isinstance(leg.get("pax_payload"), Mapping) else None
+    payload_source = leg.get("pax_payload_source") if isinstance(leg.get("pax_payload_source"), str) else None
+    if pax_payload is None:
+        pax_count = max(int(leg.get("pax") or 0), 0)
+        synthetic_tickets = [{"paxType": "ADULT"} for _ in range(pax_count)]
+        pax_payload = {"pax": {"tickets": synthetic_tickets}}
+        payload_source = payload_source or "synthetic"
+    else:
+        payload_source = payload_source or "api"
+    season = checker_weight_balance.determine_season(leg.get("departure_date_utc") or leg)
+    weight_balance = checker_weight_balance.evaluate_weight_balance(
+        leg,
+        pax_payload=pax_payload,
+        aircraft_type=leg.get("aircraft_type"),
+        season=season,
+        payload_source=payload_source,
+        payload_error=leg.get("pax_payload_error"),
+    )
 
     return AirportFeasibilityResult(
         leg_id=leg.get("leg_id", ""),
         departure=departure_side,
         arrival=arrival_side,
         aircraft=aircraft_result,
+        weight_balance=weight_balance,
     )
 
 
@@ -619,17 +713,27 @@ def evaluate_airport_side(
     overflight_result: CategoryResult,
     side: str,
     planned_time_local: Optional[str] = None,
+    tz_name: Optional[str] = None,
+    airport_metadata: Mapping[str, object] | None = None,
 ) -> AirportSideResult:
     customs_texts, operational_texts = split_customs_operational_notes(operational_notes)
     parsed_customs_notes = parse_customs_notes(customs_texts)
     parsed_operational_restrictions = parse_operational_restrictions(operational_texts)
-    raw_note_texts: List[str] = []
+    raw_note_entries: List[Any] = []
     for entry in operational_notes:
-        text = note_text(entry)
-        if text:
-            raw_note_texts.append(text)
+        if isinstance(entry, Mapping):
+            raw_note_entries.append(dict(entry))
+        else:
+            text = note_text(entry)
+            raw_note_entries.append(text or entry)
 
-    suitability = evaluate_suitability(airport_profile, leg, operational_notes, side)
+    suitability = evaluate_suitability(
+        airport_profile,
+        leg,
+        operational_notes,
+        side,
+        parsed_restrictions=parsed_operational_restrictions,
+    )
     deice = evaluate_deice(
         deice_profile,
         operational_notes,
@@ -638,14 +742,32 @@ def evaluate_airport_side(
         date_local=date_local,
         parsed_restrictions=parsed_operational_restrictions,
     )
+    if parsed_operational_restrictions.get("night_ops_allowed") is False:
+        day_ops = evaluate_day_ops(
+            icao=icao,
+            parsed_restrictions=parsed_operational_restrictions,
+            tz_name=tz_name,
+            leg_time_utc=leg.get("departure_date_utc") if side == "DEP" else leg.get("arrival_date_utc"),
+            side=side,
+            metadata_record=airport_metadata or {},
+        )
+    else:
+        day_ops = CategoryResult(status="PASS", summary="No day-ops restriction noted", issues=[])
     customs = evaluate_customs(
         customs_profile,
         leg,
         side,
         operational_notes,
         parsed_customs=parsed_customs_notes,
+        tz_name=tz_name,
     )
-    slot_ppr = evaluate_slot_ppr(slot_ppr_profile, leg, side, date_local)
+    slot_ppr = evaluate_slot_ppr(
+        slot_ppr_profile,
+        leg,
+        side,
+        date_local,
+        parsed_restrictions=parsed_operational_restrictions,
+    )
     osa_ssa = evaluate_osa_ssa(osa_ssa_profile, leg, side)
     operational_notes_result = summarize_operational_notes(
         icao,
@@ -661,12 +783,13 @@ def evaluate_airport_side(
         customs=customs,
         slot_ppr=slot_ppr,
         osa_ssa=osa_ssa,
+        day_ops=day_ops,
         overflight=overflight_result,
         operational_notes=operational_notes_result,
         parsed_operational_restrictions=parsed_operational_restrictions,
         parsed_customs_notes=parsed_customs_notes,
         planned_time_local=planned_time_local,
-        raw_operational_notes=raw_note_texts,
+        raw_operational_notes=raw_note_entries,
     )
 
 
@@ -675,45 +798,113 @@ def evaluate_suitability(
     leg: LegContext,
     operational_notes: Sequence[Mapping[str, Any]],
     side: str,
+    *,
+    parsed_restrictions: ParsedRestrictions | None = None,
 ) -> CategoryResult:
     issues: List[str] = []
     status: CategoryStatus = "PASS"
-    summary = "Airport approved"
+    approved_categories = {"A", "B", "C"}
+    fl3xx_category = (airport_profile.fl3xx_category or "").strip().upper()
+    summary = f"Fl3xx category {fl3xx_category}" if fl3xx_category else "Airport approved"
+    summary_locked = False
 
-    if not airport_profile.is_approved_for_ops:
+    if fl3xx_category in approved_categories:
+        summary = f"Fl3xx category {fl3xx_category} approved"
+    else:
         status = "FAIL"
         summary = "Airport not approved"
-        issues.append("Airport marked as not approved for AirSprint operations.")
+        summary_locked = True
+        if fl3xx_category:
+            issues.append(f"Fl3xx category {fl3xx_category} is not approved for AirSprint operations.")
+        else:
+            issues.append("No Fl3xx approval category found; airport not cleared for operations.")
 
     required_length = RUNWAY_REQUIREMENTS_FT.get(leg.get("aircraft_category", ""), 4300)
     longest = airport_profile.longest_runway_ft
     if longest is None:
         issues.append("No runway data available; verify manually.")
         status = _combine_status(status, "CAUTION")
-        summary = "Missing runway intel"
+        if not summary_locked:
+            summary = "Missing runway intel"
     elif longest < required_length:
         status = "FAIL"
-        summary = "Insufficient runway length"
+        if not summary_locked:
+            summary = "Insufficient runway length"
         issues.append(
             f"Longest runway {longest:,} ft < required {required_length:,} ft for {leg.get('aircraft_category') or 'aircraft'}."
         )
     elif longest - required_length < 500:
         status = _combine_status(status, "CAUTION")
-        summary = "Runway margin tight"
+        if not summary_locked:
+            summary = "Runway margin tight"
         issues.append(
             f"Runway margin only {longest - required_length:,} ft; monitor performance numbers."
         )
 
-    closure_keywords = ("closed", "closure", "no ga", "curfew")
+    if parsed_restrictions is None:
+        operational_texts = [note_text(note) for note in operational_notes]
+        parsed_restrictions = parse_operational_restrictions(operational_texts)
+
+    closure_fail_keywords = ("closed", "no ga", "curfew")
+    closure_caution_keywords = ("closure",)
+    icao = (airport_profile.icao or "").strip().upper()
+    closure_caution_found = False
+    has_partial_closure = bool(
+        (parsed_restrictions or {}).get("hours_of_operation")
+        or (parsed_restrictions or {}).get("curfew")
+    )
     for note in operational_notes:
-        body = " ".join(str(note.get(key) or "") for key in ("note", "title", "body")).lower()
-        if any(keyword in body for keyword in closure_keywords):
+        text_body = " ".join(str(note.get(key) or "") for key in ("note", "title", "body"))
+        if is_explicit_deice_note(text_body):
+            continue
+        body = text_body.lower()
+        if "customs" in body:
+            continue
+        if any(keyword in body for keyword in closure_fail_keywords):
+            if has_partial_closure:
+                closure_caution_found = True
+                status = _combine_status(status, "CAUTION")
+                if not summary_locked:
+                    summary = "Operational closure noted"
+                issues.append(
+                    "Operational notes mention closures; review Fl3xx note for timing before dispatch."
+                )
+                continue
+
             status = "FAIL"
-            summary = "Operational closure in effect"
+            if not summary_locked:
+                summary = "Operational closure in effect"
             issues.append("Operational notes indicate closures or curfews impacting this leg.")
             break
+        if not closure_caution_found and any(keyword in body for keyword in closure_caution_keywords):
+            if _is_closure_caution_exempt(icao, body):
+                continue
+            closure_caution_found = True
+            status = _combine_status(status, "CAUTION")
+            if not summary_locked:
+                summary = "Operational closure noted"
+            issues.append(
+                "Operational notes mention closures; review Fl3xx note for timing before dispatch."
+            )
 
     return CategoryResult(status=status, summary=summary, issues=issues)
+
+
+def _is_closure_caution_exempt(icao: str, body: str) -> bool:
+    if not icao or not body:
+        return False
+    exemptions = CLOSURE_CAUTIONS_TO_IGNORE.get(icao)
+    if not exemptions:
+        return False
+    body_normalized = _normalize_text(body)
+    return any(
+        normalized_exemption and normalized_exemption in body_normalized
+        for normalized_exemption in (_normalize_text(exemption) for exemption in exemptions)
+    )
+
+
+def _normalize_text(value: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", value.lower())).strip()
 
 
 def _parse_iso_date(value: Optional[str]) -> Optional[date]:
@@ -735,6 +926,17 @@ def _is_within_deice_season(date_local: Optional[str]) -> bool:
         return True
     month_day = (parsed.month, parsed.day)
     return month_day >= DEICE_SEASON_START or month_day <= DEICE_SEASON_END
+
+
+def _dedupe_preserve_order(items: Sequence[str]) -> list[str]:
+    seen = set()
+    deduped: list[str] = []
+    for item in items:
+        if item in seen:
+            continue
+        seen.add(item)
+        deduped.append(item)
+    return deduped
 
 
 def evaluate_deice(
@@ -761,7 +963,7 @@ def evaluate_deice(
         )
 
     if deice_profile.deice_available is False:
-        status = "CAUTION"
+        status = "INFO"
         summary = "Deice unavailable"
         issues.append("Deice program indicates no deice at this airport.")
     elif deice_profile.deice_available is None:
@@ -769,16 +971,18 @@ def evaluate_deice(
         issues.append("No deice intel available; confirm if icing conditions likely.")
 
     restrictions = parsed_restrictions
+    restriction_notes: Sequence[str] = []
     if restrictions:
         if restrictions["deice_unavailable"]:
-            status = _combine_status(status, "CAUTION")
+            status = _combine_status(status, "INFO")
             summary = "Operational note: deice unavailable"
         elif restrictions["deice_limited"]:
-            status = _combine_status(status, "CAUTION")
+            status = _combine_status(status, "INFO")
             summary = "Operational note: deice limited"
         if restrictions["winter_sensitivity"]:
             issues.append("Operational notes highlight winter sensitivity.")
-        for note in restrictions["deice_notes"]:
+        restriction_notes = restrictions["deice_notes"]
+        for note in restriction_notes:
             issues.append(f"Deice note: {note}")
     else:
         note_text = " ".join(
@@ -786,14 +990,146 @@ def evaluate_deice(
             for note in operational_notes
         ).lower()
         if "deice" in note_text and "out" in note_text:
-            status = _combine_status(status, "CAUTION")
+            status = _combine_status(status, "INFO")
             summary = "Operational note: deice impacted"
             issues.append("Operational notes reference deice outages; confirm support.")
 
     if deice_profile.notes:
-        issues.append(deice_profile.notes)
+        normalized_restriction_notes = {note.strip() for note in restriction_notes}
+        if deice_profile.notes.strip() not in normalized_restriction_notes:
+            issues.append(deice_profile.notes)
 
-    return CategoryResult(status=status, summary=summary, issues=issues)
+    return CategoryResult(
+        status=status, summary=summary, issues=_dedupe_preserve_order(issues)
+    )
+
+
+def _coerce_coordinate(value: object) -> Optional[float]:
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _format_time(dt: datetime, tz_name: str | None) -> str:
+    label = dt.strftime("%H:%M")
+    return f"{label} ({tz_name})" if tz_name else label
+
+
+def _format_offset(delta: timedelta) -> str:
+    minutes = int(abs(delta.total_seconds()) // 60)
+    direction = "after" if delta.total_seconds() > 0 else "before"
+    return f"{minutes} mins {direction}"
+
+
+def evaluate_day_ops(
+    *,
+    icao: str,
+    parsed_restrictions: ParsedRestrictions,
+    tz_name: Optional[str],
+    leg_time_utc: Optional[str],
+    side: str,
+    metadata_record: Mapping[str, object],
+) -> CategoryResult:
+    if parsed_restrictions.get("night_ops_allowed") is not False:
+        return CategoryResult(status="PASS", summary="No day-ops restriction noted", issues=[])
+
+    planned_label = "Departure" if side == "DEP" else "Arrival"
+
+    lat = _coerce_coordinate(metadata_record.get("lat")) if metadata_record else None
+    lon = _coerce_coordinate(metadata_record.get("lon")) if metadata_record else None
+    if lat is None or lon is None:
+        return CategoryResult(
+            status="CAUTION",
+            summary="Day ops airport but missing coordinates",
+            issues=[f"Cannot compute sunrise/sunset for {icao}"],
+        )
+
+    if not tz_name:
+        return CategoryResult(
+            status="CAUTION",
+            summary="Day ops airport but missing timezone",
+            issues=[f"No timezone available for {icao}"],
+        )
+
+    try:
+        leg_dt = safe_parse_dt(leg_time_utc) if leg_time_utc else None
+        if leg_dt is None:
+            raise ValueError("Missing planned time")
+        leg_dt_local = leg_dt.astimezone(pytz.timezone(tz_name))
+    except Exception:
+        return CategoryResult(
+            status="CAUTION",
+            summary="Unable to evaluate day ops timing",
+            issues=["Planned time missing or invalid for day-ops check."],
+        )
+
+    if LocationInfo is None or sun is None:
+        return CategoryResult(
+            status="CAUTION",
+            summary="Unable to compute sunrise/sunset",
+            issues=["Astronomical data unavailable for this airport."],
+        )
+
+    try:
+        location = LocationInfo(latitude=lat, longitude=lon, timezone=tz_name)
+        sun_times = sun(location.observer, date=leg_dt_local.date(), tzinfo=location.timezone)
+        sunrise = sun_times["sunrise"]
+        sunset = sun_times["sunset"]
+    except Exception:
+        return CategoryResult(
+            status="CAUTION",
+            summary="Unable to compute sunrise/sunset",
+            issues=["Astronomical data unavailable for this airport."],
+        )
+
+    buffer = timedelta(hours=1)
+    sunrise_diff = leg_dt_local - sunrise
+    sunset_diff = leg_dt_local - sunset
+
+    if leg_dt_local < sunrise:
+        return CategoryResult(
+            status="FAIL",
+            summary=f"{planned_label} before sunrise",
+            issues=[
+                f"Sunrise {_format_time(sunrise, tz_name)}",
+                f"Planned {planned_label.lower()} {_format_time(leg_dt_local, tz_name)}",
+            ],
+        )
+
+    if leg_dt_local > sunset:
+        return CategoryResult(
+            status="FAIL",
+            summary=f"{planned_label} after sunset",
+            issues=[
+                f"Sunset {_format_time(sunset, tz_name)}",
+                f"Planned {planned_label.lower()} {_format_time(leg_dt_local, tz_name)}",
+            ],
+        )
+
+    if abs(sunrise_diff) <= buffer:
+        return CategoryResult(
+            status="CAUTION",
+            summary="Near sunrise window",
+            issues=[
+                f"Sunrise {_format_time(sunrise, tz_name)} — {planned_label} {_format_time(leg_dt_local, tz_name)} ({_format_offset(-sunrise_diff)})",
+            ],
+        )
+
+    if abs(sunset_diff) <= buffer:
+        return CategoryResult(
+            status="CAUTION",
+            summary="Near sunset window",
+            issues=[
+                f"Sunset {_format_time(sunset, tz_name)} — {planned_label} {_format_time(leg_dt_local, tz_name)} ({_format_offset(sunset_diff)})",
+            ],
+        )
+
+    return CategoryResult(
+        status="PASS",
+        summary="Day ops verified",
+        issues=[f"Sunrise {_format_time(sunrise, tz_name)}, Sunset {_format_time(sunset, tz_name)}"],
+    )
 
 
 def _format_customs_hours_entry(entry: Mapping[str, Any]) -> Optional[str]:
@@ -852,6 +1188,89 @@ def _build_customs_summary(base_summary: str, parsed: Optional[ParsedCustoms]) -
     return f"{base_summary} — {detail_text}"
 
 
+def _parse_time_minutes(value: str) -> Optional[int]:
+    digits = re.sub(r"\D", "", value)
+    if len(digits) == 3:
+        digits = f"0{digits}"
+    if len(digits) != 4:
+        return None
+    try:
+        hours = int(digits[:2])
+        minutes = int(digits[2:])
+    except ValueError:
+        return None
+    if hours > 24 or minutes > 59:
+        return None
+    return hours * 60 + minutes
+
+
+def _day_matches(day_value: str, weekday_index: int) -> bool:
+    if not day_value:
+        return True
+    normalized = day_value.strip().lower()
+    if normalized in {"daily", "day", "days", "all", "any", "unknown"}:
+        return True
+    names = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+    if normalized in names:
+        return normalized == names[weekday_index]
+    if "-" in normalized:
+        start, end = (part.strip() for part in normalized.split("-", 1))
+        if start in names and end in names:
+            start_idx = names.index(start)
+            end_idx = names.index(end)
+            if start_idx <= end_idx:
+                return start_idx <= weekday_index <= end_idx
+            return weekday_index >= start_idx or weekday_index <= end_idx
+    if "week" in normalized and "end" not in normalized:
+        return weekday_index < 5
+    if "weekend" in normalized:
+        return weekday_index >= 5
+    return False
+
+
+def _is_within_customs_hours(
+    arrival_dt_local: Optional[datetime], customs_hours: Sequence[Mapping[str, object]]
+) -> Optional[bool]:
+    if not customs_hours or arrival_dt_local is None:
+        return None
+
+    arrival_minutes = arrival_dt_local.hour * 60 + arrival_dt_local.minute
+    weekday_index = arrival_dt_local.weekday()
+
+    for entry in customs_hours:
+        start_raw = str(entry.get("start") or "").strip()
+        end_raw = str(entry.get("end") or "").strip()
+        days_value = entry.get("days")
+        days: Sequence[str] = ()
+        if isinstance(days_value, (list, tuple, set)):
+            days = [str(d) for d in days_value]
+
+        if days and not any(_day_matches(day, weekday_index) for day in days):
+            continue
+
+        start_minutes = _parse_time_minutes(start_raw) if start_raw else 0
+        end_minutes = _parse_time_minutes(end_raw) if end_raw else None
+
+        if start_minutes is None:
+            continue
+
+        if end_minutes is None:
+            return None
+
+        if end_minutes == 2400:
+            end_minutes = 24 * 60
+
+        if end_minutes < start_minutes:
+            in_window = arrival_minutes >= start_minutes or arrival_minutes < end_minutes
+        else:
+            in_window = start_minutes <= arrival_minutes < end_minutes
+
+        if in_window:
+            return True
+
+    return False
+
+
 def evaluate_customs(
     customs_profile: Optional[CustomsProfile],
     leg: LegContext,
@@ -859,10 +1278,21 @@ def evaluate_customs(
     operational_notes: Sequence[Mapping[str, Any]],
     *,
     parsed_customs: ParsedCustoms | None = None,
+    tz_name: Optional[str] = None,
 ) -> CategoryResult:
     issues: List[str] = []
     status: CategoryStatus = "PASS"
     summary = "Customs available"
+    parsed = parsed_customs
+
+    arrival_dt_local: Optional[datetime] = None
+    arrival_raw = leg.get("arrival_date_utc")
+    if isinstance(arrival_raw, str) and tz_name:
+        try:
+            arrival_dt_local = safe_parse_dt(arrival_raw)
+            arrival_dt_local = arrival_dt_local.astimezone(pytz.timezone(tz_name))
+        except Exception:
+            arrival_dt_local = None
 
     if side == "DEP":
         return CategoryResult(status=status, summary="Not required for departure", issues=issues)
@@ -871,10 +1301,22 @@ def evaluate_customs(
         summary = "Domestic leg"
         return CategoryResult(status=status, summary=summary, issues=issues)
 
+    hours_result: Optional[bool] = None
+
+    if parsed:
+        hours_result = _is_within_customs_hours(arrival_dt_local, parsed["customs_hours"])
+
+    suppress_canpass_caution = (
+        parsed and parsed.get("aoe_type") == "AOE" and hours_result is not False
+    )
+
     if customs_profile is None:
-        status = "CAUTION"
-        summary = "No customs intel"
-        issues.append("No customs record available; confirm with airport directly.")
+        if not parsed or not parsed.get("customs_available"):
+            status = "FAIL"
+            summary = "No customs intel"
+            issues.append("No customs record available; confirm with airport directly.")
+        else:
+            summary = "Customs available per operational notes"
     else:
         service_type = customs_profile.service_type or "UNKNOWN"
         issues.append(f"Customs service type: {service_type}.")
@@ -883,17 +1325,38 @@ def evaluate_customs(
             summary = "No customs service"
             issues.append("International arrival requires customs; arrange alternate field.")
         elif "CANPASS" in service_type.upper() and side == "ARR":
-            status = _combine_status(status, "CAUTION")
-            summary = "CANPASS arrival"
+            if not suppress_canpass_caution:
+                status = _combine_status(status, "CAUTION")
+                summary = summary or "CANPASS arrival"
             issues.append("Ensure CANPASS paperwork and notice are completed.")
         if customs_profile.notes:
             issues.append(customs_profile.notes)
 
-    parsed = parsed_customs
     if parsed:
+        if hours_result is False:
+            if parsed.get("aoe_type") == "AOE":
+                status = _combine_status(status, "FAIL")
+                summary = "AOE arrival outside customs hours"
+                issues.append(
+                    "Arrival time is outside customs hours; AOE clearance requires all passengers to hold CANPASS for 24/7 availability."
+                )
+                issues.extend(parsed.get("aoe_notes") or [])
+            elif parsed["customs_afterhours_not_available"]:
+                status = "FAIL"
+                summary = "Customs unavailable at planned time"
+                issues.append(
+                    "Arrival time falls outside customs hours and after-hours support is not permitted."
+                )
+            else:
+                status = _combine_status(status, "CAUTION")
+                issues.append(
+                    "Arrival time falls outside customs hours; arrange after-hours support or confirm availability."
+                )
+
         if parsed["canpass_only"]:
-            status = _combine_status(status, "CAUTION")
-            summary = "CANPASS arrival"
+            if not suppress_canpass_caution:
+                status = _combine_status(status, "CAUTION")
+                summary = summary or "CANPASS arrival"
             issues.append("Operational notes: CANPASS-only clearance.")
         if parsed["customs_prior_notice_hours"]:
             status = _combine_status(status, "CAUTION")
@@ -906,12 +1369,23 @@ def evaluate_customs(
                 f"Customs requires {parsed['customs_prior_notice_days']} day notice."
             )
         if parsed["customs_contact_required"]:
-            status = _combine_status(status, "CAUTION")
             issues.append("Customs contact required per notes.")
             issues.extend(parsed["customs_contact_notes"])
         if parsed["customs_afterhours_available"]:
             issues.append("Afterhours customs available; verify call-out requirements.")
             issues.extend(parsed["customs_afterhours_requirements"])
+        if parsed.get("aoe_type") == "AOE/15":
+            if hours_result in (False, None):
+                status = _combine_status(status, "CAUTION")
+                issues.append(
+                    "Airport designated AOE/15; operations outside posted hours may be unavailable."
+                )
+                issues.extend(parsed.get("aoe_notes") or [])
+        if parsed.get("aoe_type") == "AOE/CANPASS":
+            status = _combine_status(status, "FAIL")
+            summary = "AOE/CANPASS arrival"
+            issues.append("Airport is AOE/CANPASS; all passengers must hold CANPASS for customs clearance.")
+            issues.extend(parsed.get("aoe_notes") or [])
         if parsed["location_to_clear"]:
             issues.append(f"Clear customs at {parsed['location_to_clear']}.")
             issues.extend(parsed["location_notes"])
@@ -921,6 +1395,7 @@ def evaluate_customs(
         if parsed["crew_requirements"]:
             status = _combine_status(status, "CAUTION")
             issues.extend(parsed["crew_requirements"])
+        summary = summary or "Customs available per operational notes"
         summary = _build_customs_summary(summary, parsed)
     else:
         note_text = " ".join(
@@ -940,14 +1415,8 @@ def evaluate_slot_ppr(
     leg: LegContext,
     side: str,
     date_local: Optional[str],
+    parsed_restrictions: Optional[ParsedRestrictions] = None,
 ) -> CategoryResult:
-    slot_booking_windows_days = {
-        "CYYZ": 10,
-        "CYUL": 10,
-        "CYYC": 10,
-        "CYVR": 3,
-    }
-
     issues: List[str] = []
     status: CategoryStatus = "PASS"
     summary = "No slot/PPR requirement"
@@ -958,34 +1427,75 @@ def evaluate_slot_ppr(
     if target_dt:
         hours_until_event = (target_dt - now).total_seconds() / 3600
 
-    def _within_booking_window() -> bool:
-        icao = slot_ppr_profile.icao.upper()
-        booking_window_days = slot_booking_windows_days.get(icao)
-        if booking_window_days is None:
-            return True
-        if hours_until_event is None:
-            return False
-        return hours_until_event <= booking_window_days * 24
+    restrictions = parsed_restrictions or {}
 
-    def _check_requirement(required: bool, label: str, lead_days: Optional[int]) -> None:
-        nonlocal status, summary
-        if not required or not _within_booking_window():
-            return
-        required_summary = f"{label} required"
-        summary = required_summary
+    slot_required = bool(restrictions.get("slot_required")) or slot_ppr_profile.slot_required
+    ppr_required = bool(restrictions.get("ppr_required")) or slot_ppr_profile.ppr_required
+
+    slot_lead_days = restrictions.get("slot_lead_days") or slot_ppr_profile.slot_lead_days
+    slot_lead_hours = restrictions.get("slot_lead_hours")
+    ppr_lead_days = restrictions.get("ppr_lead_days") or slot_ppr_profile.ppr_lead_days
+    ppr_lead_hours = restrictions.get("ppr_lead_hours")
+
+    slot_notes = restrictions.get("slot_notes") if slot_required else []
+    ppr_notes = restrictions.get("ppr_notes") if ppr_required else []
+
+    def _format_lead(
+        lead_days: Optional[int], lead_hours: Optional[int]
+    ) -> tuple[Optional[int], Optional[str], Optional[str]]:
+        if lead_days is not None:
+            label = f"{lead_days} day" if lead_days == 1 else f"{lead_days} days"
+            return lead_days * 24, f"{label} out", f"{lead_days}-day"
+        if lead_hours is not None:
+            label = f"{lead_hours} hour" if lead_hours == 1 else f"{lead_hours} hours"
+            return lead_hours, f"{label} out", f"{lead_hours}-hour"
+        return None, None, None
+
+    def _handle_requirement(
+        required: bool,
+        label: str,
+        lead_days: Optional[int],
+        lead_hours: Optional[int],
+        notes: Sequence[str] | None,
+    ) -> Optional[str]:
+        nonlocal status
+        if not required:
+            return None
+
+        lead_hours_total, lead_display, window_label = _format_lead(lead_days, lead_hours)
+
+        if lead_hours_total is not None and hours_until_event is not None and hours_until_event > lead_hours_total:
+            for note in notes or []:
+                issues.append(note)
+            return f"{label} can only be obtained {lead_display}" if lead_display else f"{label} can only be obtained closer to departure"
+
         status = _combine_status(status, "CAUTION")
         issues.append(f"{label} required for {slot_ppr_profile.icao}.")
-        if lead_days is not None and hours_until_event is not None:
-            lead_hours = lead_days * 24
-            if hours_until_event < lead_hours:
-                status = _combine_status(status, "FAIL")
-                issues.append(f"Inside {lead_days}-day {label.lower()} window; action immediately.")
 
-    _check_requirement(slot_ppr_profile.slot_required, "Slot", slot_ppr_profile.slot_lead_days)
-    _check_requirement(slot_ppr_profile.ppr_required, "PPR", slot_ppr_profile.ppr_lead_days)
+        if lead_hours_total is not None and hours_until_event is not None and hours_until_event < lead_hours_total:
+            status = _combine_status(status, "FAIL")
+            window_descriptor = window_label or "published"
+            issues.append(f"Inside {window_descriptor} {label.lower()} window; action immediately.")
+
+        for note in notes or []:
+            issues.append(note)
+
+        return f"{label} required"
+
+    summary_messages: List[str] = []
+    for label, required, lead_days, lead_hours, notes in (
+        ("Slot", slot_required, slot_lead_days, slot_lead_hours, slot_notes),
+        ("PPR", ppr_required, ppr_lead_days, ppr_lead_hours, ppr_notes),
+    ):
+        message = _handle_requirement(required, label, lead_days, lead_hours, notes)
+        if message:
+            summary_messages.append(message)
 
     if slot_ppr_profile.notes:
         issues.append(slot_ppr_profile.notes)
+
+    if summary_messages:
+        summary = summary_messages[0]
 
     return CategoryResult(status=status, summary=summary, issues=issues)
 
@@ -1054,4 +1564,17 @@ def evaluate_overflight(
 
 def _combine_status(current: CategoryStatus, candidate: CategoryStatus) -> CategoryStatus:
     return candidate if _STATUS_PRIORITY[candidate] > _STATUS_PRIORITY[current] else current
+
+## Known benign operational notes that mention closures
+CLOSURE_CAUTIONS_TO_IGNORE: Mapping[str, tuple[str, ...]] = {
+    # CYLW publishes a standing reminder about NOTAM reviews and potential closures that
+    # should not trigger a closure caution.
+    "CYLW": (
+        "crews to review notams prior to every operation. taxiway and airport closures are common."
+        " crews to contact phone number prior to departure for permission to operate if required by notam",
+        "crews to review notams prior to every operation taxiway airport closures are common"
+        " contact phone number prior to departure if required by notam",
+    ),
+}
+
 

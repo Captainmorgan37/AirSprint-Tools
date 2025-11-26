@@ -25,7 +25,12 @@ from .common import (
 from .data_access import CustomsRule, load_customs_rules
 from .schemas import CategoryResult, CategoryStatus, combine_statuses
 
-_ALERT_PRIORITY: Mapping[CategoryStatus, int] = {"PASS": 0, "CAUTION": 1, "FAIL": 2}
+_ALERT_PRIORITY: Mapping[CategoryStatus, int] = {
+    "PASS": 0,
+    "INFO": 1,
+    "CAUTION": 2,
+    "FAIL": 3,
+}
 
 
 def _international(
@@ -176,7 +181,7 @@ def evaluate_airport(
     if arr:
         deice = has_deice_available(icao=arr)
         if deice is False:
-            alerts.append(("CAUTION", f"No deice available at {arr}"))
+            alerts.append(("INFO", f"No deice available at {arr}"))
             issues.append(f"Arrange alternate deice support for {arr} or plan tech stop.")
         elif deice is None:
             issues.append(f"No deice intel for {arr}; monitor forecast if icing possible.")

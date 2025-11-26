@@ -4,11 +4,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Dict, Iterable, List, Literal, Mapping, MutableMapping, Optional
+from typing import Any, Dict, Iterable, List, Literal, Mapping, MutableMapping, Optional
 
-CategoryStatus = Literal["PASS", "CAUTION", "FAIL"]
+CategoryStatus = Literal["PASS", "INFO", "CAUTION", "FAIL"]
 
-_STATUS_PRIORITY: Mapping[CategoryStatus, int] = {"PASS": 0, "CAUTION": 1, "FAIL": 2}
+_STATUS_PRIORITY: Mapping[CategoryStatus, int] = {
+    "PASS": 0,
+    "INFO": 1,
+    "CAUTION": 2,
+    "FAIL": 3,
+}
 
 
 def combine_statuses(statuses: Iterable[CategoryStatus]) -> CategoryStatus:
@@ -31,9 +36,17 @@ class CategoryResult:
     status: CategoryStatus = "PASS"
     summary: str = ""
     issues: List[str] = field(default_factory=list)
+    details: Dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> Dict[str, object]:
-        return {"status": self.status, "summary": self.summary, "issues": list(self.issues)}
+        payload: Dict[str, object] = {
+            "status": self.status,
+            "summary": self.summary,
+            "issues": list(self.issues),
+        }
+        if self.details:
+            payload["details"] = dict(self.details)
+        return payload
 
 
 @dataclass
