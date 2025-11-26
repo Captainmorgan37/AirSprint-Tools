@@ -6,7 +6,13 @@ from datetime import datetime, timezone
 import re
 from typing import Any, Callable, List, Mapping, Optional, Sequence
 
-from flight_leg_utils import load_airport_metadata_lookup, safe_parse_dt
+import pytz
+
+from flight_leg_utils import (
+    load_airport_metadata_lookup,
+    load_airport_tz_lookup,
+    safe_parse_dt,
+)
 
 from .airport_module import (
     AirportFeasibilityResult,
@@ -263,6 +269,7 @@ def _determine_overall_status(
 def _collect_planning_note_feedback(day: DayContext) -> tuple[List[str], List[str]]:
     issues: List[str] = []
     confirmations: List[str] = []
+    tz_lookup = load_airport_tz_lookup()
 
     def _route_contains_segment(route: Sequence[str], dep: str, arr: str) -> bool:
         for idx, code in enumerate(route[:-1]):
@@ -279,6 +286,13 @@ def _collect_planning_note_feedback(day: DayContext) -> tuple[List[str], List[st
         dep_dt = (
             safe_parse_dt(leg.get("departure_date_utc")) if leg.get("departure_date_utc") else None
         )
+        if dep_dt:
+            tz_name = tz_lookup.get(dep)
+            if tz_name:
+                try:
+                    dep_dt = dep_dt.astimezone(pytz.timezone(tz_name))
+                except Exception:
+                    pass
         entries = parse_route_entries_from_note(note, default_year=dep_dt.year if dep_dt else None)
         if not entries or dep_dt is None:
             continue
