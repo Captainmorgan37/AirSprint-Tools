@@ -148,6 +148,13 @@ def _sidebar_links() -> list[dict[str, Any]]:
                 {"path": "pages/Dev_Feasibility.py", "label": "Feasibility Checker"},
             ],
         },
+        {
+            "label": "🛠️ Diagnostics",
+            "expanded": False,
+            "links": [
+                {"path": "pages/System Diagnostics.py", "label": "System Diagnostics"},
+            ],
+        },
     ]
 
 
