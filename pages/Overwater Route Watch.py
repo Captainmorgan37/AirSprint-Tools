@@ -4,6 +4,7 @@ from datetime import date, datetime, timedelta
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import math
+import os
 
 import pandas as pd
 import pydeck as pdk
@@ -25,6 +26,14 @@ TARGET_TAILS: Tuple[str, ...] = ("C-GASE", "C-FSBR")
 TAIL_KEYS = {"".join(tail.upper().split("-")) for tail in TARGET_TAILS}
 LAND_BUFFER_NM = 200
 SAMPLES_PER_LEG = 18
+
+
+_MAPBOX_TOKEN = get_secret("mapbox_token")
+if isinstance(_MAPBOX_TOKEN, str) and _MAPBOX_TOKEN.strip():
+    _MAPBOX_TOKEN = _MAPBOX_TOKEN.strip()
+    # pydeck prefers the runtime setting while Streamlit can rely on the env var
+    os.environ["MAPBOX_API_KEY"] = _MAPBOX_TOKEN
+    pdk.settings.mapbox_api_key = _MAPBOX_TOKEN
 
 
 configure_page(page_title="Overwater Route Watch")
@@ -280,6 +289,7 @@ def _render_tail_section(tail: str, legs: List[Dict[str, Any]]) -> None:
         initial_view_state=pdk.ViewState(latitude=avg_lat, longitude=avg_lon, zoom=3.5),
         layers=[layer_lines, layer_points],
         tooltip={"text": "{tooltip}"},
+        mapbox_key=_MAPBOX_TOKEN if isinstance(_MAPBOX_TOKEN, str) and _MAPBOX_TOKEN else None,
     )
     st.pydeck_chart(deck)
 
