@@ -4,6 +4,7 @@ from datetime import date, datetime, timedelta
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import math
+import os
 
 import pandas as pd
 import pydeck as pdk
@@ -25,6 +26,11 @@ TARGET_TAILS: Tuple[str, ...] = ("C-GASE", "C-FSBR")
 TAIL_KEYS = {"".join(tail.upper().split("-")) for tail in TARGET_TAILS}
 LAND_BUFFER_NM = 200
 SAMPLES_PER_LEG = 18
+
+
+_MAPBOX_TOKEN = get_secret("mapbox_token")
+if isinstance(_MAPBOX_TOKEN, str) and _MAPBOX_TOKEN.strip():
+    os.environ["MAPBOX_API_KEY"] = _MAPBOX_TOKEN.strip()
 
 
 configure_page(page_title="Overwater Route Watch")
