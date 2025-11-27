@@ -4,6 +4,7 @@ from datetime import date, datetime, timedelta
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import math
+import os
 
 import pandas as pd
 import pydeck as pdk
@@ -20,6 +21,10 @@ from flight_leg_utils import (
     safe_parse_dt,
 )
 from Home import configure_page, get_secret, password_gate, render_sidebar
+
+_MAPBOX_TOKEN = st.secrets.get("mapbox_token")  # type: ignore[attr-defined]
+if isinstance(_MAPBOX_TOKEN, str) and _MAPBOX_TOKEN.strip():
+    os.environ["MAPBOX_API_KEY"] = _MAPBOX_TOKEN.strip()
 
 TARGET_TAILS: Tuple[str, ...] = ("C-GASE", "C-FSBR")
 TAIL_KEYS = {"".join(tail.upper().split("-")) for tail in TARGET_TAILS}
