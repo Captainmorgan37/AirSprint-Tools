@@ -146,9 +146,9 @@ def _format_departure(dep_raw: Any) -> str:
 
 @st.cache_data(ttl=300)
 def _fetch_tail_legs(from_date: date, to_date: date) -> Tuple[pd.DataFrame, Dict[str, Any]]:
-    api_settings = get_secret("fl3xx")
+    api_settings = get_secret("fl3xx_api")
     if not api_settings:
-        raise FlightDataError("FL3XX API secrets are missing. Configure `fl3xx` in `.streamlit/secrets.toml`.")
+        raise FlightDataError("FL3XX API secrets are missing. Configure the `fl3xx_api` section in Streamlit secrets.")
 
     config = build_fl3xx_api_config(dict(api_settings))
     df, metadata, _crew = fetch_legs_dataframe(
