@@ -150,6 +150,29 @@ def test_cylw_operational_closure_reminder_is_ignored_despite_punctuation() -> N
     assert result.issues == []
 
 
+def test_fuel_service_closure_does_not_trigger_fail() -> None:
+    profile = _default_profile()
+    leg = {"aircraft_category": "SUPER_MIDSIZE_JET"}
+    notes = [
+        {
+            "note": (
+                "FUEL:\n\n• Fuel pump service closed at 1630L during winter months. Afterhours callout available with fee"
+            )
+        }
+    ]
+
+    result = evaluate_suitability(
+        airport_profile=profile,
+        leg=leg,
+        operational_notes=notes,
+        side="arrival",
+    )
+
+    assert result.status == "PASS"
+    assert result.summary == "Fl3xx category A approved"
+    assert result.issues == []
+
+
 def test_customs_closure_note_not_treated_as_operational_closure() -> None:
     profile = _default_profile()
     leg = {"aircraft_category": "SUPER_MIDSIZE_JET"}
