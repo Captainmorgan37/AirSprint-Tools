@@ -33,6 +33,11 @@ FILENAME = "IOCCReport-2ndIteration.csv"
 
 LOCAL_TZ = ZoneInfo("America/Edmonton")
 
+HANGAR_ALIASES = {
+    "McCall Hangar": {"McCall Hangar"},
+    "Palmer Hangar": {"Palmer Hangar", "600 Palmer Road Northeast, Calgary"},
+}
+
 
 # ----------------------------
 # Fetch Latest CSV
@@ -117,6 +122,14 @@ def parse_df(df: pd.DataFrame):
     else:
         df["Tail"] = ""
 
+    def normalize_hangar(location: str) -> str:
+        for hangar, aliases in HANGAR_ALIASES.items():
+            if str(location).strip() in aliases:
+                return hangar
+        return str(location).strip()
+
+    df["Hangar"] = df["Last Location"].apply(normalize_hangar)
+
     return df
 
 
@@ -128,7 +141,7 @@ def get_current(df: pd.DataFrame, window_min: int = 25):
 def render_hangar(name: str, df: pd.DataFrame):
     st.subheader(f"🏢 {name}")
 
-    loc_df = df[df["Last Location"] == name]
+    loc_df = df[df["Hangar"] == name]
 
     if loc_df.empty:
         st.caption("No aircraft currently at this hangar.")
