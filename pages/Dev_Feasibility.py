@@ -999,11 +999,20 @@ def _collect_operational_note_highlights(
     return highlights
 
 
+def _format_workflow_label(result: Mapping[str, Any]) -> Optional[str]:
+    workflow = str(result.get("workflow") or "").strip()
+    workflow_custom = str(result.get("workflow_custom_name") or "").strip()
+    if workflow_custom and workflow and workflow_custom.lower() != workflow.lower():
+        return f"{workflow_custom} ({workflow})"
+    return workflow_custom or workflow or None
+
+
 def _render_full_quote_result(result: FullFeasibilityResult) -> None:
     legs = result.get("legs", [])
     duty = result.get("duty", {})
     overall_status = result.get("overall_status", "PASS")
     emoji = STATUS_EMOJI.get(overall_status, "")
+    workflow_label = _format_workflow_label(result)
 
     route_map_payload = _build_route_map_payload(legs)
 
@@ -1011,6 +1020,11 @@ def _render_full_quote_result(result: FullFeasibilityResult) -> None:
     summary_col, map_col = st.columns([1.6, 1])
 
     with summary_col:
+        if workflow_label:
+            st.markdown(
+                f"<div style='font-weight:800; font-size:1.1rem;'>Workflow: {workflow_label}</div>",
+                unsafe_allow_html=True,
+            )
         st.subheader(f"{emoji} Full Quote Day Status: {overall_status}")
         st.caption(
             f"{result.get('bookingIdentifier', 'Unknown Quote')} • {len(legs)} leg(s) • {result.get('aircraft_type', 'Unknown Aircraft')}"
