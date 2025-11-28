@@ -368,6 +368,125 @@ def _labels_match(requested: str, actual: str) -> bool:
     return requested_canonical in actual_canonical or actual_canonical in requested_canonical
 
 
+def _extract_owner_aircraft_from_note(note: Optional[str]) -> Optional[str]:
+    if not note:
+        return None
+
+    match = re.search(r"\b(?:CLUB|INFINITY)\s+([A-Z0-9/\-]{2,10})\s+OWNER\b", note, re.IGNORECASE)
+    if not match:
+        return None
+
+    label = match.group(1)
+    return _normalize_aircraft_label(label)
+
+
+def _classify_expected_workflow(owner_aircraft: str, requested: str) -> Optional[str]:
+    owner_canonical = _canonical_aircraft_label(owner_aircraft)
+    requested_canonical = _canonical_aircraft_label(requested)
+    if not owner_canonical or not requested_canonical:
+        return None
+
+    if owner_canonical == requested_canonical:
+        return "guaranteed"
+
+    if owner_canonical == "EMB" and requested_canonical == "CJ2":
+        return "guaranteed"
+
+    return "interchange"
+
+
+def _infer_expected_workflow(day: DayContext) -> tuple[Optional[str], Optional[str]]:
+    inferred: list[tuple[str, str, str]] = []
+
+    for leg in day.get("legs", []):
+        note = leg.get("planning_notes")
+        if not note:
+            continue
+
+        owner_aircraft = _extract_owner_aircraft_from_note(note)
+        requested = extract_requested_aircraft_from_note(note)
+        expected = _classify_expected_workflow(owner_aircraft or "", requested or "")
+        if expected:
+            inferred.append((expected, owner_aircraft or "", requested or ""))
+
+    if not inferred:
+        return None, None
+
+    buckets = {bucket for bucket, _, _ in inferred}
+    if len(buckets) > 1:
+        return "mixed", None
+
+    bucket = inferred[0][0]
+    owner_label = next((owner for candidate, owner, _ in inferred if candidate == bucket and owner), "")
+    requested_label = next(
+        (requested for candidate, _, requested in inferred if candidate == bucket and requested), ""
+    )
+
+    detail_parts = []
+    if owner_label:
+        detail_parts.append(f"owner aircraft {owner_label}")
+    if requested_label:
+        detail_parts.append(f"requested {requested_label}")
+    detail = " and ".join(detail_parts) or None
+
+    return bucket, detail
+
+
+def _extract_workflow_bucket(day: DayContext) -> tuple[Optional[str], str]:
+    workflow_label = _coerce_str(day.get("workflow_custom_name")) or _coerce_str(day.get("workflow"))
+    if not workflow_label:
+        return None, "unspecified workflow"
+
+    cleaned = re.sub(r"[^A-Z]", "", workflow_label.upper())
+    if "ASAVAILABLE" in cleaned:
+        return "as available", workflow_label
+    if "GUARANTEED" in cleaned:
+        return "guaranteed", workflow_label
+    if "INTERCHANGE" in cleaned:
+        return "interchange", workflow_label
+    return None, workflow_label
+
+
+def _collect_workflow_validation(day: DayContext) -> tuple[list[str], list[str]]:
+    issues: list[str] = []
+    confirmations: list[str] = []
+
+    actual_bucket, workflow_label = _extract_workflow_bucket(day)
+    if not actual_bucket:
+        return issues, confirmations
+
+    expected_bucket, detail = _infer_expected_workflow(day)
+
+    if actual_bucket == "as available":
+        confirmations.append(f"Workflow '{workflow_label}' validated as As Available.")
+        return issues, confirmations
+
+    if expected_bucket is None:
+        issues.append(
+            f"Workflow '{workflow_label}' could not be validated against planning notes."
+        )
+        return issues, confirmations
+
+    if expected_bucket == "mixed":
+        issues.append(
+            f"Planning notes contain mixed workflow signals; current workflow '{workflow_label}' may not align."
+        )
+        return issues, confirmations
+
+    if actual_bucket == expected_bucket:
+        suffix = f" ({detail})" if detail else ""
+        confirmations.append(
+            f"Workflow '{workflow_label}' aligns with planning notes ({expected_bucket.title()}){suffix}."
+        )
+        return issues, confirmations
+
+    suffix = f" ({detail})" if detail else ""
+    issues.append(
+        f"Workflow '{workflow_label}' is {actual_bucket.title()} but planning notes indicate {expected_bucket.title()}{suffix}."
+    )
+    return issues, confirmations
+
+
 def _extract_requested_aircraft_type(quote: Mapping[str, Any]) -> Optional[str]:
     for key in (
         "requestedAircraftType",
@@ -466,6 +585,10 @@ def run_feasibility_phase1(request: FeasibilityRequest) -> FullFeasibilityResult
     if requested_issue:
         validation_checks.append(requested_issue)
         issues.append(requested_issue)
+    workflow_issues, workflow_confirmations = _collect_workflow_validation(day)
+    validation_checks.extend(workflow_confirmations)
+    validation_checks.extend(workflow_issues)
+    issues.extend(workflow_issues)
     issues.extend(planning_note_issues)
     summary = _build_summary(day, leg_results, duty_result)
 
