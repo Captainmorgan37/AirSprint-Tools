@@ -224,7 +224,6 @@ def _render_tail_section(tail: str, legs: List[Dict[str, Any]]) -> None:
             "Departure": leg["departure"],
             "Leg NM": _display_value(leg.get("leg_distance_nm")),
             f"Max > {LAND_BUFFER_NM} NM?": "⚠️ Check" if leg.get("overwater_risk") else "✅ Within buffer",
-            "Furthest from land (NM)": _display_value(leg.get("furthest_from_land_nm")),
         }
         for leg in legs
     ]
@@ -281,7 +280,7 @@ def _render_tail_section(tail: str, legs: List[Dict[str, Any]]) -> None:
     )
 
     deck = pdk.Deck(
-        map_style="mapbox://styles/mapbox/light-v9",
+        map_style="mapbox://styles/mapbox/dark-v10",
         initial_view_state=pdk.ViewState(latitude=avg_lat, longitude=avg_lon, zoom=3.5),
         layers=[layer_lines, layer_points],
         tooltip={"text": "{tooltip}"},
