@@ -23,7 +23,9 @@ _MONTH_MAP = {
     "DEC": 12,
 }
 
-_REQUEST_PATTERN = re.compile(r"request(?:ing|ed)\s+([A-Z0-9]{2,6})", re.IGNORECASE)
+_REQUEST_PHRASE_PATTERN = re.compile(r"request(?:ing|ed)\b(.*)$", re.IGNORECASE)
+_REQUEST_TOKEN_PATTERN = re.compile(r"[A-Z0-9+/\-]{2,8}", re.IGNORECASE)
+_LETTER_ONLY_CODES = {"EMB"}
 
 
 def extract_planning_note_text(payload: Any) -> Optional[str]:
@@ -59,9 +61,21 @@ def extract_requested_aircraft_from_note(note: str) -> Optional[str]:
 
     if not isinstance(note, str):
         return None
-    match = _REQUEST_PATTERN.search(note)
-    if match:
-        return match.group(1).upper()
+
+    match = _REQUEST_PHRASE_PATTERN.search(note)
+    if not match:
+        return None
+
+    request_tail = match.group(1)
+    for token in _REQUEST_TOKEN_PATTERN.findall(request_tail):
+        normalized = re.sub(r"[^A-Z0-9]", "", token.upper())
+        if len(normalized) < 2 or len(normalized) > 6:
+            continue
+        if not re.search(r"[A-Z]", normalized):
+            continue
+        if not re.search(r"\d", normalized) and normalized not in _LETTER_ONLY_CODES:
+            continue
+        return normalized
     return None
 
 
