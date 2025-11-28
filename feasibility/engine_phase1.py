@@ -328,7 +328,7 @@ def _canonical_aircraft_label(label: str) -> str:
     if not normalized:
         return ""
 
-    emb_variants = {"E545", "E500", "E550", "P500", "EMB"}
+    emb_variants = {"E545", "E500", "E550", "P500", "EMB", "L450"}
     if normalized in emb_variants:
         return "EMB"
 
