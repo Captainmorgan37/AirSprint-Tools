@@ -372,7 +372,9 @@ def _extract_owner_aircraft_from_note(note: Optional[str]) -> Optional[str]:
     if not note:
         return None
 
-    match = re.search(r"\b(?:CLUB|INFINITY)\s+([A-Z0-9/\-]{2,10})\s+OWNER\b", note, re.IGNORECASE)
+    match = re.search(
+        r"\b(?:\d+)?(?:CLUB|INFINITY)\s+([A-Z0-9/\-]{2,10})\s+OWNER\b", note, re.IGNORECASE
+    )
     if not match:
         return None
 

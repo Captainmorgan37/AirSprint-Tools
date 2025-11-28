@@ -184,6 +184,20 @@ def test_workflow_validation_flags_mismatch() -> None:
     assert any("planning notes indicate Interchange" in issue for issue in result["issues"])
 
 
+def test_workflow_validation_allows_owner_prefix_typos() -> None:
+    quote = _workflow_quote(
+        "FEX Interchange", "05DEC KPSP - CYEG\n-\n24Club CJ3 owner requesting interchange to EMB"
+    )
+
+    result = run_feasibility_phase1({"quote": quote, "tz_provider": _tz_provider})
+
+    assert any(
+        "Workflow 'FEX Interchange' aligns with planning notes (Interchange)" in entry
+        for entry in result["validation_checks"]
+    )
+    assert not any("workflow" in issue.lower() for issue in result["issues"])
+
+
 def test_as_available_workflow_validates_without_notes() -> None:
     quote = _workflow_quote("FEX As Available", "")
 
