@@ -50,7 +50,7 @@ def _render_fd_summary() -> None:
     else:
         st.info("Descriptor targets could not be determined.")
 
-    st.button("🔄 Refresh", on_click=st.experimental_rerun)
+    st.button("🔄 Refresh", on_click=st.rerun)
 
 
 def _render_preventative_steps() -> None:
