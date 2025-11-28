@@ -219,12 +219,12 @@ class AirportFeasibilityResult:
 
 
 RUNWAY_REQUIREMENTS_FT: Mapping[str, int] = {
-    "VERY_LIGHT_JET": 3500,
-    "LIGHT_JET": 4000,
-    "MIDSIZE_JET": 4500,
-    "SUPER_MIDSIZE_JET": 5000,
-    "HEAVY_JET": 5500,
-    "ULTRA_LONG_RANGE_JET": 6000,
+    "VERY_LIGHT_JET": 3700,
+    "LIGHT_JET": 3700,
+    "MIDSIZE_JET": 3700,
+    "SUPER_MIDSIZE_JET": 3700,
+    "HEAVY_JET": 3700,
+    "ULTRA_LONG_RANGE_JET": 3700,
 }
 
 SLOT_KEYWORDS = ("SLOT", "ATC SLOT")
@@ -819,7 +819,7 @@ def evaluate_suitability(
         else:
             issues.append("No Fl3xx approval category found; airport not cleared for operations.")
 
-    required_length = RUNWAY_REQUIREMENTS_FT.get(leg.get("aircraft_category", ""), 4300)
+    required_length = RUNWAY_REQUIREMENTS_FT.get(leg.get("aircraft_category", ""), 3700)
     longest = airport_profile.longest_runway_ft
     if longest is None:
         issues.append("No runway data available; verify manually.")
@@ -858,7 +858,7 @@ def evaluate_suitability(
         if is_explicit_deice_note(text_body):
             continue
         body = text_body.lower()
-        if "customs" in body:
+        if "customs" in body or _is_fuel_service_closure(body, closure_fail_keywords + closure_caution_keywords):
             continue
         if any(keyword in body for keyword in closure_fail_keywords):
             if has_partial_closure:
@@ -901,6 +901,16 @@ def _is_closure_caution_exempt(icao: str, body: str) -> bool:
         normalized_exemption and normalized_exemption in body_normalized
         for normalized_exemption in (_normalize_text(exemption) for exemption in exemptions)
     )
+
+
+def _is_fuel_service_closure(body: str, closure_keywords: tuple[str, ...]) -> bool:
+    if not body:
+        return False
+
+    if "fuel" not in body and "prist" not in body and "jet a" not in body:
+        return False
+
+    return any(keyword in body for keyword in closure_keywords)
 
 
 def _normalize_text(value: str) -> str:
