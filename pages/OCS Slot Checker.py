@@ -326,6 +326,15 @@ def _normalise_fl3xx_rows(rows: Sequence[Mapping[str, Any]]) -> pd.DataFrame:
         tail = _normalize_str(row.get("tail"))
         if tail:
             tail = tail.replace("-", "").upper()
+        flight_type = _first_non_empty(
+            row,
+            (
+                "flightType",
+                "flight_type",
+                "flighttype",
+                "type",
+            ),
+        )
         booking = _first_non_empty(
             row,
             (
@@ -413,6 +422,7 @@ def _normalise_fl3xx_rows(rows: Sequence[Mapping[str, Any]]) -> pd.DataFrame:
                 "OnBlock": onblock,
                 "Aircraft Type": aircraft_type,
                 "Workflow": workflow,
+                "Flight Type": flight_type,
             }
         )
 
@@ -852,6 +862,13 @@ def parse_fl3xx_file(file):
         df["Tail"] = df["Aircraft"].astype(str).str.replace("-", "", regex=False).str.upper()
     else:
         df["Tail"] = ""
+
+    flight_type_col = None
+    for candidate in ["Flight Type", "flightType", "flight_type", "Type"]:
+        if candidate in df.columns:
+            flight_type_col = candidate
+            break
+
     def parse_dt(col):
         if col in df.columns:
             return pd.to_datetime(df[col], errors="coerce", dayfirst=True)
@@ -864,7 +881,20 @@ def parse_fl3xx_file(file):
             dep_series = pd.to_datetime(df[c], errors="coerce", dayfirst=True)
             break
     df["OffBlock"] = dep_series
-    keep = ["Booking","From (ICAO)","To (ICAO)","Tail","OnBlock","OffBlock","Aircraft Type","Workflow"]
+    if flight_type_col:
+        df["Flight Type"] = df[flight_type_col]
+
+    keep = [
+        "Booking",
+        "From (ICAO)",
+        "To (ICAO)",
+        "Tail",
+        "OnBlock",
+        "OffBlock",
+        "Aircraft Type",
+        "Workflow",
+        "Flight Type",
+    ]
     cols = [c for c in keep if c in df.columns]
     return df[cols].copy()
 
@@ -877,14 +907,31 @@ def compare(fl3xx_df: pd.DataFrame, ocs_df: pd.DataFrame):
     legs = []
     for _, r in fl3xx_df.iterrows():
         tail = str(r.get("Tail", "")).upper()
+        flight_type = r.get("Flight Type")
+        workflow = r.get("Workflow")
+        category = ""
+        ft_norm = _normalize_str(flight_type)
+        if ft_norm:
+            ft_upper = ft_norm.upper()
+            if ft_upper == "POS":
+                category = "OCS (POS)"
+            elif ft_upper == "PAX":
+                category = "PAX"
+            else:
+                category = ft_upper
+        else:
+            wf_norm = _normalize_str(workflow)
+            if wf_norm and "POS" in wf_norm.upper():
+                category = "OCS (POS)"
+
         to_ap = r.get("To (ICAO)")
         if isinstance(to_ap, str) and to_ap in SLOT_AIRPORTS and pd.notna(r.get("OnBlock")):
             legs.append({"Flight": r.get("Booking"), "Tail": tail, "Airport": to_ap,
-                         "Movement": "ARR", "SchedDT": r.get("OnBlock")})
+                         "Movement": "ARR", "SchedDT": r.get("OnBlock"), "PAX/OCS": category})
         from_ap = r.get("From (ICAO)")
         if isinstance(from_ap, str) and from_ap in SLOT_AIRPORTS and pd.notna(r.get("OffBlock")):
             legs.append({"Flight": r.get("Booking"), "Tail": tail, "Airport": from_ap,
-                         "Movement": "DEP", "SchedDT": r.get("OffBlock")})
+                         "Movement": "DEP", "SchedDT": r.get("OffBlock"), "PAX/OCS": category})
 
     # De-duplicate legs so the same flight isn't processed twice
     if legs:
@@ -1096,8 +1143,8 @@ if fl3xx_frames and ocs_files:
     
     show_table(matched_df,  "✔ Matched",          "matched")
     show_table(missing_df,  "⚠ Missing",          "missing")
-    show_table(mis_tail_df, "⚠ Tail mismatch",    "misaligned_tail")
     show_table(mis_time_df, "⚠ Time mismatch",    "misaligned_time")
+    show_table(mis_tail_df, "⚠ Tail mismatch",    "misaligned_tail")
 
 
 elif not ocs_files:
