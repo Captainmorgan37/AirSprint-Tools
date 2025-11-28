@@ -118,11 +118,28 @@ def _build_day_context(
         or _coerce_str(quote.get("bookingid"))
     )
 
+    workflow = _coerce_str(quote.get("workflow")) if isinstance(quote, Mapping) else ""
+    workflow_custom = (
+        _coerce_str(quote.get("workflowCustomName")) if isinstance(quote, Mapping) else ""
+    )
+    if (not workflow or not workflow_custom) and legs:
+        first_leg = legs[0]
+        if not workflow:
+            workflow = _coerce_str(first_leg.get("workflow")) if isinstance(first_leg, Mapping) else ""
+        if not workflow_custom:
+            workflow_custom = (
+                _coerce_str(first_leg.get("workflow_custom_name"))
+                if isinstance(first_leg, Mapping)
+                else ""
+            )
+
     day: DayContext = {
         "quote_id": _coerce_str(quote.get("bookingid") or quote.get("quoteId") or quote.get("id")) or None,
         "bookingIdentifier": booking_identifier or "UNKNOWN",
         "aircraft_type": aircraft_type or "Unknown Aircraft",
         "aircraft_category": aircraft_category or "",
+        "workflow": workflow,
+        "workflow_custom_name": workflow_custom,
         "legs": list(legs),
         "sales_contact": sales_contact,
         "createdDate": quote.get("createdDate"),
@@ -457,6 +474,8 @@ def run_feasibility_phase1(request: FeasibilityRequest) -> FullFeasibilityResult
         bookingIdentifier=day["bookingIdentifier"],
         aircraft_type=day["aircraft_type"],
         aircraft_category=day["aircraft_category"],
+        workflow=day.get("workflow", ""),
+        workflow_custom_name=day.get("workflow_custom_name", ""),
         flight_category=flight_category,
         legs=[result.as_dict() for result in leg_results],
         duty=duty_result,

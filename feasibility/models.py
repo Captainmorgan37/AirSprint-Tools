@@ -26,6 +26,8 @@ class DayContext(TypedDict):
     bookingIdentifier: str
     aircraft_type: str
     aircraft_category: str
+    workflow: str
+    workflow_custom_name: str
     legs: List[LegContext]
     sales_contact: Optional[str]
     createdDate: Optional[int]
@@ -52,6 +54,8 @@ class FullFeasibilityResult(TypedDict):
     bookingIdentifier: str
     aircraft_type: str
     aircraft_category: str
+    workflow: str
+    workflow_custom_name: str
     flight_category: Optional[str]
     legs: Sequence[Mapping[str, Any]]
     duty: DutyFeasibilityResult

@@ -19,6 +19,8 @@ def _build_simple_quote() -> Dict[str, Any]:
         "bookingid": 987,
         "aircraftObj": {"type": "CJ3", "category": "LIGHT_JET"},
         "salesPerson": {"firstName": "Alex", "lastName": "Smith"},
+        "workflow": "PRIVATE",
+        "workflowCustomName": "FEX Guaranteed",
         "legs": [
             {
                 "id": "LEG-1",
@@ -54,6 +56,8 @@ def test_phase1_engine_runs_for_entire_quote() -> None:
     result = run_feasibility_phase1({"quote": quote, "tz_provider": _tz_provider})
 
     assert result["bookingIdentifier"] == "PIURB"
+    assert result["workflow"] == "PRIVATE"
+    assert result["workflow_custom_name"] == "FEX Guaranteed"
     assert len(result["legs"]) == 2
     assert result["duty"]["total_duty"] == 270
     assert result["duty"]["status"] == "PASS"
@@ -539,6 +543,8 @@ def test_duty_module_flags_extended_day_and_split_window() -> None:
             "bookingIdentifier": "ABC",
             "aircraft_type": "Test",
             "aircraft_category": "",
+            "workflow": "",
+            "workflow_custom_name": "",
             "legs": legs,
             "sales_contact": None,
             "createdDate": None,
@@ -577,6 +583,8 @@ def test_split_duty_extension_extends_allowable_window() -> None:
             "bookingIdentifier": "DEF",
             "aircraft_type": "Test",
             "aircraft_category": "",
+            "workflow": "",
+            "workflow_custom_name": "",
             "legs": legs,
             "sales_contact": None,
             "createdDate": None,
@@ -615,6 +623,8 @@ def test_reset_duty_day_allows_new_segments() -> None:
             "bookingIdentifier": "GHI",
             "aircraft_type": "Test",
             "aircraft_category": "",
+            "workflow": "",
+            "workflow_custom_name": "",
             "legs": legs,
             "sales_contact": None,
             "createdDate": None,
