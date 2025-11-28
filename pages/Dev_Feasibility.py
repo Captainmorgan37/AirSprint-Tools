@@ -1022,7 +1022,7 @@ def _render_full_quote_result(result: FullFeasibilityResult) -> None:
     with summary_col:
         if workflow_label:
             st.markdown(
-                f"<div style='font-weight:800; font-size:1.1rem;'>Workflow: {workflow_label}</div>",
+                f"<div style='font-weight:800; font-size:1.1rem; color:#d97706;'>Workflow: {workflow_label}</div>",
                 unsafe_allow_html=True,
             )
         st.subheader(f"{emoji} Full Quote Day Status: {overall_status}")
