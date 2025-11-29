@@ -114,18 +114,20 @@ def _extract_departure_time(flight: Mapping[str, Any]) -> Optional[str]:
     return None
 
 
-def _is_reserve_calendar_departure(flight: Optional[Mapping[str, Any]]) -> bool:
+def _get_departure_local_date(flight: Optional[Mapping[str, Any]]) -> Optional[date]:
+    """Return the local departure calendar date for ``flight`` if available."""
+
     if not isinstance(flight, Mapping):
-        return False
+        return None
 
     departure_time = _extract_departure_time(flight)
     if not departure_time:
-        return False
+        return None
 
     try:
         dep_dt = safe_parse_dt(departure_time)
     except Exception:
-        return False
+        return None
 
     tz_name: Optional[str] = None
     dep_airport = _extract_airport_code(flight)
@@ -143,7 +145,28 @@ def _is_reserve_calendar_departure(flight: Optional[Mapping[str, Any]]) -> bool:
     else:
         dep_dt = dep_dt.astimezone(pytz.UTC)
 
-    return dep_dt.date() in RESERVE_CALENDAR_DATES
+    return dep_dt.date()
+
+
+def _is_reserve_calendar_departure(flight: Optional[Mapping[str, Any]]) -> bool:
+    dep_date = _get_departure_local_date(flight)
+    return dep_date in RESERVE_CALENDAR_DATES if dep_date else False
+
+
+def _find_reserve_calendar_dates(
+    legs: Sequence[Mapping[str, Any]] | None,
+) -> list[date]:
+    """Return sorted reserve calendar dates represented within ``legs``."""
+
+    if not legs:
+        return []
+
+    matches: set[date] = set()
+    for leg in legs:
+        dep_date = _get_departure_local_date(leg)
+        if dep_date and dep_date in RESERVE_CALENDAR_DATES:
+            matches.add(dep_date)
+    return sorted(matches)
 
 
 def _find_reserve_calendar_dates(
@@ -1155,8 +1178,16 @@ def _render_full_quote_result(result: FullFeasibilityResult) -> None:
         weight_balance = leg.get("weightBalance") if isinstance(leg, Mapping) else None
         dep_code = departure.get("icao", "???")
         arr_code = arrival.get("icao", "???")
-        header = f"Leg {index}: {dep_code} → {arr_code}"
+        dep_local_date = _get_departure_local_date(leg)
+        reserve_flag = dep_local_date in RESERVE_CALENDAR_DATES if dep_local_date else False
+        header_suffix = " (Reserve Calendar Day)" if reserve_flag else ""
+        header = f"Leg {index}: {dep_code} → {arr_code}{header_suffix}"
         with st.expander(header, expanded=False):
+            if reserve_flag and dep_local_date:
+                st.warning(
+                    f"Departing on reserve calendar day {dep_local_date.strftime('%Y-%m-%d')}."
+                    " Confirm club availability and workflows before release."
+                )
             if isinstance(aircraft, Mapping):
                 _render_aircraft_category(aircraft, expanded=False)
             if isinstance(weight_balance, Mapping):
@@ -1210,6 +1241,19 @@ with quote_tab:
         st.info("Load a quote to view available legs for feasibility analysis.")
 
     quote_loaded = isinstance(quote_payload, Mapping)
+
+    if quote_loaded:
+        quote_reserve_dates = _find_reserve_calendar_dates(
+            quote_payload.get("legs") if isinstance(quote_payload, Mapping) else None
+        )
+        if quote_reserve_dates:
+            formatted_dates = ", ".join(
+                date_obj.strftime("%Y-%m-%d") for date_obj in quote_reserve_dates
+            )
+            st.warning(
+                f"Reserve calendar day detected in quote legs ({formatted_dates})."
+                " Expect club workflows and confirm availability before proceeding."
+            )
     with st.expander("Loaded quote payload"):
         if quote_loaded:
             st.json(quote_payload)
