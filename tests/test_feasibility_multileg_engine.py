@@ -200,6 +200,20 @@ def test_workflow_validation_handles_club_owning_two_types() -> None:
     assert not any("workflow" in issue.lower() for issue in result["issues"])
 
 
+def test_workflow_validation_supports_ampersand_between_owner_types() -> None:
+    quote = _workflow_quote(
+        "FEX Guaranteed", "24HR CLUB CJ3 & L450 OWNER REQUESTING CJ3"
+    )
+
+    result = run_feasibility_phase1({"quote": quote, "tz_provider": _tz_provider})
+
+    assert any(
+        "Workflow 'FEX Guaranteed' aligns with planning notes (Guaranteed)" in entry
+        for entry in result["validation_checks"]
+    )
+    assert not any("workflow" in issue.lower() for issue in result["issues"])
+
+
 def test_workflow_validation_handles_mixed_club_and_infinity_ownership() -> None:
     quote = _workflow_quote(
         "Club Guaranteed", "Club P500 owner, Infinity CJ2 owner requesting CJ2"
