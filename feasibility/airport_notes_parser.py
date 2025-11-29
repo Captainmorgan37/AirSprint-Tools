@@ -508,6 +508,11 @@ def _extract_slot_details(
     note: str, out: ParsedRestrictions, *, add_note: bool = True
 ) -> None:
     lower = note.lower()
+    if "voluntary" in lower:
+        if add_note:
+            out["slot_notes"].append(note)
+        return
+
     out["slot_required"] = True
     if match := SLOT_DAYS_OUT_RE.search(lower):
         value = int(match.group(1))
