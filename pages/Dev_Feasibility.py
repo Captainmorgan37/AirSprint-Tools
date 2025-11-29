@@ -550,7 +550,7 @@ def st_flight_route_map(route_data: Mapping[str, Any], *, height: int = 430) -> 
         airports,
         get_position=["lon", "lat"],
         get_text="icao",
-        get_color=[245, 245, 245],
+        get_text_color=[245, 245, 245, 255],
         get_size=18,
         size_units="pixels",
         size_min_pixels=14,
@@ -560,7 +560,9 @@ def st_flight_route_map(route_data: Mapping[str, Any], *, height: int = 430) -> 
         get_alignment_baseline="top",
         get_pixel_offset=[0, 16],
         background=True,
-        get_background_color=[0, 0, 0, 180],
+        get_background_color=[0, 0, 0, 200],
+        font_settings={"fontFamily": "Arial, sans-serif", "fontWeight": 700},
+        parameters={"depthTest": False},
     )
 
     view_state = pdk.ViewState(
