@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+import math
 import re
 import os
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, cast
@@ -408,21 +409,76 @@ def _build_route_map_payload(
 def _estimate_zoom_level(path: Sequence[Sequence[float]]) -> float:
     if not path:
         return 3.5
-    lats = [point[1] for point in path]
-    lons = [point[0] for point in path]
-    lat_span = max(lats) - min(lats)
-    lon_span = max(lons) - min(lons)
-    max_span = max(lat_span, lon_span)
 
-    if max_span > 70:
-        return 2.0
-    if max_span > 40:
-        return 2.7
-    if max_span > 20:
-        return 3.2
-    if max_span > 10:
-        return 4.0
-    return 5.0
+    def _distance_nm(point_a: Sequence[float], point_b: Sequence[float]) -> float:
+        if len(point_a) < 2 or len(point_b) < 2:
+            return 0.0
+        lon1, lat1 = map(math.radians, point_a[:2])
+        lon2, lat2 = map(math.radians, point_b[:2])
+        dlat = lat2 - lat1
+        dlon = lon2 - lon1
+        a = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+        return 3440.065 * c
+
+    total_distance = 0.0
+    for idx in range(len(path) - 1):
+        total_distance += _distance_nm(path[idx], path[idx + 1])
+
+    if total_distance > 3500:
+        return 2.1
+    if total_distance > 2000:
+        return 2.6
+    if total_distance > 1200:
+        return 3.1
+    if total_distance > 600:
+        return 3.6
+    if total_distance > 250:
+        return 4.1
+    if total_distance > 80:
+        return 4.6
+    return 5.1
+
+
+def _build_route_segments(path: Sequence[Sequence[float]]) -> List[Mapping[str, Any]]:
+    if not path or len(path) < 2:
+        return []
+
+    def _gradient_color(position: float) -> List[int]:
+        """Interpolate from cyan -> blue -> white."""
+
+        anchors = [
+            (0.0, (0, 220, 255)),
+            (0.5, (30, 120, 255)),
+            (1.0, (255, 255, 255)),
+        ]
+        for idx in range(1, len(anchors)):
+            start_pos, start_color = anchors[idx - 1]
+            end_pos, end_color = anchors[idx]
+            if position <= end_pos:
+                span = end_pos - start_pos
+                if span <= 0:
+                    return list(end_color)
+                factor = (position - start_pos) / span
+                return [
+                    int(start_color[i] + (end_color[i] - start_color[i]) * factor)
+                    for i in range(3)
+                ]
+        return list(anchors[-1][1])
+
+    segments: List[Mapping[str, Any]] = []
+    num_segments = len(path) - 1
+    for idx in range(num_segments):
+        progress = idx / max(num_segments - 1, 1)
+        segments.append(
+            {
+                "path": [path[idx], path[idx + 1]],
+                "color": _gradient_color(progress),
+                "width": 1.8,
+                "name": f"Leg {idx + 1}",
+            }
+        )
+    return segments
 
 
 def st_flight_route_map(route_data: Mapping[str, Any], *, height: int = 430) -> None:
@@ -440,14 +496,44 @@ def st_flight_route_map(route_data: Mapping[str, Any], *, height: int = 430) -> 
 
     latitude, longitude = center
     zoom = _estimate_zoom_level(path) if isinstance(path, Sequence) else 3.5
+    segments = _build_route_segments(path) if isinstance(path, Sequence) else []
+
+    route_shadow_layer = pdk.Layer(
+        "PathLayer",
+        [{"path": path, "name": "Route shadow", "width": 2.5}],
+        get_path="path",
+        get_color=[5, 5, 5, 120],
+        get_width="width",
+        width_scale=12,
+        width_min_pixels=6,
+        pickable=False,
+        rounded=True,
+    )
+
+    route_glow_layer = pdk.Layer(
+        "PathLayer",
+        [{"path": path, "name": "Route glow", "width": 2.2}],
+        get_path="path",
+        get_color=[80, 200, 255, 120],
+        get_width="width",
+        width_scale=10,
+        width_min_pixels=5,
+        pickable=False,
+        rounded=True,
+    )
 
     route_layer = pdk.Layer(
         "PathLayer",
-        [{"path": path, "name": "Route"}],
+        segments if segments else [{"path": path, "color": [0, 180, 255], "width": 2.0}],
         get_path="path",
-        get_color=[0, 180, 255],
+        get_color="color",
+        get_width="width",
         width_scale=10,
         width_min_pixels=3,
+        auto_highlight=True,
+        highlight_color=[255, 255, 255, 180],
+        pickable=True,
+        rounded=True,
     )
 
     airports_layer = pdk.Layer(
@@ -464,7 +550,7 @@ def st_flight_route_map(route_data: Mapping[str, Any], *, height: int = 430) -> 
         airports,
         get_position=["lon", "lat"],
         get_text="icao",
-        get_color=[245, 245, 245],
+        get_text_color=[245, 245, 245, 255],
         get_size=18,
         size_units="pixels",
         size_min_pixels=14,
@@ -473,6 +559,10 @@ def st_flight_route_map(route_data: Mapping[str, Any], *, height: int = 430) -> 
         get_text_anchor="middle",
         get_alignment_baseline="top",
         get_pixel_offset=[0, 16],
+        background=True,
+        get_background_color=[0, 0, 0, 200],
+        font_settings={"fontFamily": "Arial, sans-serif", "fontWeight": 700},
+        parameters={"depthTest": False},
     )
 
     view_state = pdk.ViewState(
@@ -484,7 +574,7 @@ def st_flight_route_map(route_data: Mapping[str, Any], *, height: int = 430) -> 
     )
 
     deck = pdk.Deck(
-        layers=[route_layer, airports_layer, labels_layer],
+        layers=[route_shadow_layer, route_glow_layer, route_layer, airports_layer, labels_layer],
         initial_view_state=view_state,
         tooltip={"text": "{icao}"},
         map_style="mapbox://styles/mapbox/dark-v10",
