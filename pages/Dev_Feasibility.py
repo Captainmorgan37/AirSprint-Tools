@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+import math
 import re
 import os
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, cast
@@ -345,6 +346,106 @@ def _lookup_airport_coordinates(
     return latitude, longitude
 
 
+def _format_time(value: Any) -> Optional[str]:
+    text = str(value).strip()
+    if not text:
+        return None
+    digits = re.sub(r"\D", "", text)
+    if len(digits) == 3:
+        digits = f"0{digits}"
+    if len(digits) != 4:
+        return None
+    hours = digits[:2]
+    minutes = digits[2:]
+    return f"{hours}:{minutes}"
+
+
+def _format_customs_hours(entries: Any) -> Optional[str]:
+    if not isinstance(entries, Sequence) or isinstance(entries, (str, bytes)):
+        return None
+
+    formatted: list[str] = []
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            continue
+        start = _format_time(entry.get("start"))
+        end = _format_time(entry.get("end"))
+        if not start and not end:
+            continue
+        range_text = "–".join(filter(None, [start, end]))
+        days_value = entry.get("days")
+        days: list[str] = []
+        if isinstance(days_value, Sequence) and not isinstance(days_value, (str, bytes)):
+            days = [str(value).strip() for value in days_value if str(value).strip()]
+        if days:
+            formatted.append(f"{'/'.join(days)} {range_text}".strip())
+        else:
+            formatted.append(range_text)
+
+    if not formatted:
+        return None
+
+    summary = formatted[0]
+    if len(formatted) > 1:
+        summary += f" (+{len(formatted) - 1} more)"
+    return summary
+
+
+def _format_after_hours(parsed_customs: Mapping[str, Any]) -> str:
+    if parsed_customs.get("customs_afterhours_available"):
+        return "Yes"
+    if parsed_customs.get("customs_afterhours_not_available"):
+        return "No"
+    return "Unknown"
+
+
+def _build_airport_point(
+    icao: str,
+    *,
+    lat: float,
+    lon: float,
+    color: list[int],
+    customs: Mapping[str, Any] | None,
+    country: str,
+) -> Dict[str, Any]:
+    icao_clean = str(icao).strip().upper()
+    is_canada = country.lower().startswith("canada") if country else False
+    is_us = country.lower() in {"united states", "united states of america", "usa", "us"}
+    customs_available = isinstance(customs, Mapping) and bool(customs.get("customs_available"))
+    badge = None
+    label = icao_clean or "?"
+    tooltip_lines: list[str] = [f"<b>{icao_clean}</b>"]
+
+    if customs_available and isinstance(customs, Mapping):
+        aoe_type = customs.get("aoe_type")
+        hours = _format_customs_hours(customs.get("customs_hours")) or "Unknown"
+        if is_canada:
+            if isinstance(aoe_type, str) and aoe_type.strip():
+                badge = f"✦ {aoe_type.strip()}"
+            else:
+                badge = "✦ AOE"
+            label = f"{icao} {badge}" if badge else icao
+            if badge:
+                tooltip_lines.append(badge)
+            tooltip_lines.append(f"Open Dates/Hours: {hours}")
+        elif is_us:
+            tooltip_lines.append(f"Open Dates/Hours: {hours}")
+            tooltip_lines.append(f"After Hours Available? {_format_after_hours(customs)}")
+        else:
+            tooltip_lines.append(f"Customs available ({hours})")
+    return {
+        "icao": icao_clean,
+        "label": label,
+        "lat": lat,
+        "lon": lon,
+        "color": color,
+        "tooltip": "<br/>".join(tooltip_lines),
+        "customs_available": customs_available,
+        "customs_badge": badge,
+        "customs_radius": 55000,
+    }
+
+
 def _build_route_map_payload(
     legs: Sequence[Mapping[str, Any]] | Any,
 ) -> Optional[Dict[str, Any]]:
@@ -355,12 +456,21 @@ def _build_route_map_payload(
     if not metadata:
         return None
 
+    customs_by_airport: dict[str, Mapping[str, Any]] = {}
+
     ordered_airports: List[str] = []
     for leg in legs:
         if not isinstance(leg, Mapping):
             continue
         departure = leg.get("departure", {}) if isinstance(leg, Mapping) else {}
         arrival = leg.get("arrival", {}) if isinstance(leg, Mapping) else {}
+        for side_data in (departure, arrival):
+            if not isinstance(side_data, Mapping):
+                continue
+            icao_code = side_data.get("icao") if isinstance(side_data, Mapping) else None
+            parsed_customs = side_data.get("parsed_customs_notes") if isinstance(side_data, Mapping) else None
+            if isinstance(icao_code, str) and isinstance(parsed_customs, Mapping):
+                customs_by_airport.setdefault(icao_code.strip().upper(), parsed_customs)
         dep_code = departure.get("icao") if isinstance(departure, Mapping) else None
         arr_code = arrival.get("icao") if isinstance(arrival, Mapping) else None
         if isinstance(dep_code, str) and dep_code.strip():
@@ -391,7 +501,19 @@ def _build_route_map_payload(
             color = [0, 200, 255]
         else:
             color = [120, 220, 255]
-        airport_points.append({"icao": airport, "lat": lat, "lon": lon, "color": color})
+
+        customs = customs_by_airport.get(airport)
+        country = str(metadata.get(airport, {}).get("country") or "").strip()
+        airport_points.append(
+            _build_airport_point(
+                airport,
+                lat=lat,
+                lon=lon,
+                color=color,
+                customs=customs if isinstance(customs, Mapping) else None,
+                country=country,
+            )
+        )
 
     if len(coordinates) < 2:
         return None
@@ -408,21 +530,77 @@ def _build_route_map_payload(
 def _estimate_zoom_level(path: Sequence[Sequence[float]]) -> float:
     if not path:
         return 3.5
-    lats = [point[1] for point in path]
-    lons = [point[0] for point in path]
-    lat_span = max(lats) - min(lats)
-    lon_span = max(lons) - min(lons)
-    max_span = max(lat_span, lon_span)
 
-    if max_span > 70:
-        return 2.0
-    if max_span > 40:
-        return 2.7
-    if max_span > 20:
-        return 3.2
-    if max_span > 10:
-        return 4.0
-    return 5.0
+    def _distance_nm(point_a: Sequence[float], point_b: Sequence[float]) -> float:
+        if len(point_a) < 2 or len(point_b) < 2:
+            return 0.0
+        lon1, lat1 = map(math.radians, point_a[:2])
+        lon2, lat2 = map(math.radians, point_b[:2])
+        dlat = lat2 - lat1
+        dlon = lon2 - lon1
+        a = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+        return 3440.065 * c
+
+    total_distance = 0.0
+    for idx in range(len(path) - 1):
+        total_distance += _distance_nm(path[idx], path[idx + 1])
+
+    if total_distance > 3500:
+        return 2.1
+    if total_distance > 2000:
+        return 2.6
+    if total_distance > 1200:
+        return 3.1
+    if total_distance > 600:
+        return 3.6
+    if total_distance > 250:
+        return 4.1
+    if total_distance > 80:
+        return 4.6
+    return 5.1
+
+
+def _build_route_segments(path: Sequence[Sequence[float]]) -> List[Mapping[str, Any]]:
+    if not path or len(path) < 2:
+        return []
+
+    def _gradient_color(position: float) -> List[int]:
+        """Interpolate from cyan -> blue -> white."""
+
+        anchors = [
+            (0.0, (0, 220, 255)),
+            (0.5, (30, 120, 255)),
+            (1.0, (255, 255, 255)),
+        ]
+        for idx in range(1, len(anchors)):
+            start_pos, start_color = anchors[idx - 1]
+            end_pos, end_color = anchors[idx]
+            if position <= end_pos:
+                span = end_pos - start_pos
+                if span <= 0:
+                    return list(end_color)
+                factor = (position - start_pos) / span
+                return [
+                    int(start_color[i] + (end_color[i] - start_color[i]) * factor)
+                    for i in range(3)
+                ]
+        return list(anchors[-1][1])
+
+    segments: List[Mapping[str, Any]] = []
+    num_segments = len(path) - 1
+    for idx in range(num_segments):
+        progress = idx / max(num_segments - 1, 1)
+        segments.append(
+            {
+                "path": [path[idx], path[idx + 1]],
+                "color": _gradient_color(progress),
+                "width": 1.8,
+                "name": f"Leg {idx + 1}",
+                "tooltip": f"Leg {idx + 1}",
+            }
+        )
+    return segments
 
 
 def st_flight_route_map(route_data: Mapping[str, Any], *, height: int = 430) -> None:
@@ -440,15 +618,63 @@ def st_flight_route_map(route_data: Mapping[str, Any], *, height: int = 430) -> 
 
     latitude, longitude = center
     zoom = _estimate_zoom_level(path) if isinstance(path, Sequence) else 3.5
+    segments = _build_route_segments(path) if isinstance(path, Sequence) else []
+
+    route_shadow_layer = pdk.Layer(
+        "PathLayer",
+        [{"path": path, "name": "Route shadow", "width": 2.5}],
+        get_path="path",
+        get_color=[5, 5, 5, 120],
+        get_width="width",
+        width_scale=12,
+        width_min_pixels=6,
+        pickable=False,
+        rounded=True,
+    )
+
+    route_glow_layer = pdk.Layer(
+        "PathLayer",
+        [{"path": path, "name": "Route glow", "width": 2.2}],
+        get_path="path",
+        get_color=[80, 200, 255, 120],
+        get_width="width",
+        width_scale=10,
+        width_min_pixels=5,
+        pickable=False,
+        rounded=True,
+    )
 
     route_layer = pdk.Layer(
         "PathLayer",
-        [{"path": path, "name": "Route"}],
+        segments if segments else [{"path": path, "color": [0, 180, 255], "width": 2.0}],
         get_path="path",
-        get_color=[0, 180, 255],
+        get_color="color",
+        get_width="width",
         width_scale=10,
         width_min_pixels=3,
+        auto_highlight=True,
+        highlight_color=[255, 255, 255, 180],
+        pickable=True,
+        rounded=True,
     )
+
+    customs_airports = [airport for airport in airports if airport.get("customs_available")]
+    customs_layer = None
+    if customs_airports:
+        customs_layer = pdk.Layer(
+            "ScatterplotLayer",
+            customs_airports,
+            get_position=["lon", "lat"],
+            get_fill_color=[255, 214, 102, 70],
+            get_line_color=[255, 214, 102, 160],
+            stroked=True,
+            get_line_width=2200,
+            get_radius="customs_radius",
+            radius_min_pixels=24,
+            line_width_min_pixels=2,
+            pickable=True,
+            opacity=0.35,
+        )
 
     airports_layer = pdk.Layer(
         "ScatterplotLayer",
@@ -459,22 +685,6 @@ def st_flight_route_map(route_data: Mapping[str, Any], *, height: int = 430) -> 
         pickable=True,
     )
 
-    labels_layer = pdk.Layer(
-        "TextLayer",
-        airports,
-        get_position=["lon", "lat"],
-        get_text="icao",
-        get_color=[245, 245, 245],
-        get_size=18,
-        size_units="pixels",
-        size_min_pixels=14,
-        billboard=True,
-        get_angle=0,
-        get_text_anchor="middle",
-        get_alignment_baseline="top",
-        get_pixel_offset=[0, 16],
-    )
-
     view_state = pdk.ViewState(
         latitude=latitude,
         longitude=longitude,
@@ -483,10 +693,15 @@ def st_flight_route_map(route_data: Mapping[str, Any], *, height: int = 430) -> 
         pitch=35,
     )
 
+    layers = [route_shadow_layer, route_glow_layer, route_layer]
+    if customs_layer:
+        layers.append(customs_layer)
+    layers.append(airports_layer)
+
     deck = pdk.Deck(
-        layers=[route_layer, airports_layer, labels_layer],
+        layers=layers,
         initial_view_state=view_state,
-        tooltip={"text": "{icao}"},
+        tooltip={"html": "{tooltip}"},
         map_style="mapbox://styles/mapbox/dark-v10",
     )
 
