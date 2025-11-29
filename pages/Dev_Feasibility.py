@@ -26,6 +26,7 @@ from feasibility import (
     run_feasibility_phase1,
 )
 from feasibility.operational_notes import build_operational_notes_fetcher
+from feasibility.planning_notes import extract_planning_note_text
 from feasibility.lookup import BookingLookupError
 from feasibility.quote_lookup import (
     QuoteLookupError,
@@ -143,6 +144,18 @@ def _is_reserve_calendar_departure(flight: Optional[Mapping[str, Any]]) -> bool:
         dep_dt = dep_dt.astimezone(pytz.UTC)
 
     return dep_dt.date() in RESERVE_CALENDAR_DATES
+
+
+def _is_club_owner_booking(flight: Optional[Mapping[str, Any]]) -> bool:
+    if not isinstance(flight, Mapping):
+        return False
+
+    note = extract_planning_note_text(flight)
+    if not note:
+        return False
+
+    normalized = note.lower()
+    return "club owner" in normalized or "owner club" in normalized
 
 
 def status_icon(status: str) -> str:
@@ -1271,7 +1284,10 @@ if stored_result and isinstance(stored_result, FeasibilityResult):
     st.caption(f"Generated at {stored_result.timestamp}")
 
     if _is_reserve_calendar_departure(stored_result.flight):
-        st.warning("Flight taking place on reserve calendar day.")
+        if _is_club_owner_booking(stored_result.flight):
+            st.error("Club owner booking on reserve calendar day.")
+        else:
+            st.warning("Flight taking place on reserve calendar day.")
 
     for name, category in stored_result.categories.items():
         _render_category(name, category)
