@@ -1,21 +1,36 @@
-import sys
 from pathlib import Path
+import sys
+from datetime import datetime
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+if str(Path(__file__).resolve().parents[1]) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import notam_filters as nf
-
-
-def test_taxiway_only_notam_hidden():
-    text = "!MWH 10/062 MWH TWY J CLSD 2510241430-2510242300"
-    assert nf.is_taxiway_only_notam(text) is True
+from notam_filters import evaluate_closure_notam
 
 
-def test_runway_notam_not_hidden_when_runway_present():
-    text = "RWY 08/26 CLSD AVBL AS TWY"
-    assert nf.is_taxiway_only_notam(text) is False
+def test_evaluate_closure_notam_fails_inside_window() -> None:
+    notam = "AIRPORT CLOSED 2000-0600 LOCAL"
+    planned_time = datetime(2024, 1, 1, 21, 0)
+
+    assert evaluate_closure_notam(notam, planned_time) == "FAIL"
 
 
-def test_non_taxi_notam_visible():
-    text = "APRONS CLOSED FOR MAINTENANCE"
-    assert nf.is_taxiway_only_notam(text) is False
+def test_evaluate_closure_notam_caution_near_start() -> None:
+    notam = "AIRPORT CLOSED 2000-0600 LOCAL"
+    planned_time = datetime(2024, 1, 1, 18, 45)
+
+    assert evaluate_closure_notam(notam, planned_time) == "CAUTION"
+
+
+def test_evaluate_closure_notam_caution_near_end() -> None:
+    notam = "AIRPORT CLOSED 2000-0600 LOCAL"
+    planned_time = datetime(2024, 1, 1, 6, 45)
+
+    assert evaluate_closure_notam(notam, planned_time) == "CAUTION"
+
+
+def test_evaluate_closure_notam_info_when_far_from_window() -> None:
+    notam = "AIRPORT CLOSED 2000-0600 LOCAL"
+    planned_time = datetime(2024, 1, 1, 15, 0)
+
+    assert evaluate_closure_notam(notam, planned_time) == "INFO"
