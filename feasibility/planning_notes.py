@@ -23,7 +23,9 @@ _MONTH_MAP = {
     "DEC": 12,
 }
 
-_REQUEST_PHRASE_PATTERN = re.compile(r"request(?:ing|ed)\b(.*)$", re.IGNORECASE)
+_REQUEST_PHRASE_PATTERN = re.compile(
+    r"\b(?:request(?:ing|ed)?|req)\b(.*)$", re.IGNORECASE
+)
 _REQUEST_TOKEN_PATTERN = re.compile(r"[A-Z0-9+/\-]{2,8}", re.IGNORECASE)
 _LETTER_ONLY_CODES = {"EMB"}
 

@@ -242,6 +242,18 @@ def test_workflow_validation_handles_mixed_club_and_infinity_ownership() -> None
     assert not any("workflow" in issue.lower() for issue in result["issues"])
 
 
+def test_workflow_validation_supports_abbreviated_infinity_and_request() -> None:
+    quote = _workflow_quote("Club Guaranteed", "8HR INF CJ2 OWNER REQ CJ2")
+
+    result = run_feasibility_phase1({"quote": quote, "tz_provider": _tz_provider})
+
+    assert any(
+        "Workflow 'Club Guaranteed' aligns with planning notes (Guaranteed)" in entry
+        for entry in result["validation_checks"]
+    )
+    assert not any("workflow" in issue.lower() for issue in result["issues"])
+
+
 def test_workflow_validation_flags_mismatch() -> None:
     quote = _workflow_quote("Club Guaranteed", "INFINITY CJ2 OWNER REQUESTING CJ3")
 
