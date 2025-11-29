@@ -408,12 +408,13 @@ def _build_airport_point(
     customs: Mapping[str, Any] | None,
     country: str,
 ) -> Dict[str, Any]:
+    icao_clean = str(icao).strip().upper()
     is_canada = country.lower().startswith("canada") if country else False
     is_us = country.lower() in {"united states", "united states of america", "usa", "us"}
     customs_available = isinstance(customs, Mapping) and bool(customs.get("customs_available"))
     badge = None
-    label = icao
-    tooltip_lines: list[str] = [f"<b>{icao}</b>"]
+    label = icao_clean or "?"
+    tooltip_lines: list[str] = [f"<b>{icao_clean}</b>"]
 
     if customs_available and isinstance(customs, Mapping):
         aoe_type = customs.get("aoe_type")
@@ -433,7 +434,7 @@ def _build_airport_point(
         else:
             tooltip_lines.append(f"Customs available ({hours})")
     return {
-        "icao": icao,
+        "icao": icao_clean,
         "label": label,
         "lat": lat,
         "lon": lon,
@@ -684,26 +685,6 @@ def st_flight_route_map(route_data: Mapping[str, Any], *, height: int = 430) -> 
         pickable=True,
     )
 
-    labels_layer = pdk.Layer(
-        "TextLayer",
-        airports,
-        get_position=["lon", "lat"],
-        get_text="label",
-        get_color=[245, 245, 245, 255],
-        get_size=18,
-        size_units="pixels",
-        size_min_pixels=14,
-        billboard=True,
-        get_angle=0,
-        get_text_anchor="middle",
-        get_alignment_baseline="top",
-        get_pixel_offset=[0, 16],
-        background=True,
-        get_background_color=[0, 0, 0, 200],
-        font_settings={"fontFamily": "Arial, sans-serif", "fontWeight": 700},
-        parameters={"depthTest": False},
-    )
-
     view_state = pdk.ViewState(
         latitude=latitude,
         longitude=longitude,
@@ -715,7 +696,7 @@ def st_flight_route_map(route_data: Mapping[str, Any], *, height: int = 430) -> 
     layers = [route_shadow_layer, route_glow_layer, route_layer]
     if customs_layer:
         layers.append(customs_layer)
-    layers.extend([airports_layer, labels_layer])
+    layers.append(airports_layer)
 
     deck = pdk.Deck(
         layers=layers,
