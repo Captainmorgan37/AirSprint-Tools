@@ -156,6 +156,7 @@ WITHIN_HOUR_RE = re.compile(r"within the hour")
 PPR_DAYS_OUT_RE = re.compile(r"(\d+)\s*days?\s*(?:notice|prior)")
 PPR_HOURS_OUT_RE = re.compile(r"(\d+)\s*(?:h|hrs|hours)\s*(?:notice|prior)")
 CLOSED_BETWEEN_RE = re.compile(r"closed between\s*(\d{3,4})[-–](\d{3,4})")
+CLOSED_RANGE_RE = re.compile(r"closed[^0-9]*?(\d{3,4})[-–](\d{3,4})")
 RUNWAY_NUM_RE = re.compile(r"rwy\s*(\d{2}[lrc]?)", re.IGNORECASE)
 ACFT_LIMIT_RE = re.compile(r"(embraer|cj2|cj3|legacy|challenger|global)", re.IGNORECASE)
 
@@ -464,7 +465,9 @@ def parse_operational_restrictions(notes: Sequence[str]) -> ParsedRestrictions:
         categories = _classify_operational_note(text)
         contains_winter = "winter" in categories
         explicit_deice_only = "deice" in categories and is_explicit_deice_note(text)
-        if not explicit_deice_only and CLOSED_BETWEEN_RE.search(lower):
+        if not explicit_deice_only and (
+            CLOSED_BETWEEN_RE.search(lower) or CLOSED_RANGE_RE.search(lower)
+        ):
             categories.add("night")
         if explicit_deice_only:
             categories = {"deice"}
@@ -612,9 +615,10 @@ def _extract_night_details(
         or "night landings prohibited" in lower
     ):
         out["night_ops_allowed"] = False
-    if match := CLOSED_BETWEEN_RE.search(lower):
-        start, end = match.groups()
-        out["hours_of_operation"].append({"closed_from": start, "closed_to": end})
+    for matcher in (CLOSED_BETWEEN_RE, CLOSED_RANGE_RE):
+        if match := matcher.search(lower):
+            start, end = match.groups()
+            out["hours_of_operation"].append({"closed_from": start, "closed_to": end})
     if "curfew" in lower:
         out["curfew"] = {"raw": note}
     if add_note:
