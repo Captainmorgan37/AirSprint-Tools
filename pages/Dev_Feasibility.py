@@ -550,7 +550,7 @@ def st_flight_route_map(route_data: Mapping[str, Any], *, height: int = 430) -> 
         airports,
         get_position=["lon", "lat"],
         get_text="icao",
-        get_text_color=[245, 245, 245, 255],
+        get_color=[245, 245, 245, 255],
         get_size=18,
         size_units="pixels",
         size_min_pixels=14,
