@@ -26,6 +26,7 @@ from feasibility import (
     run_feasibility_phase1,
 )
 from feasibility.operational_notes import build_operational_notes_fetcher
+from feasibility.planning_notes import extract_planning_note_text
 from feasibility.lookup import BookingLookupError
 from feasibility.quote_lookup import (
     QuoteLookupError,
@@ -113,18 +114,20 @@ def _extract_departure_time(flight: Mapping[str, Any]) -> Optional[str]:
     return None
 
 
-def _is_reserve_calendar_departure(flight: Optional[Mapping[str, Any]]) -> bool:
+def _get_departure_local_date(flight: Optional[Mapping[str, Any]]) -> Optional[date]:
+    """Return the local departure calendar date for ``flight`` if available."""
+
     if not isinstance(flight, Mapping):
-        return False
+        return None
 
     departure_time = _extract_departure_time(flight)
     if not departure_time:
-        return False
+        return None
 
     try:
         dep_dt = safe_parse_dt(departure_time)
     except Exception:
-        return False
+        return None
 
     tz_name: Optional[str] = None
     dep_airport = _extract_airport_code(flight)
@@ -142,7 +145,61 @@ def _is_reserve_calendar_departure(flight: Optional[Mapping[str, Any]]) -> bool:
     else:
         dep_dt = dep_dt.astimezone(pytz.UTC)
 
-    return dep_dt.date() in RESERVE_CALENDAR_DATES
+    return dep_dt.date()
+
+
+def _is_reserve_calendar_departure(flight: Optional[Mapping[str, Any]]) -> bool:
+    dep_date = _get_departure_local_date(flight)
+    return dep_date in RESERVE_CALENDAR_DATES if dep_date else False
+
+
+def _find_reserve_calendar_dates(
+    legs: Sequence[Mapping[str, Any]] | None,
+) -> list[date]:
+    """Return sorted reserve calendar dates represented within ``legs``."""
+
+    if not legs:
+        return []
+
+    matches: set[date] = set()
+    for leg in legs:
+        dep_date = _get_departure_local_date(leg)
+        if dep_date and dep_date in RESERVE_CALENDAR_DATES:
+            matches.add(dep_date)
+    return sorted(matches)
+
+
+def _find_reserve_calendar_dates(
+    legs: Sequence[Mapping[str, Any]] | None,
+) -> list[date]:
+    """Return sorted reserve calendar dates represented within ``legs``."""
+
+    if not legs:
+        return []
+
+    matches: set[date] = set()
+    for leg in legs:
+        if _is_reserve_calendar_departure(leg):
+            departure_time = _extract_departure_time(leg)
+            if departure_time:
+                try:
+                    dep_dt = safe_parse_dt(departure_time)
+                except Exception:
+                    continue
+                matches.add(dep_dt.date())
+    return sorted(matches)
+
+
+def _is_club_owner_booking(flight: Optional[Mapping[str, Any]]) -> bool:
+    if not isinstance(flight, Mapping):
+        return False
+
+    note = extract_planning_note_text(flight)
+    if not note:
+        return False
+
+    normalized = note.lower()
+    return "club owner" in normalized or "owner club" in normalized
 
 
 def status_icon(status: str) -> str:
@@ -999,11 +1056,20 @@ def _collect_operational_note_highlights(
     return highlights
 
 
+def _format_workflow_label(result: Mapping[str, Any]) -> Optional[str]:
+    workflow = str(result.get("workflow") or "").strip()
+    workflow_custom = str(result.get("workflow_custom_name") or "").strip()
+    if workflow_custom and workflow and workflow_custom.lower() != workflow.lower():
+        return f"{workflow_custom} ({workflow})"
+    return workflow_custom or workflow or None
+
+
 def _render_full_quote_result(result: FullFeasibilityResult) -> None:
     legs = result.get("legs", [])
     duty = result.get("duty", {})
     overall_status = result.get("overall_status", "PASS")
     emoji = STATUS_EMOJI.get(overall_status, "")
+    workflow_label = _format_workflow_label(result)
 
     route_map_payload = _build_route_map_payload(legs)
 
@@ -1011,6 +1077,11 @@ def _render_full_quote_result(result: FullFeasibilityResult) -> None:
     summary_col, map_col = st.columns([1.6, 1])
 
     with summary_col:
+        if workflow_label:
+            st.markdown(
+                f"<div style='font-weight:800; font-size:1.1rem; color:#d97706;'>Workflow: {workflow_label}</div>",
+                unsafe_allow_html=True,
+            )
         st.subheader(f"{emoji} Full Quote Day Status: {overall_status}")
         st.caption(
             f"{result.get('bookingIdentifier', 'Unknown Quote')} • {len(legs)} leg(s) • {result.get('aircraft_type', 'Unknown Aircraft')}"
@@ -1019,20 +1090,38 @@ def _render_full_quote_result(result: FullFeasibilityResult) -> None:
         if flight_category:
             st.caption(f"Flight Category: {flight_category}")
 
+        reserve_dates = _find_reserve_calendar_dates(legs)
+        if reserve_dates:
+            formatted_dates = ", ".join(date_obj.strftime("%Y-%m-%d") for date_obj in reserve_dates)
+            st.warning(
+                f"Reserve calendar day detected ({formatted_dates}). Ensure club workflows and availability are confirmed."
+            )
+
         summary = result.get("summary")
         if summary:
             formatted = summary.strip().replace("\n", "  \n")
             st.markdown(formatted)
 
         validation_issues = [
-            str(issue)
+            str(issue).strip()
             for issue in result.get("validation_checks", [])
             if isinstance(issue, str) and issue.strip()
         ]
+        validation_failures = {
+            str(issue).strip()
+            for issue in result.get("issues", [])
+            if isinstance(issue, str) and issue.strip()
+        }
         st.markdown("**Validation Checks**")
         if validation_issues:
             for entry in validation_issues:
-                st.markdown(f"- {entry}")
+                if entry in validation_failures:
+                    st.markdown(
+                        f"- <span style='color:#b91c1c'>{entry}</span>",
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.markdown(f"- {entry}")
         else:
             st.caption(
                 "Planning note routes and requested aircraft type align with the quoted legs."
@@ -1089,8 +1178,16 @@ def _render_full_quote_result(result: FullFeasibilityResult) -> None:
         weight_balance = leg.get("weightBalance") if isinstance(leg, Mapping) else None
         dep_code = departure.get("icao", "???")
         arr_code = arrival.get("icao", "???")
-        header = f"Leg {index}: {dep_code} → {arr_code}"
+        dep_local_date = _get_departure_local_date(leg)
+        reserve_flag = dep_local_date in RESERVE_CALENDAR_DATES if dep_local_date else False
+        header_suffix = " (Reserve Calendar Day)" if reserve_flag else ""
+        header = f"Leg {index}: {dep_code} → {arr_code}{header_suffix}"
         with st.expander(header, expanded=False):
+            if reserve_flag and dep_local_date:
+                st.warning(
+                    f"Departing on reserve calendar day {dep_local_date.strftime('%Y-%m-%d')}."
+                    " Confirm club availability and workflows before release."
+                )
             if isinstance(aircraft, Mapping):
                 _render_aircraft_category(aircraft, expanded=False)
             if isinstance(weight_balance, Mapping):
@@ -1144,6 +1241,19 @@ with quote_tab:
         st.info("Load a quote to view available legs for feasibility analysis.")
 
     quote_loaded = isinstance(quote_payload, Mapping)
+
+    if quote_loaded:
+        quote_reserve_dates = _find_reserve_calendar_dates(
+            quote_payload.get("legs") if isinstance(quote_payload, Mapping) else None
+        )
+        if quote_reserve_dates:
+            formatted_dates = ", ".join(
+                date_obj.strftime("%Y-%m-%d") for date_obj in quote_reserve_dates
+            )
+            st.warning(
+                f"Reserve calendar day detected in quote legs ({formatted_dates})."
+                " Expect club workflows and confirm availability before proceeding."
+            )
     with st.expander("Loaded quote payload"):
         if quote_loaded:
             st.json(quote_payload)
@@ -1257,7 +1367,10 @@ if stored_result and isinstance(stored_result, FeasibilityResult):
     st.caption(f"Generated at {stored_result.timestamp}")
 
     if _is_reserve_calendar_departure(stored_result.flight):
-        st.warning("Flight taking place on reserve calendar day.")
+        if _is_club_owner_booking(stored_result.flight):
+            st.error("Club owner booking on reserve calendar day.")
+        else:
+            st.warning("Flight taking place on reserve calendar day.")
 
     for name, category in stored_result.categories.items():
         _render_category(name, category)

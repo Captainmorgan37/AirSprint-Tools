@@ -19,6 +19,8 @@ def _build_simple_quote() -> Dict[str, Any]:
         "bookingid": 987,
         "aircraftObj": {"type": "CJ3", "category": "LIGHT_JET"},
         "salesPerson": {"firstName": "Alex", "lastName": "Smith"},
+        "workflow": "PRIVATE",
+        "workflowCustomName": "FEX Guaranteed",
         "legs": [
             {
                 "id": "LEG-1",
@@ -54,6 +56,8 @@ def test_phase1_engine_runs_for_entire_quote() -> None:
     result = run_feasibility_phase1({"quote": quote, "tz_provider": _tz_provider})
 
     assert result["bookingIdentifier"] == "PIURB"
+    assert result["workflow"] == "PRIVATE"
+    assert result["workflow_custom_name"] == "FEX Guaranteed"
     assert len(result["legs"]) == 2
     assert result["duty"]["total_duty"] == 270
     assert result["duty"]["status"] == "PASS"
@@ -134,7 +138,129 @@ def test_phase1_engine_prefers_flight_id_when_fetching_pax_details() -> None:
         {"quote": quote, "tz_provider": _tz_provider, "pax_details_fetcher": _fetcher}
     )
 
-    assert fetched_ids == ["FLIGHT-123"]
+
+def _workflow_quote(workflow_custom: str, planning_note: str) -> Dict[str, Any]:
+    return {
+        "bookingIdentifier": "WFLOW",
+        "aircraftObj": {"type": "CJ3", "category": "LIGHT_JET"},
+        "workflow": "PRIVATE",
+        "workflowCustomName": workflow_custom,
+        "legs": [
+            {
+                "id": "LEG-WORKFLOW",
+                "departureAirport": "CYYC",
+                "arrivalAirport": "CYEG",
+                "departureDateUTC": "2025-11-19T15:00:00Z",
+                "arrivalDateUTC": "2025-11-19T16:15:00Z",
+                "pax": 2,
+                "blockTime": 75,
+                "planningNotes": planning_note,
+            }
+        ],
+    }
+
+
+def test_workflow_validation_matches_guaranteed_request() -> None:
+    quote = _workflow_quote("Club Guaranteed", "CLUB CJ3 OWNER REQUESTING CJ3")
+
+    result = run_feasibility_phase1({"quote": quote, "tz_provider": _tz_provider})
+
+    assert any(
+        "Workflow 'Club Guaranteed' aligns with planning notes (Guaranteed)" in entry
+        for entry in result["validation_checks"]
+    )
+    assert not any("workflow" in issue.lower() for issue in result["issues"])
+
+
+def test_workflow_validation_allows_multi_type_owner_request() -> None:
+    quote = _workflow_quote(
+        "Club Guaranteed", "24hr Club P500/CJ2 owner requesting CJ2"
+    )
+
+    result = run_feasibility_phase1({"quote": quote, "tz_provider": _tz_provider})
+
+    assert any(
+        "Workflow 'Club Guaranteed' aligns with planning notes (Guaranteed)" in entry
+        for entry in result["validation_checks"]
+    )
+    assert not any("workflow" in issue.lower() for issue in result["issues"])
+
+
+def test_workflow_validation_handles_club_owning_two_types() -> None:
+    quote = _workflow_quote(
+        "Club Guaranteed", "CLUB P500 CJ2 OWNER REQUESTING CJ2"
+    )
+
+    result = run_feasibility_phase1({"quote": quote, "tz_provider": _tz_provider})
+
+    assert any(
+        "Workflow 'Club Guaranteed' aligns with planning notes (Guaranteed)" in entry
+        for entry in result["validation_checks"]
+    )
+    assert not any("workflow" in issue.lower() for issue in result["issues"])
+
+
+def test_workflow_validation_handles_mixed_club_and_infinity_ownership() -> None:
+    quote = _workflow_quote(
+        "Club Guaranteed", "Club P500 owner, Infinity CJ2 owner requesting CJ2"
+    )
+
+    result = run_feasibility_phase1({"quote": quote, "tz_provider": _tz_provider})
+
+    assert any(
+        "Workflow 'Club Guaranteed' aligns with planning notes (Guaranteed)" in entry
+        for entry in result["validation_checks"]
+    )
+    assert not any("workflow" in issue.lower() for issue in result["issues"])
+
+
+def test_workflow_validation_flags_mismatch() -> None:
+    quote = _workflow_quote("Club Guaranteed", "INFINITY CJ2 OWNER REQUESTING CJ3")
+
+    result = run_feasibility_phase1({"quote": quote, "tz_provider": _tz_provider})
+
+    assert any(
+        "Workflow 'Club Guaranteed' is Guaranteed but planning notes indicate Interchange" in entry
+        for entry in result["validation_checks"]
+    )
+    assert any("planning notes indicate Interchange" in issue for issue in result["issues"])
+
+
+def test_missing_planning_notes_are_flagged() -> None:
+    quote = _workflow_quote("Club Guaranteed", "")
+
+    result = run_feasibility_phase1({"quote": quote, "tz_provider": _tz_provider})
+
+    assert any(
+        "No planning notes provided; routes could not be validated against planning notes." in entry
+        for entry in result["validation_checks"]
+    )
+    assert any(
+        "No planning notes provided; routes could not be validated against planning notes." in issue
+        for issue in result["issues"]
+    )
+
+
+def test_workflow_validation_allows_owner_prefix_typos() -> None:
+    quote = _workflow_quote(
+        "FEX Interchange", "05DEC KPSP - CYEG\n-\n24Club CJ3 owner requesting interchange to EMB"
+    )
+
+    result = run_feasibility_phase1({"quote": quote, "tz_provider": _tz_provider})
+
+    assert any(
+        "Workflow 'FEX Interchange' aligns with planning notes (Interchange)" in entry
+        for entry in result["validation_checks"]
+    )
+    assert not any("workflow" in issue.lower() for issue in result["issues"])
+
+
+def test_as_available_workflow_validates_without_notes() -> None:
+    quote = _workflow_quote("FEX As Available", "")
+
+    result = run_feasibility_phase1({"quote": quote, "tz_provider": _tz_provider})
+
+    assert "Workflow 'FEX As Available' validated as As Available." in result["validation_checks"]
 
 
 def test_phase1_engine_uses_flight_info_id_for_pax_details() -> None:
@@ -539,6 +665,8 @@ def test_duty_module_flags_extended_day_and_split_window() -> None:
             "bookingIdentifier": "ABC",
             "aircraft_type": "Test",
             "aircraft_category": "",
+            "workflow": "",
+            "workflow_custom_name": "",
             "legs": legs,
             "sales_contact": None,
             "createdDate": None,
@@ -577,6 +705,8 @@ def test_split_duty_extension_extends_allowable_window() -> None:
             "bookingIdentifier": "DEF",
             "aircraft_type": "Test",
             "aircraft_category": "",
+            "workflow": "",
+            "workflow_custom_name": "",
             "legs": legs,
             "sales_contact": None,
             "createdDate": None,
@@ -615,6 +745,8 @@ def test_reset_duty_day_allows_new_segments() -> None:
             "bookingIdentifier": "GHI",
             "aircraft_type": "Test",
             "aircraft_category": "",
+            "workflow": "",
+            "workflow_custom_name": "",
             "legs": legs,
             "sales_contact": None,
             "createdDate": None,

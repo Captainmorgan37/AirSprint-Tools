@@ -118,11 +118,28 @@ def _build_day_context(
         or _coerce_str(quote.get("bookingid"))
     )
 
+    workflow = _coerce_str(quote.get("workflow")) if isinstance(quote, Mapping) else ""
+    workflow_custom = (
+        _coerce_str(quote.get("workflowCustomName")) if isinstance(quote, Mapping) else ""
+    )
+    if (not workflow or not workflow_custom) and legs:
+        first_leg = legs[0]
+        if not workflow:
+            workflow = _coerce_str(first_leg.get("workflow")) if isinstance(first_leg, Mapping) else ""
+        if not workflow_custom:
+            workflow_custom = (
+                _coerce_str(first_leg.get("workflow_custom_name"))
+                if isinstance(first_leg, Mapping)
+                else ""
+            )
+
     day: DayContext = {
         "quote_id": _coerce_str(quote.get("bookingid") or quote.get("quoteId") or quote.get("id")) or None,
         "bookingIdentifier": booking_identifier or "UNKNOWN",
         "aircraft_type": aircraft_type or "Unknown Aircraft",
         "aircraft_category": aircraft_category or "",
+        "workflow": workflow,
+        "workflow_custom_name": workflow_custom,
         "legs": list(legs),
         "sales_contact": sales_contact,
         "createdDate": quote.get("createdDate"),
@@ -270,6 +287,7 @@ def _collect_planning_note_feedback(day: DayContext) -> tuple[List[str], List[st
     issues: List[str] = []
     confirmations: List[str] = []
     tz_lookup = load_airport_tz_lookup()
+    has_planning_notes = False
 
     def _route_contains_segment(route: Sequence[str], dep: str, arr: str) -> bool:
         for idx, code in enumerate(route[:-1]):
@@ -281,6 +299,7 @@ def _collect_planning_note_feedback(day: DayContext) -> tuple[List[str], List[st
         note = leg.get("planning_notes")
         if not note:
             continue
+        has_planning_notes = True
         dep = (leg.get("departure_icao") or "").upper()
         arr = (leg.get("arrival_icao") or "").upper()
         dep_dt = (
@@ -316,6 +335,8 @@ def _collect_planning_note_feedback(day: DayContext) -> tuple[List[str], List[st
             issues.append(
                 f"Leg {index} {dep}→{arr}: Planning notes route for {entry_date.isoformat()} ({route_label}) does not match booked {dep}→{arr}."
             )
+    if not has_planning_notes and day.get("legs"):
+        issues.append("No planning notes provided; routes could not be validated against planning notes.")
     return issues, confirmations
 
 
@@ -349,6 +370,135 @@ def _labels_match(requested: str, actual: str) -> bool:
     if requested_canonical == actual_canonical:
         return True
     return requested_canonical in actual_canonical or actual_canonical in requested_canonical
+
+
+def _extract_owner_aircraft_from_note(note: Optional[str]) -> list[str]:
+    if not note:
+        return []
+
+    matches = re.finditer(
+        r"\b(?:\w+\s+)?(?:\d+)?\s*(?:CLUB|INFINITY)\s+([A-Z0-9/,\s\-]{2,40})\s+OWNER\b",
+        note,
+        re.IGNORECASE,
+    )
+
+    labels: list[str] = []
+    for match in matches:
+        for raw in re.split(r"[/,\s]+", match.group(1)):
+            normalized = _normalize_aircraft_label(raw)
+            if normalized:
+                labels.append(normalized)
+
+    return labels
+
+
+def _classify_expected_workflow(owner_aircraft: list[str], requested: str) -> Optional[str]:
+    requested_canonical = _canonical_aircraft_label(requested)
+    owner_canonicals = [_canonical_aircraft_label(label) for label in owner_aircraft]
+    if not requested_canonical or not any(owner_canonicals):
+        return None
+
+    if requested_canonical in owner_canonicals:
+        return "guaranteed"
+
+    if "EMB" in owner_canonicals and requested_canonical == "CJ2":
+        return "guaranteed"
+
+    return "interchange"
+
+
+def _infer_expected_workflow(day: DayContext) -> tuple[Optional[str], Optional[str]]:
+    inferred: list[tuple[str, str, str]] = []
+
+    for leg in day.get("legs", []):
+        note = leg.get("planning_notes")
+        if not note:
+            continue
+
+        owner_aircraft = _extract_owner_aircraft_from_note(note)
+        requested = extract_requested_aircraft_from_note(note)
+        expected = _classify_expected_workflow(owner_aircraft, requested or "")
+        if expected:
+            inferred.append((expected, owner_aircraft, requested or ""))
+
+    if not inferred:
+        return None, None
+
+    buckets = {bucket for bucket, _, _ in inferred}
+    if len(buckets) > 1:
+        return "mixed", None
+
+    bucket = inferred[0][0]
+    owner_label = next(
+        ("/".join(owner) for candidate, owner, _ in inferred if candidate == bucket and owner), ""
+    )
+    requested_label = next(
+        (requested for candidate, _, requested in inferred if candidate == bucket and requested), ""
+    )
+
+    detail_parts = []
+    if owner_label:
+        detail_parts.append(f"owner aircraft {owner_label}")
+    if requested_label:
+        detail_parts.append(f"requested {requested_label}")
+    detail = " and ".join(detail_parts) or None
+
+    return bucket, detail
+
+
+def _extract_workflow_bucket(day: DayContext) -> tuple[Optional[str], str]:
+    workflow_label = _coerce_str(day.get("workflow_custom_name")) or _coerce_str(day.get("workflow"))
+    if not workflow_label:
+        return None, "unspecified workflow"
+
+    cleaned = re.sub(r"[^A-Z]", "", workflow_label.upper())
+    if "ASAVAILABLE" in cleaned:
+        return "as available", workflow_label
+    if "GUARANTEED" in cleaned:
+        return "guaranteed", workflow_label
+    if "INTERCHANGE" in cleaned:
+        return "interchange", workflow_label
+    return None, workflow_label
+
+
+def _collect_workflow_validation(day: DayContext) -> tuple[list[str], list[str]]:
+    issues: list[str] = []
+    confirmations: list[str] = []
+
+    actual_bucket, workflow_label = _extract_workflow_bucket(day)
+    if not actual_bucket:
+        return issues, confirmations
+
+    expected_bucket, detail = _infer_expected_workflow(day)
+
+    if actual_bucket == "as available":
+        confirmations.append(f"Workflow '{workflow_label}' validated as As Available.")
+        return issues, confirmations
+
+    if expected_bucket is None:
+        issues.append(
+            f"Workflow '{workflow_label}' could not be validated against planning notes."
+        )
+        return issues, confirmations
+
+    if expected_bucket == "mixed":
+        issues.append(
+            f"Planning notes contain mixed workflow signals; current workflow '{workflow_label}' may not align."
+        )
+        return issues, confirmations
+
+    if actual_bucket == expected_bucket:
+        suffix = f" ({detail})" if detail else ""
+        confirmations.append(
+            f"Workflow '{workflow_label}' aligns with planning notes ({expected_bucket.title()}){suffix}."
+        )
+        return issues, confirmations
+
+    suffix = f" ({detail})" if detail else ""
+    issues.append(
+        f"Workflow '{workflow_label}' is {actual_bucket.title()} but planning notes indicate {expected_bucket.title()}{suffix}."
+    )
+    return issues, confirmations
 
 
 def _extract_requested_aircraft_type(quote: Mapping[str, Any]) -> Optional[str]:
@@ -449,6 +599,10 @@ def run_feasibility_phase1(request: FeasibilityRequest) -> FullFeasibilityResult
     if requested_issue:
         validation_checks.append(requested_issue)
         issues.append(requested_issue)
+    workflow_issues, workflow_confirmations = _collect_workflow_validation(day)
+    validation_checks.extend(workflow_confirmations)
+    validation_checks.extend(workflow_issues)
+    issues.extend(workflow_issues)
     issues.extend(planning_note_issues)
     summary = _build_summary(day, leg_results, duty_result)
 
@@ -457,6 +611,8 @@ def run_feasibility_phase1(request: FeasibilityRequest) -> FullFeasibilityResult
         bookingIdentifier=day["bookingIdentifier"],
         aircraft_type=day["aircraft_type"],
         aircraft_category=day["aircraft_category"],
+        workflow=day.get("workflow", ""),
+        workflow_custom_name=day.get("workflow_custom_name", ""),
         flight_category=flight_category,
         legs=[result.as_dict() for result in leg_results],
         duty=duty_result,
