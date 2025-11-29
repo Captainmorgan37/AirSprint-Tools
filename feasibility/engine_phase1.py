@@ -377,7 +377,7 @@ def _extract_owner_aircraft_from_note(note: Optional[str]) -> list[str]:
         return []
 
     matches = re.finditer(
-        r"\b(?:\w+\s+)?(?:\d+)?\s*(?:CLUB|INFINITY)\s+([A-Z0-9/,\s\-&]{2,40})\s+OWNER\b",
+        r"\b(?:\w+\s+)?(?:\d+)?\s*(?:CLUB|INF(?:INITY)?)\s+([A-Z0-9/,\s\-&]{2,40})\s+OWNER\b",
         note,
         re.IGNORECASE,
     )
