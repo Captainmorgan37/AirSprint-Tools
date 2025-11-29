@@ -618,7 +618,13 @@ def _extract_night_details(
     for matcher in (CLOSED_BETWEEN_RE, CLOSED_RANGE_RE):
         if match := matcher.search(lower):
             start, end = match.groups()
-            out["hours_of_operation"].append({"closed_from": start, "closed_to": end})
+            out["hours_of_operation"].append(
+                {
+                    "closed_from": start,
+                    "closed_to": end,
+                    "source": "hours_of_operation" if "hour" in lower else "closure_time_range",
+                }
+            )
     if "curfew" in lower:
         out["curfew"] = {"raw": note}
     if add_note:
@@ -893,6 +899,8 @@ def summarize_operational_notes(
     raw_notes = [note.lower() for note in restrictions.get("raw_notes", [])]
 
     for entry in restrictions["hours_of_operation"]:
+        if entry.get("source") == "closure_time_range":
+            continue
         start = entry.get("closed_from") or entry.get("start")
         end = entry.get("closed_to") or entry.get("end")
         if start or end:
