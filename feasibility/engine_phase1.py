@@ -287,6 +287,7 @@ def _collect_planning_note_feedback(day: DayContext) -> tuple[List[str], List[st
     issues: List[str] = []
     confirmations: List[str] = []
     tz_lookup = load_airport_tz_lookup()
+    has_planning_notes = False
 
     def _route_contains_segment(route: Sequence[str], dep: str, arr: str) -> bool:
         for idx, code in enumerate(route[:-1]):
@@ -298,6 +299,7 @@ def _collect_planning_note_feedback(day: DayContext) -> tuple[List[str], List[st
         note = leg.get("planning_notes")
         if not note:
             continue
+        has_planning_notes = True
         dep = (leg.get("departure_icao") or "").upper()
         arr = (leg.get("arrival_icao") or "").upper()
         dep_dt = (
@@ -333,6 +335,8 @@ def _collect_planning_note_feedback(day: DayContext) -> tuple[List[str], List[st
             issues.append(
                 f"Leg {index} {dep}→{arr}: Planning notes route for {entry_date.isoformat()} ({route_label}) does not match booked {dep}→{arr}."
             )
+    if not has_planning_notes and day.get("legs"):
+        issues.append("No planning notes provided; routes could not be validated against planning notes.")
     return issues, confirmations
 
 
