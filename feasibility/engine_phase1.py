@@ -384,7 +384,7 @@ def _extract_owner_aircraft_from_note(note: Optional[str]) -> list[str]:
 
     labels: list[str] = []
     for match in matches:
-        for raw in re.split(r"[/,\s]+", match.group(1)):
+        for raw in re.split(r"[/,\s]+|\band\b", match.group(1), flags=re.IGNORECASE):
             normalized = _normalize_aircraft_label(raw)
             if normalized:
                 labels.append(normalized)
