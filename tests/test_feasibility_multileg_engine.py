@@ -226,6 +226,21 @@ def test_workflow_validation_flags_mismatch() -> None:
     assert any("planning notes indicate Interchange" in issue for issue in result["issues"])
 
 
+def test_missing_planning_notes_are_flagged() -> None:
+    quote = _workflow_quote("Club Guaranteed", "")
+
+    result = run_feasibility_phase1({"quote": quote, "tz_provider": _tz_provider})
+
+    assert any(
+        "No planning notes provided; routes could not be validated against planning notes." in entry
+        for entry in result["validation_checks"]
+    )
+    assert any(
+        "No planning notes provided; routes could not be validated against planning notes." in issue
+        for issue in result["issues"]
+    )
+
+
 def test_workflow_validation_allows_owner_prefix_typos() -> None:
     quote = _workflow_quote(
         "FEX Interchange", "05DEC KPSP - CYEG\n-\n24Club CJ3 owner requesting interchange to EMB"

@@ -1052,14 +1052,25 @@ def _render_full_quote_result(result: FullFeasibilityResult) -> None:
             st.markdown(formatted)
 
         validation_issues = [
-            str(issue)
+            str(issue).strip()
             for issue in result.get("validation_checks", [])
             if isinstance(issue, str) and issue.strip()
         ]
+        validation_failures = {
+            str(issue).strip()
+            for issue in result.get("issues", [])
+            if isinstance(issue, str) and issue.strip()
+        }
         st.markdown("**Validation Checks**")
         if validation_issues:
             for entry in validation_issues:
-                st.markdown(f"- {entry}")
+                if entry in validation_failures:
+                    st.markdown(
+                        f"- <span style='color:#b91c1c'>{entry}</span>",
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.markdown(f"- {entry}")
         else:
             st.caption(
                 "Planning note routes and requested aircraft type align with the quoted legs."
