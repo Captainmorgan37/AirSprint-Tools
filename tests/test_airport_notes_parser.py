@@ -223,6 +223,27 @@ def test_hours_of_operation_closure_triggers_caution() -> None:
     assert any("Hours of Operation" in issue for issue in summary.issues)
 
 
+def test_closed_time_range_recorded_as_hours_of_operation() -> None:
+    note = "AIRPORT CLOSED 2000-0600 LOCAL"
+
+    parsed = parse_operational_restrictions([note])
+
+    assert parsed["hours_of_operation"] == [
+        {"closed_from": "2000", "closed_to": "0600", "source": "closure_time_range"}
+    ]
+
+
+def test_closure_time_range_not_reported_twice() -> None:
+    note = "AIRPORT CLOSED 2000-0600 LOCAL"
+
+    parsed = parse_operational_restrictions([note])
+
+    summary = summarize_operational_notes("TEST", [{"note": note}], parsed)
+
+    assert summary.status == "PASS"
+    assert all("Hours of Operation" not in issue for issue in summary.issues)
+
+
 def test_wet_runway_is_informational() -> None:
     note = "Wet Runway may limit operations."
 

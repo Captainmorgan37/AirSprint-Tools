@@ -39,6 +39,25 @@ def test_operational_closure_keyword_sets_caution() -> None:
     ]
 
 
+def test_closed_time_range_sets_caution_instead_of_fail() -> None:
+    profile = _default_profile()
+    leg = {"aircraft_category": "SUPER_MIDSIZE_JET"}
+    notes = [{"note": "AIRPORT CLOSED 2000-0600 LOCAL"}]
+
+    result = evaluate_suitability(
+        airport_profile=profile,
+        leg=leg,
+        operational_notes=notes,
+        side="arrival",
+    )
+
+    assert result.status == "CAUTION"
+    assert result.summary == "Operational closure noted"
+    assert result.issues == [
+        "Operational notes mention closures; review Fl3xx note for timing before dispatch."
+    ]
+
+
 def test_operational_closed_keyword_still_fails() -> None:
     profile = _default_profile()
     leg = {"aircraft_category": "SUPER_MIDSIZE_JET"}
