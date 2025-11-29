@@ -368,30 +368,36 @@ def _labels_match(requested: str, actual: str) -> bool:
     return requested_canonical in actual_canonical or actual_canonical in requested_canonical
 
 
-def _extract_owner_aircraft_from_note(note: Optional[str]) -> Optional[str]:
+def _extract_owner_aircraft_from_note(note: Optional[str]) -> list[str]:
     if not note:
-        return None
+        return []
 
-    match = re.search(
-        r"\b(?:\d+)?(?:CLUB|INFINITY)\s+([A-Z0-9/\-]{2,10})\s+OWNER\b", note, re.IGNORECASE
+    matches = re.finditer(
+        r"\b(?:\w+\s+)?(?:\d+)?\s*(?:CLUB|INFINITY)\s+([A-Z0-9/,\s\-]{2,40})\s+OWNER\b",
+        note,
+        re.IGNORECASE,
     )
-    if not match:
-        return None
 
-    label = match.group(1)
-    return _normalize_aircraft_label(label)
+    labels: list[str] = []
+    for match in matches:
+        for raw in re.split(r"[/,\s]+", match.group(1)):
+            normalized = _normalize_aircraft_label(raw)
+            if normalized:
+                labels.append(normalized)
+
+    return labels
 
 
-def _classify_expected_workflow(owner_aircraft: str, requested: str) -> Optional[str]:
-    owner_canonical = _canonical_aircraft_label(owner_aircraft)
+def _classify_expected_workflow(owner_aircraft: list[str], requested: str) -> Optional[str]:
     requested_canonical = _canonical_aircraft_label(requested)
-    if not owner_canonical or not requested_canonical:
+    owner_canonicals = [_canonical_aircraft_label(label) for label in owner_aircraft]
+    if not requested_canonical or not any(owner_canonicals):
         return None
 
-    if owner_canonical == requested_canonical:
+    if requested_canonical in owner_canonicals:
         return "guaranteed"
 
-    if owner_canonical == "EMB" and requested_canonical == "CJ2":
+    if "EMB" in owner_canonicals and requested_canonical == "CJ2":
         return "guaranteed"
 
     return "interchange"
@@ -407,9 +413,9 @@ def _infer_expected_workflow(day: DayContext) -> tuple[Optional[str], Optional[s
 
         owner_aircraft = _extract_owner_aircraft_from_note(note)
         requested = extract_requested_aircraft_from_note(note)
-        expected = _classify_expected_workflow(owner_aircraft or "", requested or "")
+        expected = _classify_expected_workflow(owner_aircraft, requested or "")
         if expected:
-            inferred.append((expected, owner_aircraft or "", requested or ""))
+            inferred.append((expected, owner_aircraft, requested or ""))
 
     if not inferred:
         return None, None
@@ -419,7 +425,9 @@ def _infer_expected_workflow(day: DayContext) -> tuple[Optional[str], Optional[s
         return "mixed", None
 
     bucket = inferred[0][0]
-    owner_label = next((owner for candidate, owner, _ in inferred if candidate == bucket and owner), "")
+    owner_label = next(
+        ("/".join(owner) for candidate, owner, _ in inferred if candidate == bucket and owner), ""
+    )
     requested_label = next(
         (requested for candidate, _, requested in inferred if candidate == bucket and requested), ""
     )
