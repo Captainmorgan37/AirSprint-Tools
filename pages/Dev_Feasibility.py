@@ -685,37 +685,6 @@ def st_flight_route_map(route_data: Mapping[str, Any], *, height: int = 430) -> 
         pickable=True,
     )
 
-    label_points: list[Mapping[str, Any]] = []
-    for airport in airports:
-        label = str(airport.get("label") or airport.get("icao") or "").strip()
-        if not label:
-            continue
-        airport_copy = dict(airport)
-        airport_copy["label"] = label
-        label_points.append(airport_copy)
-
-    labels_layer = None
-    if label_points:
-        labels_layer = pdk.Layer(
-            "TextLayer",
-            label_points,
-            get_position=["lon", "lat"],
-            get_text="label",
-            get_color=[245, 245, 245, 255],
-            get_size=18,
-            size_units="pixels",
-            size_min_pixels=14,
-            billboard=True,
-            get_angle=0,
-            get_text_anchor="middle",
-            get_alignment_baseline="top",
-            get_pixel_offset=[0, 16],
-            background=True,
-            get_background_color=[0, 0, 0, 200],
-            font_settings={"fontFamily": "Arial, sans-serif", "fontWeight": 700},
-            parameters={"depthTest": False},
-        )
-
     view_state = pdk.ViewState(
         latitude=latitude,
         longitude=longitude,
@@ -728,8 +697,6 @@ def st_flight_route_map(route_data: Mapping[str, Any], *, height: int = 430) -> 
     if customs_layer:
         layers.append(customs_layer)
     layers.append(airports_layer)
-    if labels_layer:
-        layers.append(labels_layer)
 
     deck = pdk.Deck(
         layers=layers,
