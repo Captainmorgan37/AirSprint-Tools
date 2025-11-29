@@ -146,6 +146,27 @@ def _is_reserve_calendar_departure(flight: Optional[Mapping[str, Any]]) -> bool:
     return dep_dt.date() in RESERVE_CALENDAR_DATES
 
 
+def _find_reserve_calendar_dates(
+    legs: Sequence[Mapping[str, Any]] | None,
+) -> list[date]:
+    """Return sorted reserve calendar dates represented within ``legs``."""
+
+    if not legs:
+        return []
+
+    matches: set[date] = set()
+    for leg in legs:
+        if _is_reserve_calendar_departure(leg):
+            departure_time = _extract_departure_time(leg)
+            if departure_time:
+                try:
+                    dep_dt = safe_parse_dt(departure_time)
+                except Exception:
+                    continue
+                matches.add(dep_dt.date())
+    return sorted(matches)
+
+
 def _is_club_owner_booking(flight: Optional[Mapping[str, Any]]) -> bool:
     if not isinstance(flight, Mapping):
         return False
@@ -1045,6 +1066,13 @@ def _render_full_quote_result(result: FullFeasibilityResult) -> None:
         flight_category = result.get("flight_category")
         if flight_category:
             st.caption(f"Flight Category: {flight_category}")
+
+        reserve_dates = _find_reserve_calendar_dates(legs)
+        if reserve_dates:
+            formatted_dates = ", ".join(date_obj.strftime("%Y-%m-%d") for date_obj in reserve_dates)
+            st.warning(
+                f"Reserve calendar day detected ({formatted_dates}). Ensure club workflows and availability are confirmed."
+            )
 
         summary = result.get("summary")
         if summary:
