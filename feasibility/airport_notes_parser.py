@@ -714,6 +714,9 @@ DAY_ALIASES = {
 def _detect_days(lower: str) -> list[str]:
     days_found: set[str] = set()
 
+    if re.search(r"\b7\s*days\s*(?:/\s*(?:wk|week)|(?:a|per)\s+(?:wk|week))", lower):
+        return [DAY_LABELS[token] for token in DAY_ORDER]
+
     alias_pattern = "|".join(DAY_ALIASES)
 
     for match in re.finditer(rf"({alias_pattern})\s*(?:[-–]|to)\s*({alias_pattern})", lower):
