@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+import json
+import html
 import math
 import re
 import os
@@ -79,8 +81,10 @@ SECTION_LABELS = {
     "operational_notes": "Other Operational Notes",
 }
 KEY_ISSUE_SECTIONS = {"customs", "day_ops", "deice", "overflight"}
+SLOT_COPY_AIRPORTS = {"CYYZ", "CYUL", "CYYC", "CYVR"}
 RESERVE_CALENDAR_DATES = set(TARGET_DATES)
 _LEG_STYLES_INJECTED = False
+_SLOT_COPY_STYLES_INJECTED = False
 DEPARTURE_AIRPORT_KEYS = (
     "departure_airport",
     "dep_airport",
@@ -1230,6 +1234,215 @@ def _collect_key_issues(result: Mapping[str, Any]) -> List[str]:
     return issues
 
 
+def _format_slot_json_time(planned_time_local: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    if not planned_time_local:
+        return None, None
+    try:
+        parsed_dt = safe_parse_dt(str(planned_time_local))
+    except Exception:
+        return None, None
+
+    formatted_date = parsed_dt.strftime("%d%b").upper()
+    time_label = parsed_dt.strftime("%H%M")
+    tz_abbrev = parsed_dt.strftime("%Z").strip()
+    if tz_abbrev:
+        time_label = f"{time_label} {tz_abbrev}"
+
+    return formatted_date, time_label
+
+
+def _collect_slot_copy_payloads(result: Mapping[str, Any]) -> list[dict[str, object]]:
+    payloads: list[dict[str, object]] = []
+    legs = result.get("legs") if isinstance(result, Mapping) else None
+    default_aircraft = str(result.get("aircraft_type") or "").upper() if isinstance(result, Mapping) else ""
+
+    if not isinstance(legs, Sequence):
+        return payloads
+
+    for index, leg in enumerate(legs, start=1):
+        if not isinstance(leg, Mapping):
+            continue
+        leg_aircraft = str(leg.get("aircraft_type") or default_aircraft).upper()
+        for side_key, operation in (("departure", "departure"), ("arrival", "arrival")):
+            side = leg.get(side_key)
+            if not isinstance(side, Mapping):
+                continue
+            icao = str(side.get("icao") or "").upper()
+            if icao not in SLOT_COPY_AIRPORTS:
+                continue
+
+            slot_ppr = side.get("slot_ppr") if isinstance(side, Mapping) else None
+            slot_status = slot_ppr.get("status") if isinstance(slot_ppr, Mapping) else None
+            parsed_restrictions = side.get("parsed_operational_restrictions")
+            slot_required = bool(parsed_restrictions.get("slot_required")) if isinstance(parsed_restrictions, Mapping) else False
+
+            if slot_status != "FAIL" and not slot_required:
+                continue
+
+            planned_time_local = side.get("planned_time_local") or side.get("plannedTimeLocal")
+            local_date, local_time = _format_slot_json_time(planned_time_local)
+
+            counterpart = leg.get("arrival" if operation == "departure" else "departure")
+            other_airport = None
+            if isinstance(counterpart, Mapping):
+                other_airport_value = counterpart.get("icao") or counterpart.get("airport")
+                other_airport = str(other_airport_value).upper() if other_airport_value else None
+
+            payload: dict[str, object] = {
+                "label": f"Leg {index} {operation.title()} {icao}",
+                "json": {
+                    "operation": operation,
+                    "airport": icao,
+                },
+            }
+
+            if local_date:
+                payload["json"]["date"] = local_date
+            if local_time:
+                payload["json"]["time"] = local_time
+            if other_airport:
+                payload["json"]["other_airport"] = other_airport
+                if operation == "departure":
+                    payload["json"]["dest"] = other_airport
+                else:
+                    payload["json"]["orig"] = other_airport
+            if leg_aircraft:
+                payload["json"]["ac_type"] = leg_aircraft
+
+            payloads.append(payload)
+
+    return payloads
+
+
+def _inject_slot_copy_styles() -> None:
+    global _SLOT_COPY_STYLES_INJECTED
+    if _SLOT_COPY_STYLES_INJECTED:
+        return
+
+    st.markdown(
+        """
+        <style>
+            .slot-copy-banner {
+                display: flex;
+                align-items: center;
+                justify-content: flex-end;
+                gap: 0.35rem;
+                padding: 0.25rem 0.4rem;
+            }
+            .slot-copy-button {
+                background: linear-gradient(120deg, #f97316, #fb923c);
+                color: #0b1f33;
+                border: none;
+                padding: 0.5rem 0.75rem;
+                border-radius: 10px;
+                font-weight: 700;
+                font-size: 0.9rem;
+                box-shadow: 0 4px 12px rgba(249, 115, 22, 0.28);
+                cursor: pointer;
+                transition: transform 120ms ease, box-shadow 120ms ease;
+                width: auto;
+                white-space: nowrap;
+            }
+            .slot-copy-button:hover {
+                transform: translateY(-1px);
+                box-shadow: 0 10px 18px rgba(249, 115, 22, 0.4);
+            }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    _SLOT_COPY_STYLES_INJECTED = True
+
+
+def _render_slot_copy_controls(container, payloads: Sequence[Mapping[str, object]]) -> None:
+    if not payloads:
+        return
+
+    _inject_slot_copy_styles()
+    options = list(payloads)
+    selected_payload = options[0]
+    widget_suffix = st.session_state.get("slot_copy_counter", 0) + 1
+    st.session_state["slot_copy_counter"] = widget_suffix
+    button_id = f"slot-copy-btn-{widget_suffix}"
+    text_id = f"slot-copy-text-{widget_suffix}"
+
+    if len(options) > 1:
+        labels = [str(item.get("label", f"Option {idx+1}")) for idx, item in enumerate(options)]
+        selected_label = container.selectbox("Slot JSON target", labels, key="slot-json-target")
+        label_map = {label: payload for label, payload in zip(labels, options)}
+        selected_payload = label_map.get(selected_label, selected_payload)
+
+    payload_json = selected_payload.get("json") if isinstance(selected_payload, Mapping) else None
+    if not isinstance(payload_json, Mapping):
+        return
+
+    json_text = json.dumps(payload_json, indent=2)
+    escaped_json = html.escape(json_text)
+    safe_json_for_js = json.dumps(json_text)
+
+    container.markdown(
+        f"""
+        <div class="slot-copy-banner">
+            <button id="{button_id}" class="slot-copy-button" type="button">
+                📋 Copy OCS Slot JSON
+            </button>
+            <textarea id="{text_id}" style="position:absolute; left:-1000px; top:-1000px; height:1px; width:1px;">
+                {escaped_json}
+            </textarea>
+        </div>
+        <script>
+            (function() {{
+                const button = document.getElementById("{button_id}");
+                const textArea = document.getElementById("{text_id}");
+                if (!button || !textArea) return;
+
+                const copyPayload = () => {{
+                    const value = {safe_json_for_js};
+
+                    const setStatus = (label) => {{
+                        const original = button.dataset.label || button.innerText;
+                        button.innerText = label;
+                        setTimeout(() => (button.innerText = original), 1600);
+                    }};
+
+                    if (navigator.clipboard && window.isSecureContext) {{
+                        navigator.clipboard.writeText(value).then(
+                            () => setStatus("Copied! ✅"),
+                            () => fallbackCopy(value, setStatus)
+                        );
+                        return;
+                    }}
+                    fallbackCopy(value, setStatus);
+                }};
+
+                const fallbackCopy = (value, setStatus) => {{
+                    try {{
+                        textArea.value = value;
+                        textArea.removeAttribute("disabled");
+                        textArea.style.position = "absolute";
+                        textArea.style.left = "-1000px";
+                        textArea.style.top = "-1000px";
+                        textArea.style.width = "1px";
+                        textArea.style.height = "1px";
+                        textArea.select();
+                        textArea.setSelectionRange(0, value.length);
+                        const successful = document.execCommand("copy");
+                        setStatus(successful ? "Copied! ✅" : "Copy failed");
+                    }} catch (err) {{
+                        setStatus("Copy failed");
+                    }}
+                }};
+
+                button.dataset.label = button.innerText;
+                button.addEventListener("click", copyPayload);
+            }})();
+        </script>
+        """,
+        unsafe_allow_html=True,
+    )
+    container.code(json_text, language="json")
+
+
 def _collect_operational_note_highlights(
     legs: Sequence[Mapping[str, Any]] | Any,
 ) -> List[Mapping[str, str]]:
@@ -1353,7 +1566,16 @@ def _render_full_quote_result(result: FullFeasibilityResult) -> None:
                     st.markdown(f" • {entry['issue']}")
 
         key_issues = _collect_key_issues(result)
-        st.subheader("Key Issues")
+        slot_copy_payloads = _collect_slot_copy_payloads(result) if overall_status == "FAIL" else []
+        if slot_copy_payloads:
+            header_col, button_col = st.columns([1.2, 1])
+            with header_col:
+                st.subheader("Key Issues")
+            with button_col:
+                _render_slot_copy_controls(button_col, slot_copy_payloads)
+        else:
+            st.subheader("Key Issues")
+
         if key_issues:
             for issue in key_issues:
                 st.markdown(f"- {issue}")
