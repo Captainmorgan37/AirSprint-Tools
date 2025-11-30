@@ -161,7 +161,7 @@ RUNWAY_NUM_RE = re.compile(r"rwy\s*(\d{2}[lrc]?)", re.IGNORECASE)
 ACFT_LIMIT_RE = re.compile(r"(embraer|cj2|cj3|legacy|challenger|global)", re.IGNORECASE)
 
 HOURS_RE = re.compile(
-    r"(\d{1,2}[:h]?\d{2})\s*(?:[a-z]{0,3}\s*[-–]\s*|\s+to\s+)(\d{1,2}[:h]?\d{2})",
+    r"(\d{1,2}[:h]?\d{2}\s*[a-z]{0,3})\s*(?:[a-z]{0,3}\s*[-–]\s*|\s+to\s+)(\d{1,2}[:h]?\d{2}\s*[a-z]{0,3})",
     re.IGNORECASE,
 )
 PRIOR_HOURS_RE = re.compile(r"(\d+)\s*(?:hours|hrs)\s*(?:notice|prior)")
@@ -709,6 +709,8 @@ DAY_ALIASES = {
     "sun": "sun",
     "sunday": "sun",
 }
+DAY_ALIAS_PATTERN = "|".join(DAY_ALIASES)
+DEADLINE_DAY_RE = re.compile(rf"(?:before|prior to|by)\s+(?:{DAY_ALIAS_PATTERN})", re.IGNORECASE)
 
 
 def _detect_days(lower: str) -> list[str]:
@@ -811,10 +813,14 @@ def parse_customs_notes(notes: Sequence[str]) -> ParsedCustoms:
                 continue
 
             start, end = match.groups()
+            start = re.sub(r"[^0-9:]", "", start)
+            end = re.sub(r"[^0-9:]", "", end)
             if not (_is_plausible_time_range_value(start) and _is_plausible_time_range_value(end)):
                 continue
 
             days = _detect_days(lower)
+            if days and DEADLINE_DAY_RE.search(lower):
+                days = []
             if not days:
                 days = ["unknown"]
             parsed["customs_hours"].append({"start": start, "end": end, "days": days})
