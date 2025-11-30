@@ -1189,14 +1189,19 @@ def _render_leg_side(label: str, side: Mapping[str, Any]) -> None:
         )
 
 
-def _collect_key_issues(result: Mapping[str, Any]) -> List[str]:
-    issues: List[str] = []
+def _collect_key_issues(
+    result: Mapping[str, Any], slot_payloads: Sequence[Mapping[str, object]] | None = None
+) -> list[dict[str, object]]:
+    issues: list[dict[str, object]] = []
+    slot_payload_lookup = {
+        str(payload.get("issue_prefix")): payload for payload in slot_payloads or []
+    }
     duty = result.get("duty") if isinstance(result, Mapping) else None
     if isinstance(duty, Mapping):
         duty_status = duty.get("status", "PASS")
         if duty_status in {"CAUTION", "FAIL"}:
             summary = duty.get("summary") or f"Duty {duty_status.title()}"
-            issues.append(f"Duty: {summary}")
+            issues.append({"text": f"Duty: {summary}"})
 
     legs = result.get("legs") if isinstance(result, Mapping) else None
     if isinstance(legs, Sequence):
@@ -1208,13 +1213,13 @@ def _collect_key_issues(result: Mapping[str, Any]) -> List[str]:
                 status = aircraft.get("status", "PASS")
                 if status in {"CAUTION", "FAIL"}:
                     summary = aircraft.get("summary") or status
-                    issues.append(f"Leg {index} Aircraft: {summary}")
+                    issues.append({"text": f"Leg {index} Aircraft: {summary}"})
             weight_balance = leg.get("weightBalance")
             if isinstance(weight_balance, Mapping):
                 status = weight_balance.get("status", "PASS")
                 if status in {"CAUTION", "FAIL"}:
                     summary = weight_balance.get("summary") or status
-                    issues.append(f"Leg {index} Weight & Balance: {summary}")
+                    issues.append({"text": f"Leg {index} Weight & Balance: {summary}"})
             for side_name in ("departure", "arrival"):
                 side = leg.get(side_name)
                 if not isinstance(side, Mapping):
@@ -1231,7 +1236,11 @@ def _collect_key_issues(result: Mapping[str, Any]) -> List[str]:
                     summary = category.get("summary") or status
                     label = f"{side_name.title()} {icao} {display}"
                     if status == "FAIL" or (status == "CAUTION" and key in KEY_ISSUE_SECTIONS):
-                        issues.append(f"{label}: {summary}")
+                        issue = {"text": f"{label}: {summary}"}
+                        payload = slot_payload_lookup.get(label)
+                        if payload:
+                            issue["slot_payload"] = payload
+                        issues.append(issue)
     return issues
 
 
@@ -1286,12 +1295,14 @@ def _collect_slot_copy_payloads(result: Mapping[str, Any]) -> list[dict[str, obj
                 other_airport_value = counterpart.get("icao") or counterpart.get("airport")
                 other_airport = str(other_airport_value).upper() if other_airport_value else None
 
+            issue_prefix = f"{operation.title()} {icao} {SECTION_LABELS.get('slot_ppr', 'Slot / PPR')}"
             payload: dict[str, object] = {
                 "label": f"Leg {index} {operation.title()} {icao}",
                 "json": {
                     "operation": operation,
                     "airport": icao,
                 },
+                "issue_prefix": issue_prefix,
             }
 
             if local_date:
@@ -1333,7 +1344,9 @@ def _render_slot_copy_controls(container, payloads: Sequence[Mapping[str, object
 
     if len(options) > 1:
         labels = [str(item.get("label", f"Option {idx+1}")) for idx, item in enumerate(options)]
-        selected_label = container.selectbox("Slot JSON target", labels, key="slot-json-target")
+        selected_label = container.selectbox(
+            "Slot JSON target", labels, key=f"slot-json-target-{widget_suffix}"
+        )
         label_map = {label: payload for label, payload in zip(labels, options)}
         selected_payload = label_map.get(selected_label, selected_payload)
 
@@ -1478,10 +1491,6 @@ def _render_slot_copy_controls(container, payloads: Sequence[Mapping[str, object
             """,
             height=82,
         )
-    container.caption(
-        f"Copy the OCS slot payload for **{selected_payload.get('label', 'selected leg')}** straight to your clipboard.",
-        help="Paste directly into OCS after clicking the copy button.",
-    )
 
 
 def _collect_operational_note_highlights(
@@ -1606,20 +1615,20 @@ def _render_full_quote_result(result: FullFeasibilityResult) -> None:
                 if entry["issue"]:
                     st.markdown(f" • {entry['issue']}")
 
-        key_issues = _collect_key_issues(result)
         slot_copy_payloads = _collect_slot_copy_payloads(result) if overall_status == "FAIL" else []
-        if slot_copy_payloads:
-            header_col, button_col = st.columns([1.2, 1])
-            with header_col:
-                st.subheader("Key Issues")
-            with button_col:
-                _render_slot_copy_controls(button_col, slot_copy_payloads)
-        else:
-            st.subheader("Key Issues")
+        key_issues = _collect_key_issues(result, slot_copy_payloads)
+
+        st.subheader("Key Issues")
 
         if key_issues:
             for issue in key_issues:
-                st.markdown(f"- {issue}")
+                payload = issue.get("slot_payload") if isinstance(issue, Mapping) else None
+                if payload:
+                    issue_cols = st.columns([1.6, 1])
+                    issue_cols[0].markdown(f"- {issue.get('text')}")
+                    _render_slot_copy_controls(issue_cols[1], [cast(Mapping[str, object], payload)])
+                else:
+                    st.markdown(f"- {issue.get('text') if isinstance(issue, Mapping) else issue}")
         else:
             st.caption(
                 "No customs, day-ops, deice, duty, or permit cautions detected."
