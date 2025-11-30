@@ -1244,9 +1244,6 @@ def _format_slot_json_time(planned_time_local: Optional[str]) -> tuple[Optional[
 
     formatted_date = parsed_dt.strftime("%d%b").upper()
     time_label = parsed_dt.strftime("%H%M")
-    tz_abbrev = parsed_dt.strftime("%Z").strip()
-    if tz_abbrev:
-        time_label = f"{time_label} {tz_abbrev}"
 
     return formatted_date, time_label
 
