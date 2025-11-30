@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 import json
+import html
 import math
 import re
 import os
@@ -1325,21 +1326,22 @@ def _inject_slot_copy_styles() -> None:
                 display: flex;
                 align-items: center;
                 justify-content: flex-end;
-                gap: 0.5rem;
-                padding: 0.35rem 0.5rem;
+                gap: 0.35rem;
+                padding: 0.25rem 0.4rem;
             }
             .slot-copy-button {
                 background: linear-gradient(120deg, #f97316, #fb923c);
                 color: #0b1f33;
                 border: none;
-                padding: 0.65rem 0.9rem;
-                border-radius: 12px;
-                font-weight: 800;
-                font-size: 0.95rem;
-                box-shadow: 0 6px 14px rgba(249, 115, 22, 0.35);
+                padding: 0.5rem 0.75rem;
+                border-radius: 10px;
+                font-weight: 700;
+                font-size: 0.9rem;
+                box-shadow: 0 4px 12px rgba(249, 115, 22, 0.28);
                 cursor: pointer;
                 transition: transform 120ms ease, box-shadow 120ms ease;
-                width: 100%;
+                width: auto;
+                white-space: nowrap;
             }
             .slot-copy-button:hover {
                 transform: translateY(-1px);
@@ -1359,6 +1361,10 @@ def _render_slot_copy_controls(container, payloads: Sequence[Mapping[str, object
     _inject_slot_copy_styles()
     options = list(payloads)
     selected_payload = options[0]
+    widget_suffix = st.session_state.get("slot_copy_counter", 0) + 1
+    st.session_state["slot_copy_counter"] = widget_suffix
+    button_id = f"slot-copy-btn-{widget_suffix}"
+    text_id = f"slot-copy-text-{widget_suffix}"
 
     if len(options) > 1:
         labels = [str(item.get("label", f"Option {idx+1}")) for idx, item in enumerate(options)]
@@ -1371,15 +1377,66 @@ def _render_slot_copy_controls(container, payloads: Sequence[Mapping[str, object
         return
 
     json_text = json.dumps(payload_json, indent=2)
+    escaped_json = html.escape(json_text)
     safe_json_for_js = json.dumps(json_text)
 
     container.markdown(
         f"""
         <div class="slot-copy-banner">
-            <button class="slot-copy-button" onclick='navigator.clipboard.writeText({safe_json_for_js});'>
+            <button id="{button_id}" class="slot-copy-button" type="button">
                 📋 Copy OCS Slot JSON
             </button>
+            <textarea id="{text_id}" style="position:absolute; left:-1000px; top:-1000px; height:1px; width:1px;">
+                {escaped_json}
+            </textarea>
         </div>
+        <script>
+            (function() {{
+                const button = document.getElementById("{button_id}");
+                const textArea = document.getElementById("{text_id}");
+                if (!button || !textArea) return;
+
+                const copyPayload = () => {{
+                    const value = {safe_json_for_js};
+
+                    const setStatus = (label) => {{
+                        const original = button.dataset.label || button.innerText;
+                        button.innerText = label;
+                        setTimeout(() => (button.innerText = original), 1600);
+                    }};
+
+                    if (navigator.clipboard && window.isSecureContext) {{
+                        navigator.clipboard.writeText(value).then(
+                            () => setStatus("Copied! ✅"),
+                            () => fallbackCopy(value, setStatus)
+                        );
+                        return;
+                    }}
+                    fallbackCopy(value, setStatus);
+                }};
+
+                const fallbackCopy = (value, setStatus) => {{
+                    try {{
+                        textArea.value = value;
+                        textArea.removeAttribute("disabled");
+                        textArea.style.position = "absolute";
+                        textArea.style.left = "-1000px";
+                        textArea.style.top = "-1000px";
+                        textArea.style.width = "1px";
+                        textArea.style.height = "1px";
+                        textArea.select();
+                        textArea.setSelectionRange(0, value.length);
+                        const successful = document.execCommand("copy");
+                        setStatus(successful ? "Copied! ✅" : "Copy failed");
+                    }} catch (err) {{
+                        setStatus("Copy failed");
+                    }}
+                }};
+
+                button.dataset.label = button.innerText;
+                button.addEventListener("click", copyPayload);
+            }})();
+        </script>
         """,
         unsafe_allow_html=True,
     )
