@@ -61,6 +61,7 @@ st.write(
 )
 
 STATUS_EMOJI = {"PASS": "✅", "CAUTION": "⚠️", "FAIL": "❌"}
+STATUS_COLORS = {"FAIL": "#b91c1c", "CAUTION": "#d97706"}
 SECTION_ORDER = [
     "suitability",
     "day_ops",
@@ -836,6 +837,37 @@ def _collect_entries(values: Any, *, explode: bool = False) -> list[str]:
     return entries
 
 
+def _status_color_for_line(text: str, highlight_status: Optional[str] = None) -> Optional[str]:
+    normalized = text.upper()
+    if highlight_status:
+        target = highlight_status.upper()
+        forced_color = STATUS_COLORS.get(target)
+        if forced_color:
+            return forced_color
+    for status, color in STATUS_COLORS.items():
+        if re.search(rf"\b{re.escape(status)}\b", normalized):
+            return color
+    return None
+
+
+def _format_status_line(
+    text: str, *, highlight_status: Optional[str] = None, allow_plain: bool = False
+) -> str:
+    stripped = str(text).rstrip()
+    if not stripped:
+        return "<div style='height:0.35rem'></div>"
+
+    color = _status_color_for_line(stripped, highlight_status=highlight_status)
+    style_parts = ["margin:0.1rem 0;"]
+    if color:
+        style_parts.append(f"color:{color};")
+        style_parts.append("font-weight:700;")
+    elif not allow_plain:
+        style_parts.append("color:inherit;")
+
+    return f"<div style='{' '.join(style_parts)}'>{html.escape(stripped)}</div>"
+
+
 def _render_bullet_section(title: str, lines: Sequence[str]) -> None:
     entries: list[str] = []
     seen: set[str] = set()
@@ -1577,8 +1609,11 @@ def _render_full_quote_result(result: FullFeasibilityResult) -> None:
 
         summary = result.get("summary")
         if summary:
-            formatted = summary.strip().replace("\n", "  \n")
-            st.markdown(formatted)
+            lines = summary.strip().splitlines()
+            st.markdown(
+                "\n".join(_format_status_line(line) for line in lines),
+                unsafe_allow_html=True,
+            )
 
         validation_issues = [
             str(issue).strip()
@@ -1592,14 +1627,16 @@ def _render_full_quote_result(result: FullFeasibilityResult) -> None:
         }
         st.markdown("**Validation Checks**")
         if validation_issues:
+            validation_lines = []
             for entry in validation_issues:
+                entry_text = f"- {entry}"
                 if entry in validation_failures:
-                    st.markdown(
-                        f"- <span style='color:#b91c1c'>{entry}</span>",
-                        unsafe_allow_html=True,
+                    validation_lines.append(
+                        _format_status_line(entry_text, highlight_status="FAIL")
                     )
                 else:
-                    st.markdown(f"- {entry}")
+                    validation_lines.append(_format_status_line(entry_text))
+            st.markdown("\n".join(validation_lines), unsafe_allow_html=True)
         else:
             st.caption(
                 "Planning note routes and requested aircraft type align with the quoted legs."
@@ -1625,10 +1662,19 @@ def _render_full_quote_result(result: FullFeasibilityResult) -> None:
                 payload = issue.get("slot_payload") if isinstance(issue, Mapping) else None
                 if payload:
                     issue_cols = st.columns([1.6, 1])
-                    issue_cols[0].markdown(f"- {issue.get('text')}")
+                    issue_cols[0].markdown(
+                        _format_status_line(f"- {issue.get('text')}", allow_plain=True),
+                        unsafe_allow_html=True,
+                    )
                     _render_slot_copy_controls(issue_cols[1], [cast(Mapping[str, object], payload)])
                 else:
-                    st.markdown(f"- {issue.get('text') if isinstance(issue, Mapping) else issue}")
+                    st.markdown(
+                        _format_status_line(
+                            f"- {issue.get('text') if isinstance(issue, Mapping) else issue}",
+                            allow_plain=True,
+                        ),
+                        unsafe_allow_html=True,
+                    )
         else:
             st.caption(
                 "No customs, day-ops, deice, duty, or permit cautions detected."
