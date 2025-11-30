@@ -1,19 +1,20 @@
 from __future__ import annotations
 
-from datetime import date, datetime
-import json
 import html
+import json
 import math
 import re
 import os
+from datetime import date, datetime
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, cast
 
 import pytz
 
 import pandas as pd
 
-import streamlit as st
 import pydeck as pdk
+import streamlit as st
+import streamlit.components.v1 as components
 
 from flight_leg_utils import (
     FlightDataError,
@@ -1323,26 +1324,45 @@ def _inject_slot_copy_styles() -> None:
                 display: flex;
                 align-items: center;
                 justify-content: flex-end;
-                gap: 0.35rem;
-                padding: 0.25rem 0.4rem;
+                gap: 0.5rem;
+                padding: 0.35rem 0.6rem;
+                background: linear-gradient(120deg, #0f172a, #111827);
+                border-radius: 12px;
+                box-shadow: 0 12px 24px rgba(0, 0, 0, 0.18);
             }
             .slot-copy-button {
-                background: linear-gradient(120deg, #f97316, #fb923c);
+                background: linear-gradient(135deg, #f97316, #fb923c);
                 color: #0b1f33;
                 border: none;
-                padding: 0.5rem 0.75rem;
-                border-radius: 10px;
-                font-weight: 700;
-                font-size: 0.9rem;
-                box-shadow: 0 4px 12px rgba(249, 115, 22, 0.28);
+                padding: 0.55rem 0.9rem;
+                border-radius: 999px;
+                font-weight: 800;
+                letter-spacing: 0.01em;
+                font-size: 0.92rem;
+                box-shadow: 0 8px 18px rgba(249, 115, 22, 0.32);
                 cursor: pointer;
-                transition: transform 120ms ease, box-shadow 120ms ease;
+                transition: transform 120ms ease, box-shadow 120ms ease, background 120ms ease;
                 width: auto;
                 white-space: nowrap;
             }
             .slot-copy-button:hover {
                 transform: translateY(-1px);
-                box-shadow: 0 10px 18px rgba(249, 115, 22, 0.4);
+                box-shadow: 0 12px 22px rgba(249, 115, 22, 0.48);
+                background: linear-gradient(135deg, #fb923c, #f97316);
+            }
+            .slot-copy-status {
+                font-size: 0.85rem;
+                font-weight: 700;
+                color: #e5e7eb;
+                text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+            }
+            .slot-copy-label {
+                color: #cbd5e1;
+                font-weight: 600;
+                margin-right: auto;
+                display: flex;
+                align-items: center;
+                gap: 0.25rem;
             }
         </style>
         """,
@@ -1362,6 +1382,7 @@ def _render_slot_copy_controls(container, payloads: Sequence[Mapping[str, object
     st.session_state["slot_copy_counter"] = widget_suffix
     button_id = f"slot-copy-btn-{widget_suffix}"
     text_id = f"slot-copy-text-{widget_suffix}"
+    status_id = f"slot-copy-status-{widget_suffix}"
 
     if len(options) > 1:
         labels = [str(item.get("label", f"Option {idx+1}")) for idx, item in enumerate(options)]
@@ -1377,67 +1398,77 @@ def _render_slot_copy_controls(container, payloads: Sequence[Mapping[str, object
     escaped_json = html.escape(json_text)
     safe_json_for_js = json.dumps(json_text)
 
-    container.markdown(
-        f"""
-        <div class="slot-copy-banner">
-            <button id="{button_id}" class="slot-copy-button" type="button">
-                📋 Copy OCS Slot JSON
-            </button>
-            <textarea id="{text_id}" style="position:absolute; left:-1000px; top:-1000px; height:1px; width:1px;">
-                {escaped_json}
-            </textarea>
-        </div>
-        <script>
-            (function() {{
-                const button = document.getElementById("{button_id}");
-                const textArea = document.getElementById("{text_id}");
-                if (!button || !textArea) return;
+    with container:
+        components.html(
+            f"""
+            <div class="slot-copy-banner">
+                <span class="slot-copy-label">📋 OCS Slot JSON</span>
+                <button id="{button_id}" class="slot-copy-button" type="button">
+                    📋 Copy OCS Slot JSON
+                </button>
+                <span id="{status_id}" class="slot-copy-status"></span>
+                <textarea id="{text_id}" style="position:absolute; left:-1000px; top:-1000px; height:1px; width:1px;">
+                    {escaped_json}
+                </textarea>
+            </div>
+            <script>
+                (function() {{
+                    const button = document.getElementById("{button_id}");
+                    const textArea = document.getElementById("{text_id}");
+                    const status = document.getElementById("{status_id}");
+                    if (!button || !textArea) return;
 
-                const copyPayload = () => {{
-                    const value = {safe_json_for_js};
-
-                    const setStatus = (label) => {{
+                    const setStatus = (label, isError = false) => {{
+                        if (status) {{
+                            status.textContent = label;
+                            status.style.color = isError ? "#fecdd3" : "#bbf7d0";
+                        }}
                         const original = button.dataset.label || button.innerText;
                         button.innerText = label;
                         setTimeout(() => (button.innerText = original), 1600);
                     }};
 
-                    if (navigator.clipboard && window.isSecureContext) {{
-                        navigator.clipboard.writeText(value).then(
-                            () => setStatus("Copied! ✅"),
-                            () => fallbackCopy(value, setStatus)
-                        );
-                        return;
-                    }}
-                    fallbackCopy(value, setStatus);
-                }};
+                    const fallbackCopy = (value) => {{
+                        try {{
+                            textArea.value = value;
+                            textArea.removeAttribute("disabled");
+                            textArea.style.position = "absolute";
+                            textArea.style.left = "-1000px";
+                            textArea.style.top = "-1000px";
+                            textArea.style.width = "1px";
+                            textArea.style.height = "1px";
+                            textArea.select();
+                            textArea.setSelectionRange(0, value.length);
+                            const successful = document.execCommand("copy");
+                            setStatus(successful ? "Copied! ✅" : "Copy failed", !successful);
+                        }} catch (err) {{
+                            setStatus("Copy failed", true);
+                        }}
+                    }};
 
-                const fallbackCopy = (value, setStatus) => {{
-                    try {{
-                        textArea.value = value;
-                        textArea.removeAttribute("disabled");
-                        textArea.style.position = "absolute";
-                        textArea.style.left = "-1000px";
-                        textArea.style.top = "-1000px";
-                        textArea.style.width = "1px";
-                        textArea.style.height = "1px";
-                        textArea.select();
-                        textArea.setSelectionRange(0, value.length);
-                        const successful = document.execCommand("copy");
-                        setStatus(successful ? "Copied! ✅" : "Copy failed");
-                    }} catch (err) {{
-                        setStatus("Copy failed");
-                    }}
-                }};
+                    const copyPayload = () => {{
+                        const value = {safe_json_for_js};
+                        if (navigator.clipboard && window.isSecureContext) {{
+                            navigator.clipboard.writeText(value).then(
+                                () => setStatus("Copied! ✅"),
+                                () => fallbackCopy(value)
+                            );
+                            return;
+                        }}
+                        fallbackCopy(value);
+                    }};
 
-                button.dataset.label = button.innerText;
-                button.addEventListener("click", copyPayload);
-            }})();
-        </script>
-        """,
-        unsafe_allow_html=True,
+                    button.dataset.label = button.innerText;
+                    button.addEventListener("click", copyPayload);
+                }})();
+            </script>
+            """,
+            height=78,
+        )
+    container.caption(
+        f"Copies the slot request payload for **{selected_payload.get('label', 'selected leg')}** to your clipboard.",
+        help="Paste directly into OCS after clicking the copy button.",
     )
-    container.code(json_text, language="json")
 
 
 def _collect_operational_note_highlights(
