@@ -1313,84 +1313,16 @@ def _collect_slot_copy_payloads(result: Mapping[str, Any]) -> list[dict[str, obj
 
 
 def _inject_slot_copy_styles() -> None:
-    global _SLOT_COPY_STYLES_INJECTED
-    if _SLOT_COPY_STYLES_INJECTED:
-        return
-
-    st.markdown(
-        """
-        <style>
-            .slot-copy-banner {
-                display: inline-flex;
-                align-items: center;
-                gap: 0.35rem;
-                padding: 0.25rem 0.45rem;
-                background: rgba(12, 18, 34, 0.85);
-                border-radius: 999px;
-                border: 1px solid #1f2937;
-                box-shadow: 0 8px 22px rgba(0, 0, 0, 0.24);
-            }
-            .slot-copy-button {
-                background: linear-gradient(135deg, #0f172a, #111827);
-                color: #e5e7eb;
-                border: 1px solid #334155;
-                padding: 0.35rem 0.75rem;
-                border-radius: 999px;
-                font-weight: 700;
-                letter-spacing: 0.01em;
-                font-size: 0.9rem;
-                box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
-                cursor: pointer;
-                transition: transform 120ms ease, box-shadow 120ms ease, background 120ms ease, border-color 120ms ease;
-                width: auto;
-                white-space: nowrap;
-            }
-            .slot-copy-button:hover {
-                transform: translateY(-1px);
-                box-shadow: 0 10px 20px rgba(0, 0, 0, 0.4);
-                background: linear-gradient(135deg, #111827, #0f172a);
-                border-color: #475569;
-            }
-            .slot-copy-button .slot-copy-icon { opacity: 0.8; margin-right: 0.2rem; }
-            .slot-copy-button .slot-copy-copy { color: #60a5fa; }
-            .slot-copy-button .slot-copy-slot { color: #e2e8f0; }
-            .slot-copy-button .slot-copy-json { color: #f472b6; }
-            .slot-copy-status {
-                font-size: 0.82rem;
-                font-weight: 700;
-                color: #cbd5e1;
-                padding: 0.15rem 0.5rem;
-                border-radius: 999px;
-                background: rgba(17, 24, 39, 0.75);
-                border: 1px solid #1f2937;
-                box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
-                min-width: 3.9rem;
-                text-align: center;
-            }
-            .slot-copy-status.success { color: #bbf7d0; border-color: #14532d; background: rgba(20, 83, 45, 0.32); }
-            .slot-copy-status.error { color: #fecdd3; border-color: #7f1d1d; background: rgba(127, 29, 29, 0.28); }
-            .slot-copy-label {
-                color: #e2e8f0;
-                font-weight: 600;
-                display: flex;
-                align-items: center;
-                gap: 0.3rem;
-                letter-spacing: 0.01em;
-            }
-            .slot-copy-label .slot-copy-label-icon { opacity: 0.85; }
-            .slot-copy-label .slot-copy-label-text { color: #cbd5e1; font-weight: 500; }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-    _SLOT_COPY_STYLES_INJECTED = True
+    # Kept for compatibility; styling is now injected alongside the component to ensure
+    # it applies within the iframe used by ``components.html``. This function remains to
+    # avoid altering other call sites and to make future toggles easy.
+    return
 
 
 def _render_slot_copy_controls(container, payloads: Sequence[Mapping[str, object]]) -> None:
     if not payloads:
         return
 
-    _inject_slot_copy_styles()
     options = list(payloads)
     selected_payload = options[0]
     widget_suffix = st.session_state.get("slot_copy_counter", 0) + 1
@@ -1416,6 +1348,68 @@ def _render_slot_copy_controls(container, payloads: Sequence[Mapping[str, object
     with container:
         components.html(
             f"""
+            <style>
+                .slot-copy-banner {{
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 0.4rem;
+                    padding: 0.3rem 0.5rem;
+                    background: linear-gradient(120deg, rgba(10, 14, 26, 0.9), rgba(15, 23, 42, 0.85));
+                    border-radius: 999px;
+                    border: 1px solid #1f2937;
+                    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.32);
+                    font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+                }}
+                .slot-copy-button {{
+                    background: linear-gradient(135deg, #0f172a, #0b1224);
+                    color: #e5e7eb;
+                    border: 1px solid #334155;
+                    padding: 0.35rem 0.75rem;
+                    border-radius: 999px;
+                    font-weight: 700;
+                    letter-spacing: 0.01em;
+                    font-size: 0.9rem;
+                    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+                    cursor: pointer;
+                    transition: transform 120ms ease, box-shadow 120ms ease, background 120ms ease, border-color 120ms ease;
+                    width: auto;
+                    white-space: nowrap;
+                }}
+                .slot-copy-button:hover {{
+                    transform: translateY(-1px);
+                    box-shadow: 0 10px 20px rgba(0, 0, 0, 0.4);
+                    background: linear-gradient(135deg, #111827, #0f172a);
+                    border-color: #475569;
+                }}
+                .slot-copy-button .slot-copy-icon {{ opacity: 0.85; margin-right: 0.25rem; }}
+                .slot-copy-button .slot-copy-copy {{ color: #60a5fa; }}
+                .slot-copy-button .slot-copy-slot {{ color: #e2e8f0; }}
+                .slot-copy-button .slot-copy-json {{ color: #f472b6; }}
+                .slot-copy-status {{
+                    font-size: 0.82rem;
+                    font-weight: 700;
+                    color: #cbd5e1;
+                    padding: 0.15rem 0.55rem;
+                    border-radius: 999px;
+                    background: rgba(17, 24, 39, 0.78);
+                    border: 1px solid #1f2937;
+                    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+                    min-width: 3.9rem;
+                    text-align: center;
+                }}
+                .slot-copy-status.success {{ color: #bbf7d0; border-color: #14532d; background: rgba(20, 83, 45, 0.32); }}
+                .slot-copy-status.error {{ color: #fecdd3; border-color: #7f1d1d; background: rgba(127, 29, 29, 0.28); }}
+                .slot-copy-label {{
+                    color: #e2e8f0;
+                    font-weight: 600;
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 0.3rem;
+                    letter-spacing: 0.01em;
+                }}
+                .slot-copy-label .slot-copy-label-icon {{ opacity: 0.85; }}
+                .slot-copy-label .slot-copy-label-text {{ color: #cbd5e1; font-weight: 500; }}
+            </style>
             <div class="slot-copy-banner">
                 <span class="slot-copy-label">
                     <span class="slot-copy-label-icon">📄</span>
@@ -1482,7 +1476,7 @@ def _render_slot_copy_controls(container, payloads: Sequence[Mapping[str, object
                 }})();
             </script>
             """,
-            height=68,
+            height=82,
         )
     container.caption(
         f"Copy the OCS slot payload for **{selected_payload.get('label', 'selected leg')}** straight to your clipboard.",
