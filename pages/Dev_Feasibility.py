@@ -1364,6 +1364,11 @@ def _inject_slot_copy_styles() -> None:
                 align-items: center;
                 gap: 0.25rem;
             }
+            .slot-copy-status {
+                font-size: 0.85rem;
+                font-weight: 600;
+                color: #14532d;
+            }
         </style>
         """,
         unsafe_allow_html=True,
