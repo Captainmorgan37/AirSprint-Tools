@@ -193,6 +193,26 @@ def test_customs_hours_ignore_phone_numbers() -> None:
     assert "676-4590" not in (result.summary or "")
 
 
+def test_24_hour_notice_does_not_imply_24_7_hours() -> None:
+    note = (
+        "CUSTOMS:\n"
+        "Available\n"
+        "Location: Proceed to Customs Building Beside Atlantic\n"
+        "HRS: 0800 - 2000 (MUST BE ON GROUND 1930), 7 days a week\n"
+        "1 hr prior notice required, but no more than 24 hrs - No afterhours service available\n"
+        "4 HR prior notice required, as per Officer K.B."
+    )
+
+    parsed = parse_customs_notes([note])
+
+    assert any(
+        entry.get("start") == "0800" and entry.get("end") == "2000" for entry in parsed["customs_hours"]
+    )
+    assert not any(
+        entry.get("start") == "0000" and entry.get("end") == "2400" for entry in parsed["customs_hours"]
+    )
+
+
 def test_24_7_reference_to_other_airport_not_treated_as_hours() -> None:
     note = (
         "CUSTOMS: Available - AOE/15\n"
