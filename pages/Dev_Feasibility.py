@@ -1,17 +1,20 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+import html
+import json
 import math
 import re
 import os
+from datetime import date, datetime
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, cast
 
 import pytz
 
 import pandas as pd
 
-import streamlit as st
 import pydeck as pdk
+import streamlit as st
+import streamlit.components.v1 as components
 
 from flight_leg_utils import (
     FlightDataError,
@@ -58,6 +61,7 @@ st.write(
 )
 
 STATUS_EMOJI = {"PASS": "✅", "CAUTION": "⚠️", "FAIL": "❌"}
+STATUS_COLORS = {"FAIL": "#b91c1c", "CAUTION": "#d97706"}
 SECTION_ORDER = [
     "suitability",
     "day_ops",
@@ -79,8 +83,10 @@ SECTION_LABELS = {
     "operational_notes": "Other Operational Notes",
 }
 KEY_ISSUE_SECTIONS = {"customs", "day_ops", "deice", "overflight"}
+SLOT_COPY_AIRPORTS = {"CYYZ", "CYUL", "CYYC", "CYVR"}
 RESERVE_CALENDAR_DATES = set(TARGET_DATES)
 _LEG_STYLES_INJECTED = False
+_SLOT_COPY_STYLES_INJECTED = False
 DEPARTURE_AIRPORT_KEYS = (
     "departure_airport",
     "dep_airport",
@@ -831,6 +837,37 @@ def _collect_entries(values: Any, *, explode: bool = False) -> list[str]:
     return entries
 
 
+def _status_color_for_line(text: str, highlight_status: Optional[str] = None) -> Optional[str]:
+    normalized = text.upper()
+    if highlight_status:
+        target = highlight_status.upper()
+        forced_color = STATUS_COLORS.get(target)
+        if forced_color:
+            return forced_color
+    for status, color in STATUS_COLORS.items():
+        if re.search(rf"\b{re.escape(status)}\b", normalized):
+            return color
+    return None
+
+
+def _format_status_line(
+    text: str, *, highlight_status: Optional[str] = None, allow_plain: bool = False
+) -> str:
+    stripped = str(text).rstrip()
+    if not stripped:
+        return "<div style='height:0.35rem'></div>"
+
+    color = _status_color_for_line(stripped, highlight_status=highlight_status)
+    style_parts = ["margin:0.1rem 0;"]
+    if color:
+        style_parts.append(f"color:{color};")
+        style_parts.append("font-weight:700;")
+    elif not allow_plain:
+        style_parts.append("color:inherit;")
+
+    return f"<div style='{' '.join(style_parts)}'>{html.escape(stripped)}</div>"
+
+
 def _render_bullet_section(title: str, lines: Sequence[str]) -> None:
     entries: list[str] = []
     seen: set[str] = set()
@@ -1184,14 +1221,19 @@ def _render_leg_side(label: str, side: Mapping[str, Any]) -> None:
         )
 
 
-def _collect_key_issues(result: Mapping[str, Any]) -> List[str]:
-    issues: List[str] = []
+def _collect_key_issues(
+    result: Mapping[str, Any], slot_payloads: Sequence[Mapping[str, object]] | None = None
+) -> list[dict[str, object]]:
+    issues: list[dict[str, object]] = []
+    slot_payload_lookup = {
+        str(payload.get("issue_prefix")): payload for payload in slot_payloads or []
+    }
     duty = result.get("duty") if isinstance(result, Mapping) else None
     if isinstance(duty, Mapping):
         duty_status = duty.get("status", "PASS")
         if duty_status in {"CAUTION", "FAIL"}:
             summary = duty.get("summary") or f"Duty {duty_status.title()}"
-            issues.append(f"Duty: {summary}")
+            issues.append({"text": f"Duty: {summary}"})
 
     legs = result.get("legs") if isinstance(result, Mapping) else None
     if isinstance(legs, Sequence):
@@ -1203,13 +1245,13 @@ def _collect_key_issues(result: Mapping[str, Any]) -> List[str]:
                 status = aircraft.get("status", "PASS")
                 if status in {"CAUTION", "FAIL"}:
                     summary = aircraft.get("summary") or status
-                    issues.append(f"Leg {index} Aircraft: {summary}")
+                    issues.append({"text": f"Leg {index} Aircraft: {summary}"})
             weight_balance = leg.get("weightBalance")
             if isinstance(weight_balance, Mapping):
                 status = weight_balance.get("status", "PASS")
                 if status in {"CAUTION", "FAIL"}:
                     summary = weight_balance.get("summary") or status
-                    issues.append(f"Leg {index} Weight & Balance: {summary}")
+                    issues.append({"text": f"Leg {index} Weight & Balance: {summary}"})
             for side_name in ("departure", "arrival"):
                 side = leg.get(side_name)
                 if not isinstance(side, Mapping):
@@ -1226,8 +1268,261 @@ def _collect_key_issues(result: Mapping[str, Any]) -> List[str]:
                     summary = category.get("summary") or status
                     label = f"{side_name.title()} {icao} {display}"
                     if status == "FAIL" or (status == "CAUTION" and key in KEY_ISSUE_SECTIONS):
-                        issues.append(f"{label}: {summary}")
+                        issue = {"text": f"{label}: {summary}"}
+                        payload = slot_payload_lookup.get(label)
+                        if payload:
+                            issue["slot_payload"] = payload
+                        issues.append(issue)
     return issues
+
+
+def _format_slot_json_time(planned_time_local: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    if not planned_time_local:
+        return None, None
+    try:
+        parsed_dt = safe_parse_dt(str(planned_time_local))
+    except Exception:
+        return None, None
+
+    formatted_date = parsed_dt.strftime("%d%b").upper()
+    time_label = parsed_dt.strftime("%H%M")
+
+    return formatted_date, time_label
+
+
+def _collect_slot_copy_payloads(result: Mapping[str, Any]) -> list[dict[str, object]]:
+    payloads: list[dict[str, object]] = []
+    legs = result.get("legs") if isinstance(result, Mapping) else None
+    default_aircraft = str(result.get("aircraft_type") or "").upper() if isinstance(result, Mapping) else ""
+
+    if not isinstance(legs, Sequence):
+        return payloads
+
+    for index, leg in enumerate(legs, start=1):
+        if not isinstance(leg, Mapping):
+            continue
+        leg_aircraft = str(leg.get("aircraft_type") or default_aircraft).upper()
+        for side_key, operation in (("departure", "departure"), ("arrival", "arrival")):
+            side = leg.get(side_key)
+            if not isinstance(side, Mapping):
+                continue
+            icao = str(side.get("icao") or "").upper()
+            if icao not in SLOT_COPY_AIRPORTS:
+                continue
+
+            slot_ppr = side.get("slot_ppr") if isinstance(side, Mapping) else None
+            slot_status = slot_ppr.get("status") if isinstance(slot_ppr, Mapping) else None
+            parsed_restrictions = side.get("parsed_operational_restrictions")
+            slot_required = bool(parsed_restrictions.get("slot_required")) if isinstance(parsed_restrictions, Mapping) else False
+
+            if slot_status != "FAIL" and not slot_required:
+                continue
+
+            planned_time_local = side.get("planned_time_local") or side.get("plannedTimeLocal")
+            local_date, local_time = _format_slot_json_time(planned_time_local)
+
+            counterpart = leg.get("arrival" if operation == "departure" else "departure")
+            other_airport = None
+            if isinstance(counterpart, Mapping):
+                other_airport_value = counterpart.get("icao") or counterpart.get("airport")
+                other_airport = str(other_airport_value).upper() if other_airport_value else None
+
+            issue_prefix = f"{operation.title()} {icao} {SECTION_LABELS.get('slot_ppr', 'Slot / PPR')}"
+            payload: dict[str, object] = {
+                "label": f"Leg {index} {operation.title()} {icao}",
+                "json": {
+                    "operation": operation,
+                    "airport": icao,
+                },
+                "issue_prefix": issue_prefix,
+            }
+
+            if local_date:
+                payload["json"]["date"] = local_date
+            if local_time:
+                payload["json"]["time"] = local_time
+            if other_airport:
+                payload["json"]["other_airport"] = other_airport
+                if operation == "departure":
+                    payload["json"]["dest"] = other_airport
+                else:
+                    payload["json"]["orig"] = other_airport
+            if leg_aircraft:
+                payload["json"]["ac_type"] = leg_aircraft
+
+            payloads.append(payload)
+
+    return payloads
+
+
+def _inject_slot_copy_styles() -> None:
+    # Kept for compatibility; styling is now injected alongside the component to ensure
+    # it applies within the iframe used by ``components.html``. This function remains to
+    # avoid altering other call sites and to make future toggles easy.
+    return
+
+
+def _render_slot_copy_controls(container, payloads: Sequence[Mapping[str, object]]) -> None:
+    if not payloads:
+        return
+
+    options = list(payloads)
+    selected_payload = options[0]
+    widget_suffix = st.session_state.get("slot_copy_counter", 0) + 1
+    st.session_state["slot_copy_counter"] = widget_suffix
+    button_id = f"slot-copy-btn-{widget_suffix}"
+    text_id = f"slot-copy-text-{widget_suffix}"
+    status_id = f"slot-copy-status-{widget_suffix}"
+
+    if len(options) > 1:
+        labels = [str(item.get("label", f"Option {idx+1}")) for idx, item in enumerate(options)]
+        selected_label = container.selectbox(
+            "Slot JSON target", labels, key=f"slot-json-target-{widget_suffix}"
+        )
+        label_map = {label: payload for label, payload in zip(labels, options)}
+        selected_payload = label_map.get(selected_label, selected_payload)
+
+    payload_json = selected_payload.get("json") if isinstance(selected_payload, Mapping) else None
+    if not isinstance(payload_json, Mapping):
+        return
+
+    json_text = json.dumps(payload_json, indent=2)
+    escaped_json = html.escape(json_text)
+    safe_json_for_js = json.dumps(json_text)
+
+    with container:
+        components.html(
+            f"""
+            <style>
+                .slot-copy-banner {{
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 0.4rem;
+                    padding: 0.3rem 0.5rem;
+                    background: linear-gradient(120deg, rgba(10, 14, 26, 0.9), rgba(15, 23, 42, 0.85));
+                    border-radius: 999px;
+                    border: 1px solid #1f2937;
+                    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.32);
+                    font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+                }}
+                .slot-copy-button {{
+                    background: linear-gradient(135deg, #0f172a, #0b1224);
+                    color: #e5e7eb;
+                    border: 1px solid #334155;
+                    padding: 0.35rem 0.75rem;
+                    border-radius: 999px;
+                    font-weight: 700;
+                    letter-spacing: 0.01em;
+                    font-size: 0.9rem;
+                    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+                    cursor: pointer;
+                    transition: transform 120ms ease, box-shadow 120ms ease, background 120ms ease, border-color 120ms ease;
+                    width: auto;
+                    white-space: nowrap;
+                }}
+                .slot-copy-button:hover {{
+                    transform: translateY(-1px);
+                    box-shadow: 0 10px 20px rgba(0, 0, 0, 0.4);
+                    background: linear-gradient(135deg, #111827, #0f172a);
+                    border-color: #475569;
+                }}
+                .slot-copy-button .slot-copy-icon {{ opacity: 0.85; margin-right: 0.25rem; }}
+                .slot-copy-button .slot-copy-copy {{ color: #60a5fa; }}
+                .slot-copy-button .slot-copy-slot {{ color: #e2e8f0; }}
+                .slot-copy-button .slot-copy-json {{ color: #f472b6; }}
+                .slot-copy-status {{
+                    font-size: 0.82rem;
+                    font-weight: 700;
+                    color: #cbd5e1;
+                    padding: 0.15rem 0.55rem;
+                    border-radius: 999px;
+                    background: rgba(17, 24, 39, 0.78);
+                    border: 1px solid #1f2937;
+                    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+                    min-width: 3.9rem;
+                    text-align: center;
+                }}
+                .slot-copy-status.success {{ color: #bbf7d0; border-color: #14532d; background: rgba(20, 83, 45, 0.32); }}
+                .slot-copy-status.error {{ color: #fecdd3; border-color: #7f1d1d; background: rgba(127, 29, 29, 0.28); }}
+                .slot-copy-label {{
+                    color: #e2e8f0;
+                    font-weight: 600;
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 0.3rem;
+                    letter-spacing: 0.01em;
+                }}
+                .slot-copy-label .slot-copy-label-icon {{ opacity: 0.85; }}
+                .slot-copy-label .slot-copy-label-text {{ color: #cbd5e1; font-weight: 500; }}
+            </style>
+            <div class="slot-copy-banner">
+                <span class="slot-copy-label">
+                    <span class="slot-copy-label-icon">📄</span>
+                    <span class="slot-copy-label-text">OCS Slot JSON</span>
+                </span>
+                <button id="{button_id}" class="slot-copy-button" type="button">
+                    <span class="slot-copy-icon">📄</span>
+                    <span class="slot-copy-copy">Copy</span>
+                    <span class="slot-copy-slot">Slot</span>
+                    <span class="slot-copy-json">JSON</span>
+                </button>
+                <span id="{status_id}" class="slot-copy-status"></span>
+                <textarea id="{text_id}" style="position:absolute; left:-1000px; top:-1000px; height:1px; width:1px;">
+                    {escaped_json}
+                </textarea>
+            </div>
+            <script>
+                (function() {{
+                    const button = document.getElementById("{button_id}");
+                    const textArea = document.getElementById("{text_id}");
+                    const status = document.getElementById("{status_id}");
+                    if (!button || !textArea) return;
+
+                    const setStatus = (label, isError = false) => {{
+                        if (status) {{
+                            status.textContent = label;
+                            status.classList.toggle("success", !isError);
+                            status.classList.toggle("error", isError);
+                        }}
+                    }};
+
+                    const fallbackCopy = (value) => {{
+                        try {{
+                            textArea.value = value;
+                            textArea.removeAttribute("disabled");
+                            textArea.style.position = "absolute";
+                            textArea.style.left = "-1000px";
+                            textArea.style.top = "-1000px";
+                            textArea.style.width = "1px";
+                            textArea.style.height = "1px";
+                            textArea.select();
+                            textArea.setSelectionRange(0, value.length);
+                            const successful = document.execCommand("copy");
+                            setStatus(successful ? "Copied ✓" : "Copy failed", !successful);
+                        }} catch (err) {{
+                            setStatus("Copy failed", true);
+                        }}
+                    }};
+
+                    const copyPayload = () => {{
+                        const value = {safe_json_for_js};
+                        if (navigator.clipboard && window.isSecureContext) {{
+                            navigator.clipboard.writeText(value).then(
+                                () => setStatus("Copied ✓"),
+                                () => fallbackCopy(value)
+                            );
+                            return;
+                        }}
+                        fallbackCopy(value);
+                    }};
+
+                    button.dataset.label = button.innerText;
+                    button.addEventListener("click", copyPayload);
+                }})();
+            </script>
+            """,
+            height=82,
+        )
 
 
 def _collect_operational_note_highlights(
@@ -1314,8 +1609,11 @@ def _render_full_quote_result(result: FullFeasibilityResult) -> None:
 
         summary = result.get("summary")
         if summary:
-            formatted = summary.strip().replace("\n", "  \n")
-            st.markdown(formatted)
+            lines = summary.strip().splitlines()
+            st.markdown(
+                "\n".join(_format_status_line(line) for line in lines),
+                unsafe_allow_html=True,
+            )
 
         validation_issues = [
             str(issue).strip()
@@ -1329,14 +1627,16 @@ def _render_full_quote_result(result: FullFeasibilityResult) -> None:
         }
         st.markdown("**Validation Checks**")
         if validation_issues:
+            validation_lines = []
             for entry in validation_issues:
+                entry_text = f"- {entry}"
                 if entry in validation_failures:
-                    st.markdown(
-                        f"- <span style='color:#b91c1c'>{entry}</span>",
-                        unsafe_allow_html=True,
+                    validation_lines.append(
+                        _format_status_line(entry_text, highlight_status="FAIL")
                     )
                 else:
-                    st.markdown(f"- {entry}")
+                    validation_lines.append(_format_status_line(entry_text))
+            st.markdown("\n".join(validation_lines), unsafe_allow_html=True)
         else:
             st.caption(
                 "Planning note routes and requested aircraft type align with the quoted legs."
@@ -1352,11 +1652,29 @@ def _render_full_quote_result(result: FullFeasibilityResult) -> None:
                 if entry["issue"]:
                     st.markdown(f" • {entry['issue']}")
 
-        key_issues = _collect_key_issues(result)
+        slot_copy_payloads = _collect_slot_copy_payloads(result) if overall_status == "FAIL" else []
+        key_issues = _collect_key_issues(result, slot_copy_payloads)
+
         st.subheader("Key Issues")
+
         if key_issues:
             for issue in key_issues:
-                st.markdown(f"- {issue}")
+                payload = issue.get("slot_payload") if isinstance(issue, Mapping) else None
+                if payload:
+                    issue_cols = st.columns([1.6, 1])
+                    issue_cols[0].markdown(
+                        _format_status_line(f"- {issue.get('text')}", allow_plain=True),
+                        unsafe_allow_html=True,
+                    )
+                    _render_slot_copy_controls(issue_cols[1], [cast(Mapping[str, object], payload)])
+                else:
+                    st.markdown(
+                        _format_status_line(
+                            f"- {issue.get('text') if isinstance(issue, Mapping) else issue}",
+                            allow_plain=True,
+                        ),
+                        unsafe_allow_html=True,
+                    )
         else:
             st.caption(
                 "No customs, day-ops, deice, duty, or permit cautions detected."

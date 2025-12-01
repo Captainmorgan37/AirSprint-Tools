@@ -234,6 +234,35 @@ def test_afterhours_notice_does_not_trigger_caution_within_hours() -> None:
     assert not any("prior notice" in issue for issue in result.issues)
 
 
+def test_customs_hours_detects_seven_days_a_week() -> None:
+    note = "Hours of operation: 1030-1900, 7 days/wk (No arrivals earlier than 1100LT - CBPO HM)"
+
+    parsed = parse_customs_notes([note])
+
+    assert parsed["customs_hours"]
+    assert parsed["customs_hours"][0]["days"] == ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+
+def test_customs_hours_with_local_time_suffix() -> None:
+    note = (
+        "CUSTOMS:\n\n"
+        "Available - AOE/15\n"
+        "•\tProceed to Terminal\n"
+        "•\tPH: 888-226-7277\n"
+        "•\tHours of operation: 0830L to 1630L\n"
+        "•\t2hrs notice recommended. Weekend clearance must be arranged before Friday @ 1630L, if unable please call 250.923.3343.\n\n"
+        "Notes:\n"
+        "•\tSend handling requests to: airport@campbellriver.ca and airport.reception@campbellriver.ca"
+    )
+
+    parsed = parse_customs_notes([note])
+
+    assert parsed["customs_hours"]
+    assert parsed["customs_hours"][0]["start"] == "0830"
+    assert parsed["customs_hours"][0]["end"] == "1630"
+    assert parsed["customs_hours"][0]["days"] == ["unknown"]
+
+
 def test_to_separated_hours_are_parsed_before_inline_warning() -> None:
     note = (
         "CBSA free of charge service hours at Saguenay-Bagotville airport (CYBG) "
