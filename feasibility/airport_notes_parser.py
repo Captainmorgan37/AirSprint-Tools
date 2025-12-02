@@ -388,7 +388,11 @@ def is_explicit_deice_note(text: str) -> bool:
     if not text:
         return False
 
-    first_line = text.strip().splitlines()[0].strip().lower()
+    lines = [line.strip() for line in text.strip().splitlines() if line.strip()]
+    if not lines:
+        return False
+
+    first_line = lines[0].lower()
     return first_line.startswith("deice") or first_line.startswith("de-ice") or "deice/anti-ice" in first_line
 
 
