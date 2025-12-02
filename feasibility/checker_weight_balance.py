@@ -211,7 +211,7 @@ def _iter_cargo(payload: Mapping[str, Any]) -> Iterable[Mapping[str, Any]]:
 
     visited: set[int] = set()
     yielded: set[int] = set()
-    cargo_keys = {"cargo", "cargoItems", "cargo_items"}
+    cargo_keys = {"cargo", "cargoItems", "cargo_items", "animal", "animals"}
 
     while search_queue:
         current = search_queue.pop(0)
