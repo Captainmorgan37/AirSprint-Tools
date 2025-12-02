@@ -324,11 +324,24 @@ def evaluate_weight_balance(
         pax_breakdown[category] = pax_breakdown.get(category, 0) + 1
 
     cargo_entries = list(_iter_cargo(pax_payload))
-    cargo_weights = [
-        _coerce_number(item.get("weightQty"))
-        for item in cargo_entries
-        if _coerce_number(item.get("weightQty")) is not None
-    ]
+    cargo_summary = []
+    cargo_weights = []
+    for item in cargo_entries:
+        weight = _coerce_number(
+            item.get("weightQty")
+            or item.get("weight")
+            or item.get("weight_qty")
+        )
+        cargo_summary.append(
+            {
+                "note": item.get("note"),
+                "type": item.get("type") or item.get("cargoType"),
+                "weight": weight,
+                "unit": item.get("weightUnit") or item.get("unit"),
+            }
+        )
+        if weight is not None:
+            cargo_weights.append(weight)
     cargo_weight = sum(cargo_weights) if cargo_weights else None
     if cargo_weight is None:
         cargo_weight = 30 * pax_count
@@ -344,6 +357,7 @@ def evaluate_weight_balance(
             "maxAllowed": None,
             "paxBreakdown": dict(pax_breakdown),
             "paxPayloadKeys": pax_keys,
+            "cargoEntries": cargo_summary,
         }
     )
 

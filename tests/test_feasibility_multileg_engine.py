@@ -681,6 +681,11 @@ def test_weight_balance_counts_animals_as_cargo() -> None:
     assert details["paxCount"] == 1
     assert details["cargoWeight"] == 168
     assert details["totalPayload"] == details["paxWeight"] + 168
+    assert details["cargoEntries"] == [
+        {"note": "Luggage", "type": None, "unit": None, "weight": 100.0},
+        {"note": "Archie the dog", "type": None, "unit": None, "weight": 19.0},
+        {"note": "Jet the dog", "type": None, "unit": None, "weight": 49.0},
+    ]
 
 
 def test_aircraft_endurance_is_evaluated_for_each_leg() -> None:
