@@ -270,6 +270,9 @@ class HighPaxWeightAlert:
     missing_pax_weights: int
     pax_weight_lbs: float
     pax_weight_threshold_lbs: int
+    pax_breakdown: Mapping[str, int]
+    cargo_weight_lbs: float
+    animal_weight_lbs: float
     duration_minutes: int
     duration_threshold_minutes: int
     departure_utc: Optional[str]
@@ -290,6 +293,9 @@ class HighPaxWeightAlert:
             "missing_pax_weights": self.missing_pax_weights,
             "pax_weight_lbs": self.pax_weight_lbs,
             "pax_weight_threshold_lbs": self.pax_weight_threshold_lbs,
+            "pax_breakdown": dict(self.pax_breakdown),
+            "cargo_weight_lbs": self.cargo_weight_lbs,
+            "animal_weight_lbs": self.animal_weight_lbs,
             "duration_minutes": self.duration_minutes,
             "duration_threshold_minutes": self.duration_threshold_minutes,
             "departure_utc": self.departure_utc,
@@ -486,7 +492,7 @@ def _iter_pax_tickets(payload: Mapping[str, Any]) -> Iterable[Mapping[str, Any]]
                     search_queue.append(child)
 
 
-def _iter_cargo(payload: Mapping[str, Any]) -> Iterable[Mapping[str, Any]]:
+def _iter_cargo(payload: Mapping[str, Any]) -> Iterable[Tuple[Mapping[str, Any], str]]:
     """Yield cargo and animal entries from nested payload structures."""
 
     search_queue: List[Any] = []
@@ -514,7 +520,8 @@ def _iter_cargo(payload: Mapping[str, Any]) -> Iterable[Mapping[str, Any]]:
                             if entry_marker in yielded:
                                 continue
                             yielded.add(entry_marker)
-                            yield entry
+                            entry_type = "animal" if key in {"animal", "animals"} else "cargo"
+                            yield entry, entry_type
 
             for child in (
                 current.get("pax"),
@@ -536,10 +543,11 @@ def _iter_cargo(payload: Mapping[str, Any]) -> Iterable[Mapping[str, Any]]:
 
 def _calculate_pax_payload_weight(
     payload: Mapping[str, Any], *, season: str
-) -> Tuple[Optional[float], int, int]:
+) -> Tuple[Optional[float], int, int, Dict[str, int], float, float]:
     tickets = list(_iter_pax_tickets(payload))
     pax_weight = 0.0
     missing_weights = 0
+    pax_breakdown: Dict[str, int] = {}
 
     for ticket in tickets:
         pax_user = ticket.get("paxUser") if isinstance(ticket.get("paxUser"), Mapping) else {}
@@ -561,23 +569,35 @@ def _calculate_pax_payload_weight(
         luggage_weight = _coerce_number(ticket.get("luggageWeight") or ticket.get("luggage_weight")) or 0
         pax_weight += base_weight + luggage_weight
 
-    cargo_entries = list(_iter_cargo(payload))
-    cargo_weights = [
-        weight
-        for weight in (
-            _coerce_number(item.get("weightQty") or item.get("weight") or item.get("weight_qty"))
-            for item in cargo_entries
-        )
-        if weight is not None
-    ]
+        pax_breakdown[category] = pax_breakdown.get(category, 0) + 1
 
-    cargo_weight = sum(cargo_weights) if cargo_weights else 30 * len(tickets)
-    total_weight = pax_weight + cargo_weight
+    cargo_entries = list(_iter_cargo(payload))
+    cargo_weights: List[float] = []
+    animal_weights: List[float] = []
+    for entry, entry_type in cargo_entries:
+        weight = _coerce_number(
+            entry.get("weightQty") or entry.get("weight") or entry.get("weight_qty")
+        )
+        if weight is None:
+            continue
+        if entry_type == "animal":
+            animal_weights.append(weight)
+        else:
+            cargo_weights.append(weight)
+
+    if cargo_weights or animal_weights:
+        cargo_weight = sum(cargo_weights)
+        animal_weight = sum(animal_weights)
+    else:
+        cargo_weight = 30 * len(tickets)
+        animal_weight = 0.0
+
+    total_weight = pax_weight + cargo_weight + animal_weight
 
     if not tickets and not cargo_entries:
-        return None, 0, missing_weights
+        return None, 0, missing_weights, pax_breakdown, cargo_weight, animal_weight
 
-    return total_weight, len(tickets), missing_weights
+    return total_weight, len(tickets), missing_weights, pax_breakdown, cargo_weight, animal_weight
 
 
 def _lookup_threshold_minutes(category: Optional[str], pax_count: Optional[int]) -> Optional[int]:
@@ -743,6 +763,21 @@ def format_duration_label(minutes: Optional[int]) -> str:
         value = abs(value)
     hours, remainder = divmod(value, 60)
     return f"{sign}{hours:d}h {remainder:02d}m"
+
+
+def _format_pax_breakdown(breakdown: Mapping[str, int]) -> str:
+    if not breakdown:
+        return "—"
+
+    parts: List[str] = []
+    for label in sorted(breakdown):
+        count = breakdown[label]
+        if not count:
+            continue
+        suffix = "" if count == 1 else "s"
+        parts.append(f"{count} {label.lower()}{suffix}")
+
+    return ", ".join(parts) if parts else "—"
 
 
 def evaluate_flights_for_max_time(
@@ -971,9 +1006,14 @@ def evaluate_flights_for_high_pax_weight(
                 continue
             diagnostics["payloads_requested"] += 1
 
-            total_weight, pax_count, missing_weights = _calculate_pax_payload_weight(
-                payload, season=season_label
-            )
+            (
+                total_weight,
+                pax_count,
+                missing_weights,
+                pax_breakdown,
+                cargo_weight,
+                animal_weight,
+            ) = _calculate_pax_payload_weight(payload, season=season_label)
             if total_weight is None:
                 diagnostics["missing_pax_weights"] += 1
                 continue
@@ -992,6 +1032,9 @@ def evaluate_flights_for_high_pax_weight(
                 missing_pax_weights=missing_weights,
                 pax_weight_lbs=total_weight,
                 pax_weight_threshold_lbs=int(weight_threshold),
+                pax_breakdown=pax_breakdown,
+                cargo_weight_lbs=cargo_weight,
+                animal_weight_lbs=animal_weight,
                 duration_minutes=duration_minutes,
                 duration_threshold_minutes=int(duration_threshold),
                 departure_utc=format_utc(departure_dt) if departure_dt else None,
@@ -1251,5 +1294,6 @@ __all__ = [
     "evaluate_flights_for_zfw_check",
     "evaluate_flights_for_runway_length",
     "format_duration_label",
+    "_format_pax_breakdown",
 ]
 

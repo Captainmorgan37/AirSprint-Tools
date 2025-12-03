@@ -20,6 +20,7 @@ from oca_reports import (
     evaluate_flights_for_runway_length,
     evaluate_flights_for_zfw_check,
     format_duration_label,
+    _format_pax_breakdown,
 )
 
 try:
@@ -464,24 +465,33 @@ def _render_high_pax_weight_results(
     if not df.empty:
         df = df.copy()
         df["Duration"] = df["duration_minutes"].map(format_duration_label)
-        df["Duration threshold"] = df["duration_threshold_minutes"].map(format_duration_label)
-        df["Pax weight (lbs)"] = df["pax_weight_lbs"].map(lambda v: f"{float(v):,.0f}")
+        df["Total Weight (lbs)"] = df["pax_weight_lbs"].map(lambda v: f"{float(v):,.0f}")
         df["Weight threshold (lbs)"] = df["pax_weight_threshold_lbs"].map(lambda v: f"{int(v):,}")
+        df["Pax breakdown"] = df["pax_breakdown"].map(_format_pax_breakdown)
+        df["Cargo weight (lbs)"] = df["cargo_weight_lbs"].map(lambda v: f"{float(v):,.0f}")
+        df["Animal weight (lbs)"] = df["animal_weight_lbs"].map(lambda v: f"{float(v):,.0f}")
+        df["Departure Date/Time (UTC)"] = df["departure_utc"]
+        df["Tail #"] = df["registration"]
+        df["Departure Airport"] = df["airport_from"]
+        df["Arrival Airport"] = df["airport_to"]
+        df["Flight #"] = df["flight_reference"]
+        df["Aircraft Type"] = df["aircraft_category"]
+        df["# of Pax"] = df["pax_count"]
 
         columns = [
-            "departure_utc",
-            "arrival_utc",
-            "registration",
-            "airport_from",
-            "airport_to",
-            "flight_reference",
-            "aircraft_category",
-            "pax_count",
-            "missing_pax_weights",
+            "Departure Date/Time (UTC)",
+            "Tail #",
+            "Departure Airport",
+            "Arrival Airport",
+            "Flight #",
+            "Aircraft Type",
+            "# of Pax",
             "Duration",
-            "Duration threshold",
-            "Pax weight (lbs)",
+            "Total Weight (lbs)",
             "Weight threshold (lbs)",
+            "Pax breakdown",
+            "Cargo weight (lbs)",
+            "Animal weight (lbs)",
         ]
         available_columns = [col for col in columns if col in df.columns]
         display_df = df[available_columns]
@@ -503,6 +513,9 @@ def _render_high_pax_weight_results(
             "missing_pax_weights",
             "pax_weight_lbs",
             "pax_weight_threshold_lbs",
+            "pax_breakdown",
+            "cargo_weight_lbs",
+            "animal_weight_lbs",
             "duration_minutes",
             "duration_threshold_minutes",
         ]
