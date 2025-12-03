@@ -16,6 +16,7 @@ from fl3xx_api import (
     fetch_flights,
     fetch_leg_details,
 )
+from feasibility.checker_weight_balance import STD_WEIGHTS, determine_season
 from flight_leg_utils import FlightDataError, format_utc, safe_parse_dt
 
 _RUNWAY_DATA_PATH = Path(__file__).with_name("runways.csv")
@@ -379,6 +380,62 @@ def _coerce_number(value: Any) -> Optional[float]:
     return number
 
 
+def _normalize_gender_label(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    cleaned = str(value).strip().lower()
+    if cleaned.startswith("f"):
+        return "Female"
+    if cleaned.startswith("m"):
+        return "Male"
+    return None
+
+
+def _extract_label(value: Any, *keys: str) -> Optional[str]:
+    """Return a non-empty string from ``value`` or selected mapping keys."""
+
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    if isinstance(value, Mapping):
+        for key in keys:
+            candidate = value.get(key)
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate.strip()
+    return None
+
+
+def _pax_category(ticket: Mapping[str, Any]) -> str:
+    pax_type_raw = (
+        _extract_label(ticket.get("paxType"), "code", "type", "name", "label")
+        or _extract_label(ticket.get("type"))
+        or _extract_label(ticket.get("pax_type"))
+        or "ADULT"
+    )
+    pax_type = pax_type_raw.upper()
+
+    if "INFANT" in pax_type:
+        return "Infant"
+    if "CHILD" in pax_type or "CHD" in pax_type:
+        return "Child"
+
+    pax_user = ticket.get("paxUser") if isinstance(ticket.get("paxUser"), Mapping) else {}
+    gender_raw = (
+        _extract_label(pax_user.get("gender"))
+        or _extract_label(pax_user.get("sex"))
+        or _extract_label(pax_user.get("salutation"))
+        or _extract_label(pax_user.get("title"))
+        or _extract_label(pax_type_raw)
+    )
+
+    gender_label = _normalize_gender_label(gender_raw)
+    return gender_label or "Male"
+
+
+def _standard_pax_weight(season: str, category: str) -> float:
+    season_label = season if season in STD_WEIGHTS else "Winter"
+    return STD_WEIGHTS.get(season_label, STD_WEIGHTS["Winter"]).get(category, STD_WEIGHTS["Winter"]["Male"])
+
+
 def _iter_pax_tickets(payload: Mapping[str, Any]) -> Iterable[Mapping[str, Any]]:
     """Yield passenger tickets from nested payloads."""
 
@@ -429,35 +486,96 @@ def _iter_pax_tickets(payload: Mapping[str, Any]) -> Iterable[Mapping[str, Any]]
                     search_queue.append(child)
 
 
-def _extract_ticket_weight(ticket: Mapping[str, Any]) -> Optional[float]:
-    pax_user = ticket.get("paxUser") if isinstance(ticket.get("paxUser"), Mapping) else {}
-    explicit_weight = _coerce_number(
-        ticket.get("bodyWeight")
-        or ticket.get("weight")
-        or (pax_user.get("bodyWeight") if isinstance(pax_user, Mapping) else None)
-    )
-    if explicit_weight is None:
-        return None
-    luggage_weight = _coerce_number(ticket.get("luggageWeight") or ticket.get("luggage_weight")) or 0
-    return explicit_weight + luggage_weight
+def _iter_cargo(payload: Mapping[str, Any]) -> Iterable[Mapping[str, Any]]:
+    """Yield cargo and animal entries from nested payload structures."""
+
+    search_queue: List[Any] = []
+    if payload is not None:
+        search_queue.append(payload)
+
+    visited: set[int] = set()
+    yielded: set[int] = set()
+    cargo_keys = {"cargo", "cargoItems", "cargo_items", "animal", "animals"}
+
+    while search_queue:
+        current = search_queue.pop(0)
+        marker = id(current)
+        if marker in visited:
+            continue
+        visited.add(marker)
+
+        if isinstance(current, Mapping):
+            for key in cargo_keys:
+                entries = current.get(key)
+                if isinstance(entries, Iterable) and not isinstance(entries, (str, bytes, bytearray)):
+                    for entry in entries:
+                        if isinstance(entry, Mapping):
+                            entry_marker = id(entry)
+                            if entry_marker in yielded:
+                                continue
+                            yielded.add(entry_marker)
+                            yield entry
+
+            for child in (
+                current.get("pax"),
+                current.get("paxPayload"),
+                current.get("payload"),
+            ):
+                if isinstance(child, (Mapping, list, tuple, set)):
+                    search_queue.append(child)
+
+            for child in current.values():
+                if isinstance(child, (Mapping, list, tuple, set)):
+                    search_queue.append(child)
+
+        elif isinstance(current, Iterable) and not isinstance(current, (str, bytes, bytearray)):
+            for child in current:
+                if isinstance(child, (Mapping, list, tuple, set)):
+                    search_queue.append(child)
 
 
-def _calculate_pax_payload_weight(payload: Mapping[str, Any]) -> Tuple[Optional[float], int, int]:
+def _calculate_pax_payload_weight(
+    payload: Mapping[str, Any], *, season: str
+) -> Tuple[Optional[float], int, int]:
     tickets = list(_iter_pax_tickets(payload))
-    total_weight = 0.0
+    pax_weight = 0.0
     missing_weights = 0
-    counted = 0
 
     for ticket in tickets:
-        weight = _extract_ticket_weight(ticket)
-        if weight is None:
-            missing_weights += 1
-            continue
-        counted += 1
-        total_weight += weight
+        pax_user = ticket.get("paxUser") if isinstance(ticket.get("paxUser"), Mapping) else {}
+        explicit_weight = _coerce_number(
+            ticket.get("bodyWeight")
+            or ticket.get("weight")
+            or (pax_user.get("bodyWeight") if isinstance(pax_user, Mapping) else None)
+        )
+        category = _pax_category(ticket)
 
-    if counted == 0:
-        return None, len(tickets), missing_weights
+        if explicit_weight is None:
+            missing_weights += 1
+        base_weight = (
+            explicit_weight
+            if explicit_weight is not None
+            else _standard_pax_weight(season, category)
+        )
+
+        luggage_weight = _coerce_number(ticket.get("luggageWeight") or ticket.get("luggage_weight")) or 0
+        pax_weight += base_weight + luggage_weight
+
+    cargo_entries = list(_iter_cargo(payload))
+    cargo_weights = [
+        weight
+        for weight in (
+            _coerce_number(item.get("weightQty") or item.get("weight") or item.get("weight_qty"))
+            for item in cargo_entries
+        )
+        if weight is not None
+    ]
+
+    cargo_weight = sum(cargo_weights) if cargo_weights else 30 * len(tickets)
+    total_weight = pax_weight + cargo_weight
+
+    if not tickets and not cargo_entries:
+        return None, 0, missing_weights
 
     return total_weight, len(tickets), missing_weights
 
@@ -816,6 +934,28 @@ def evaluate_flights_for_high_pax_weight(
                 continue
             diagnostics["duration_applicable"] += 1
 
+            departure_dt = _extract_datetime_value(
+                row,
+                (
+                    "blocksoffestimated",
+                    "blockOffEstUTC",
+                    "realDateOFF",
+                    "realDateOUT",
+                    "etd",
+                ),
+            )
+            arrival_dt = _extract_datetime_value(
+                row,
+                (
+                    "blocksonestimated",
+                    "blockOnEstUTC",
+                    "realDateON",
+                    "realDateIN",
+                    "eta",
+                ),
+            )
+            season_label = determine_season(departure_dt.isoformat() if departure_dt else None)
+
             flight_id = row.get("flightId")
             if not flight_id:
                 continue
@@ -831,7 +971,9 @@ def evaluate_flights_for_high_pax_weight(
                 continue
             diagnostics["payloads_requested"] += 1
 
-            total_weight, pax_count, missing_weights = _calculate_pax_payload_weight(payload)
+            total_weight, pax_count, missing_weights = _calculate_pax_payload_weight(
+                payload, season=season_label
+            )
             if total_weight is None:
                 diagnostics["missing_pax_weights"] += 1
                 continue
@@ -852,14 +994,8 @@ def evaluate_flights_for_high_pax_weight(
                 pax_weight_threshold_lbs=int(weight_threshold),
                 duration_minutes=duration_minutes,
                 duration_threshold_minutes=int(duration_threshold),
-                departure_utc=_extract_datetime_text(
-                    row,
-                    ("blocksoffestimated", "blockOffEstUTC", "realDateOFF", "realDateOUT", "etd"),
-                ),
-                arrival_utc=_extract_datetime_text(
-                    row,
-                    ("blocksonestimated", "blockOnEstUTC", "realDateON", "realDateIN", "eta"),
-                ),
+                departure_utc=format_utc(departure_dt) if departure_dt else None,
+                arrival_utc=format_utc(arrival_dt) if arrival_dt else None,
                 airport_from=row.get("airportFrom"),
                 airport_to=row.get("airportTo"),
                 registration=row.get("registrationNumber"),
