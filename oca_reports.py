@@ -10,7 +10,13 @@ from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional,
 
 import requests
 
-from fl3xx_api import Fl3xxApiConfig, fetch_flights, fetch_leg_details
+from fl3xx_api import (
+    Fl3xxApiConfig,
+    fetch_flight_pax_details,
+    fetch_flights,
+    fetch_leg_details,
+)
+from feasibility.checker_weight_balance import STD_WEIGHTS, determine_season
 from flight_leg_utils import FlightDataError, format_utc, safe_parse_dt
 
 _RUNWAY_DATA_PATH = Path(__file__).with_name("runways.csv")
@@ -70,6 +76,37 @@ _ZFW_PAX_THRESHOLDS: Dict[str, int] = {
     "C25A": 5,
     "C25B": 6,
     "E545": 9,
+}
+
+_HIGH_PAX_WEIGHT_ALIASES: Dict[str, str] = {
+    "CJ2": "C25A",
+    "C525A": "C25A",
+    "CJ3": "C25B",
+    "C525B": "C25B",
+}
+
+_EMBRAER_WEIGHT_CATEGORIES = {
+    "E545",
+    "E550",
+    "E450",
+    "E500",
+    "E505",
+    "E600",
+    "E650",
+    "P500",
+    "L500",
+}
+
+_HIGH_PAX_DURATION_THRESHOLDS: Dict[str, int] = {
+    "C25A": _minutes(1, 0),
+    "C25B": _minutes(1, 30),
+    "EMB": _minutes(3, 0),
+}
+
+_HIGH_PAX_WEIGHT_THRESHOLDS: Dict[str, int] = {
+    "C25A": 800,
+    "C25B": 1400,
+    "EMB": 2000,
 }
 
 
@@ -221,6 +258,50 @@ class ZfwFlightCheck:
 
 
 @dataclass(frozen=True)
+class HighPaxWeightAlert:
+    """Data describing flights with elevated passenger weight totals."""
+
+    flight_id: Any
+    quote_id: Any
+    flight_reference: Optional[str]
+    booking_reference: Optional[str]
+    aircraft_category: Optional[str]
+    pax_count: Optional[int]
+    missing_pax_weights: int
+    pax_weight_lbs: float
+    pax_weight_threshold_lbs: int
+    duration_minutes: int
+    duration_threshold_minutes: int
+    departure_utc: Optional[str]
+    arrival_utc: Optional[str]
+    airport_from: Optional[str]
+    airport_to: Optional[str]
+    registration: Optional[str]
+    flight_number: Optional[str]
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {
+            "flight_id": self.flight_id,
+            "quote_id": self.quote_id,
+            "flight_reference": self.flight_reference,
+            "booking_reference": self.booking_reference,
+            "aircraft_category": self.aircraft_category,
+            "pax_count": self.pax_count,
+            "missing_pax_weights": self.missing_pax_weights,
+            "pax_weight_lbs": self.pax_weight_lbs,
+            "pax_weight_threshold_lbs": self.pax_weight_threshold_lbs,
+            "duration_minutes": self.duration_minutes,
+            "duration_threshold_minutes": self.duration_threshold_minutes,
+            "departure_utc": self.departure_utc,
+            "arrival_utc": self.arrival_utc,
+            "airport_from": self.airport_from,
+            "airport_to": self.airport_to,
+            "registration": self.registration,
+            "flight_number": self.flight_number,
+        }
+
+
+@dataclass(frozen=True)
 class RunwayLengthCheck:
     """Data describing flights operating from airports below a runway threshold."""
 
@@ -267,6 +348,236 @@ def _normalise_category(category: Optional[str]) -> Optional[str]:
     if not upper:
         return None
     return _CATEGORY_ALIASES.get(upper, upper)
+
+
+def _normalise_high_pax_category(category: Optional[str]) -> Optional[str]:
+    if not isinstance(category, str):
+        return None
+    upper = category.strip().upper()
+    if not upper:
+        return None
+    normalized = _CATEGORY_ALIASES.get(upper, upper)
+    normalized = _HIGH_PAX_WEIGHT_ALIASES.get(normalized, normalized)
+
+    if normalized in {"C25A", "C25B"}:
+        return normalized
+
+    if normalized in _EMBRAER_WEIGHT_CATEGORIES or normalized.startswith("E"):
+        return "EMB"
+
+    return None
+
+
+def _coerce_number(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number:  # NaN guard
+        return None
+    return number
+
+
+def _normalize_gender_label(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    cleaned = str(value).strip().lower()
+    if cleaned.startswith("f"):
+        return "Female"
+    if cleaned.startswith("m"):
+        return "Male"
+    return None
+
+
+def _extract_label(value: Any, *keys: str) -> Optional[str]:
+    """Return a non-empty string from ``value`` or selected mapping keys."""
+
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    if isinstance(value, Mapping):
+        for key in keys:
+            candidate = value.get(key)
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate.strip()
+    return None
+
+
+def _pax_category(ticket: Mapping[str, Any]) -> str:
+    pax_type_raw = (
+        _extract_label(ticket.get("paxType"), "code", "type", "name", "label")
+        or _extract_label(ticket.get("type"))
+        or _extract_label(ticket.get("pax_type"))
+        or "ADULT"
+    )
+    pax_type = pax_type_raw.upper()
+
+    if "INFANT" in pax_type:
+        return "Infant"
+    if "CHILD" in pax_type or "CHD" in pax_type:
+        return "Child"
+
+    pax_user = ticket.get("paxUser") if isinstance(ticket.get("paxUser"), Mapping) else {}
+    gender_raw = (
+        _extract_label(pax_user.get("gender"))
+        or _extract_label(pax_user.get("sex"))
+        or _extract_label(pax_user.get("salutation"))
+        or _extract_label(pax_user.get("title"))
+        or _extract_label(pax_type_raw)
+    )
+
+    gender_label = _normalize_gender_label(gender_raw)
+    return gender_label or "Male"
+
+
+def _standard_pax_weight(season: str, category: str) -> float:
+    season_label = season if season in STD_WEIGHTS else "Winter"
+    return STD_WEIGHTS.get(season_label, STD_WEIGHTS["Winter"]).get(category, STD_WEIGHTS["Winter"]["Male"])
+
+
+def _iter_pax_tickets(payload: Mapping[str, Any]) -> Iterable[Mapping[str, Any]]:
+    """Yield passenger tickets from nested payloads."""
+
+    search_queue: List[Any] = []
+    if payload is not None:
+        search_queue.append(payload)
+
+    visited: set[int] = set()
+    yielded: set[int] = set()
+
+    while search_queue:
+        current = search_queue.pop(0)
+        marker = id(current)
+        if marker in visited:
+            continue
+        visited.add(marker)
+
+        if isinstance(current, Mapping):
+            entries = current.get("tickets")
+            if isinstance(entries, Iterable) and not isinstance(entries, (str, bytes, bytearray)):
+                for entry in entries:
+                    if isinstance(entry, Mapping):
+                        entry_marker = id(entry)
+                        if entry_marker in yielded:
+                            continue
+                        yielded.add(entry_marker)
+                        yield entry
+
+            for key in (
+                "pax",
+                "pax_details",
+                "paxDetails",
+                "paxPayload",
+                "passengers",
+                "payload",
+            ):
+                child = current.get(key)
+                if child is not None:
+                    search_queue.append(child)
+
+            for child in current.values():
+                if isinstance(child, (Mapping, list, tuple, set)):
+                    search_queue.append(child)
+
+        elif isinstance(current, Iterable) and not isinstance(current, (str, bytes, bytearray)):
+            for child in current:
+                if isinstance(child, (Mapping, list, tuple, set)):
+                    search_queue.append(child)
+
+
+def _iter_cargo(payload: Mapping[str, Any]) -> Iterable[Mapping[str, Any]]:
+    """Yield cargo and animal entries from nested payload structures."""
+
+    search_queue: List[Any] = []
+    if payload is not None:
+        search_queue.append(payload)
+
+    visited: set[int] = set()
+    yielded: set[int] = set()
+    cargo_keys = {"cargo", "cargoItems", "cargo_items", "animal", "animals"}
+
+    while search_queue:
+        current = search_queue.pop(0)
+        marker = id(current)
+        if marker in visited:
+            continue
+        visited.add(marker)
+
+        if isinstance(current, Mapping):
+            for key in cargo_keys:
+                entries = current.get(key)
+                if isinstance(entries, Iterable) and not isinstance(entries, (str, bytes, bytearray)):
+                    for entry in entries:
+                        if isinstance(entry, Mapping):
+                            entry_marker = id(entry)
+                            if entry_marker in yielded:
+                                continue
+                            yielded.add(entry_marker)
+                            yield entry
+
+            for child in (
+                current.get("pax"),
+                current.get("paxPayload"),
+                current.get("payload"),
+            ):
+                if isinstance(child, (Mapping, list, tuple, set)):
+                    search_queue.append(child)
+
+            for child in current.values():
+                if isinstance(child, (Mapping, list, tuple, set)):
+                    search_queue.append(child)
+
+        elif isinstance(current, Iterable) and not isinstance(current, (str, bytes, bytearray)):
+            for child in current:
+                if isinstance(child, (Mapping, list, tuple, set)):
+                    search_queue.append(child)
+
+
+def _calculate_pax_payload_weight(
+    payload: Mapping[str, Any], *, season: str
+) -> Tuple[Optional[float], int, int]:
+    tickets = list(_iter_pax_tickets(payload))
+    pax_weight = 0.0
+    missing_weights = 0
+
+    for ticket in tickets:
+        pax_user = ticket.get("paxUser") if isinstance(ticket.get("paxUser"), Mapping) else {}
+        explicit_weight = _coerce_number(
+            ticket.get("bodyWeight")
+            or ticket.get("weight")
+            or (pax_user.get("bodyWeight") if isinstance(pax_user, Mapping) else None)
+        )
+        category = _pax_category(ticket)
+
+        if explicit_weight is None:
+            missing_weights += 1
+        base_weight = (
+            explicit_weight
+            if explicit_weight is not None
+            else _standard_pax_weight(season, category)
+        )
+
+        luggage_weight = _coerce_number(ticket.get("luggageWeight") or ticket.get("luggage_weight")) or 0
+        pax_weight += base_weight + luggage_weight
+
+    cargo_entries = list(_iter_cargo(payload))
+    cargo_weights = [
+        weight
+        for weight in (
+            _coerce_number(item.get("weightQty") or item.get("weight") or item.get("weight_qty"))
+            for item in cargo_entries
+        )
+        if weight is not None
+    ]
+
+    cargo_weight = sum(cargo_weights) if cargo_weights else 30 * len(tickets)
+    total_weight = pax_weight + cargo_weight
+
+    if not tickets and not cargo_entries:
+        return None, 0, missing_weights
+
+    return total_weight, len(tickets), missing_weights
 
 
 def _lookup_threshold_minutes(category: Optional[str], pax_count: Optional[int]) -> Optional[int]:
@@ -573,6 +884,148 @@ def evaluate_flights_for_max_time(
     return alerts, metadata, diagnostics
 
 
+def evaluate_flights_for_high_pax_weight(
+    config: Fl3xxApiConfig,
+    *,
+    from_date: date,
+    to_date: date,
+    fetch_flights_fn=fetch_flights,
+    fetch_pax_details_fn=fetch_flight_pax_details,
+) -> Tuple[List[HighPaxWeightAlert], Dict[str, Any], Dict[str, Any]]:
+    """Return PAX flights that exceed the configured pax weight thresholds."""
+
+    if to_date <= from_date:
+        raise FlightDataError("The end date must be after the start date for the OCA report window.")
+
+    flights, metadata = fetch_flights_fn(config, from_date=from_date, to_date=to_date)
+
+    diagnostics: Dict[str, Any] = {
+        "total_flights": len(flights),
+        "pax_flights": 0,
+        "duration_applicable": 0,
+        "missing_duration": 0,
+        "payloads_requested": 0,
+        "payload_errors": 0,
+        "missing_pax_weights": 0,
+        "flagged_flights": 0,
+    }
+
+    items: List[HighPaxWeightAlert] = []
+    session: Optional[requests.Session] = None
+
+    try:
+        for row in flights:
+            flight_type = str(row.get("flightType") or "").upper()
+            if flight_type != "PAX":
+                continue
+            diagnostics["pax_flights"] += 1
+
+            normalized_category = _normalise_high_pax_category(row.get("aircraftCategory"))
+            if normalized_category is None:
+                continue
+
+            duration_minutes = _compute_duration_minutes(row)
+            if duration_minutes is None:
+                diagnostics["missing_duration"] += 1
+                continue
+
+            duration_threshold = _HIGH_PAX_DURATION_THRESHOLDS.get(normalized_category)
+            if duration_threshold is None or duration_minutes <= duration_threshold:
+                continue
+            diagnostics["duration_applicable"] += 1
+
+            departure_dt = _extract_datetime_value(
+                row,
+                (
+                    "blocksoffestimated",
+                    "blockOffEstUTC",
+                    "realDateOFF",
+                    "realDateOUT",
+                    "etd",
+                ),
+            )
+            arrival_dt = _extract_datetime_value(
+                row,
+                (
+                    "blocksonestimated",
+                    "blockOnEstUTC",
+                    "realDateON",
+                    "realDateIN",
+                    "eta",
+                ),
+            )
+            season_label = determine_season(departure_dt.isoformat() if departure_dt else None)
+
+            flight_id = row.get("flightId")
+            if not flight_id:
+                continue
+
+            if session is None:
+                session = requests.Session()
+
+            try:
+                payload = fetch_pax_details_fn(config, flight_id, session=session)
+            except Exception as exc:  # pragma: no cover - network/runtime issues
+                diagnostics["payload_errors"] += 1
+                diagnostics.setdefault("payload_error_messages", []).append(str(exc))
+                continue
+            diagnostics["payloads_requested"] += 1
+
+            total_weight, pax_count, missing_weights = _calculate_pax_payload_weight(
+                payload, season=season_label
+            )
+            if total_weight is None:
+                diagnostics["missing_pax_weights"] += 1
+                continue
+
+            weight_threshold = _HIGH_PAX_WEIGHT_THRESHOLDS.get(normalized_category)
+            if weight_threshold is None or total_weight <= weight_threshold:
+                continue
+
+            item = HighPaxWeightAlert(
+                flight_id=flight_id,
+                quote_id=row.get("quoteId"),
+                flight_reference=_extract_flight_reference(row),
+                booking_reference=_extract_booking_reference(row),
+                aircraft_category=row.get("aircraftCategory"),
+                pax_count=pax_count,
+                missing_pax_weights=missing_weights,
+                pax_weight_lbs=total_weight,
+                pax_weight_threshold_lbs=int(weight_threshold),
+                duration_minutes=duration_minutes,
+                duration_threshold_minutes=int(duration_threshold),
+                departure_utc=format_utc(departure_dt) if departure_dt else None,
+                arrival_utc=format_utc(arrival_dt) if arrival_dt else None,
+                airport_from=row.get("airportFrom"),
+                airport_to=row.get("airportTo"),
+                registration=row.get("registrationNumber"),
+                flight_number=row.get("flightNumberCompany") or row.get("flightNumber"),
+            )
+
+            payload_reference = _extract_flight_reference(payload)
+            payload_booking_reference = _extract_booking_reference(payload)
+            updates: Dict[str, Any] = {}
+            if payload_reference and payload_reference != item.flight_reference:
+                updates["flight_reference"] = payload_reference
+            if payload_booking_reference and not item.booking_reference:
+                updates["booking_reference"] = payload_booking_reference
+            if updates:
+                item = HighPaxWeightAlert(**{**item.as_dict(), **updates})
+
+            items.append(item)
+            diagnostics["flagged_flights"] += 1
+    finally:
+        if session is not None:
+            try:
+                session.close()
+            except AttributeError:  # pragma: no cover - defensive cleanup
+                pass
+
+    items.sort(key=lambda a: (a.departure_utc or "", a.flight_id or 0))
+
+    return items, metadata, diagnostics
+
+
 def evaluate_flights_for_zfw_check(
     config: Fl3xxApiConfig,
     *,
@@ -791,8 +1244,10 @@ def evaluate_flights_for_runway_length(
 __all__ = [
     "MaxFlightTimeAlert",
     "ZfwFlightCheck",
+    "HighPaxWeightAlert",
     "RunwayLengthCheck",
     "evaluate_flights_for_max_time",
+    "evaluate_flights_for_high_pax_weight",
     "evaluate_flights_for_zfw_check",
     "evaluate_flights_for_runway_length",
     "format_duration_label",
