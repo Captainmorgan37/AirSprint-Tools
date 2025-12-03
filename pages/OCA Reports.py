@@ -11,13 +11,16 @@ import streamlit.components.v1 as components
 from Home import configure_page, get_secret, password_gate, render_sidebar
 from flight_leg_utils import FlightDataError, build_fl3xx_api_config
 from oca_reports import (
+    HighPaxWeightAlert,
     MaxFlightTimeAlert,
     RunwayLengthCheck,
     ZfwFlightCheck,
     evaluate_flights_for_max_time,
+    evaluate_flights_for_high_pax_weight,
     evaluate_flights_for_runway_length,
     evaluate_flights_for_zfw_check,
     format_duration_label,
+    _format_pax_breakdown,
 )
 
 try:
@@ -70,7 +73,7 @@ def _normalise_settings(raw: Any) -> Optional[Mapping[str, Any]]:
 
 
 def _normalise_state(state: Mapping[str, Any]) -> Dict[str, Any]:
-    if "max_time" in state or "zfw" in state:
+    if "max_time" in state or "zfw" in state or "high_pax_weight" in state:
         return dict(state)
 
     # Backwards compatibility for states stored before the ZFW workflow existed.
@@ -85,6 +88,7 @@ def _normalise_state(state: Mapping[str, Any]) -> Dict[str, Any]:
                 "diagnostics": state.get("diagnostics", {}),
             },
             "zfw": {},
+            "high_pax_weight": {},
         }
         if state.get("error"):
             legacy["error"] = state["error"]
@@ -420,6 +424,117 @@ def _render_zfw_results(data: Mapping[str, Any], start_label: Optional[str], end
         st.json(diagnostics)
 
 
+def _render_high_pax_weight_results(
+    data: Mapping[str, Any], start_label: Optional[str], end_label: Optional[str]
+) -> None:
+    st.subheader("🧳 High Pax Weight Report")
+
+    error = data.get("error")
+    if error:
+        st.error(error)
+        return
+
+    items = data.get("items", [])
+    metadata = data.get("metadata", {})
+    diagnostics = data.get("diagnostics", {})
+
+    if start_label and end_label:
+        if items:
+            st.warning(
+                f"Identified {len(items)} PAX flight(s) exceeding the passenger weight thresholds "
+                f"between {start_label} and {end_label}."
+            )
+        else:
+            st.info(
+                f"No PAX flights exceeded the passenger weight thresholds between {start_label} and {end_label}."
+            )
+
+    if items or start_label:
+        summary_cols = st.columns(4)
+        summary_cols[0].metric("Flights flagged", diagnostics.get("flagged_flights", len(items)))
+        summary_cols[1].metric("PAX flights evaluated", diagnostics.get("pax_flights", 0))
+        summary_cols[2].metric("Flights with duration over threshold", diagnostics.get("duration_applicable", 0))
+        summary_cols[3].metric("Payload pulls", diagnostics.get("payloads_requested", 0))
+
+        detail_cols = st.columns(3)
+        detail_cols[0].metric("Missing durations", diagnostics.get("missing_duration", 0))
+        detail_cols[1].metric("Payload errors", diagnostics.get("payload_errors", 0))
+        detail_cols[2].metric("Flights missing pax weights", diagnostics.get("missing_pax_weights", 0))
+
+    df = pd.DataFrame(items)
+    if not df.empty:
+        df = df.copy()
+        df["Duration"] = df["duration_minutes"].map(format_duration_label)
+        df["Total Weight (lbs)"] = df["pax_weight_lbs"].map(lambda v: f"{float(v):,.0f}")
+        df["Weight threshold (lbs)"] = df["pax_weight_threshold_lbs"].map(lambda v: f"{int(v):,}")
+        df["Pax breakdown"] = df["pax_breakdown"].map(_format_pax_breakdown)
+        df["Cargo weight (lbs)"] = df["cargo_weight_lbs"].map(lambda v: f"{float(v):,.0f}")
+        df["Animal weight (lbs)"] = df["animal_weight_lbs"].map(lambda v: f"{float(v):,.0f}")
+        df["Departure Date/Time (UTC)"] = df["departure_utc"]
+        df["Tail #"] = df["registration"]
+        df["Departure Airport"] = df["airport_from"]
+        df["Arrival Airport"] = df["airport_to"]
+        df["Flight #"] = df["flight_reference"]
+        df["Aircraft Type"] = df["aircraft_category"]
+        df["# of Pax"] = df["pax_count"]
+
+        columns = [
+            "Departure Date/Time (UTC)",
+            "Tail #",
+            "Departure Airport",
+            "Arrival Airport",
+            "Flight #",
+            "Aircraft Type",
+            "# of Pax",
+            "Duration",
+            "Total Weight (lbs)",
+            "Weight threshold (lbs)",
+            "Pax breakdown",
+            "Cargo weight (lbs)",
+            "Animal weight (lbs)",
+        ]
+        available_columns = [col for col in columns if col in df.columns]
+        display_df = df[available_columns]
+
+        st.dataframe(display_df, use_container_width=True)
+
+        csv_buffer = StringIO()
+        export_columns = [
+            "flight_id",
+            "quote_id",
+            "flight_reference",
+            "departure_utc",
+            "arrival_utc",
+            "registration",
+            "airport_from",
+            "airport_to",
+            "aircraft_category",
+            "pax_count",
+            "missing_pax_weights",
+            "pax_weight_lbs",
+            "pax_weight_threshold_lbs",
+            "pax_breakdown",
+            "cargo_weight_lbs",
+            "animal_weight_lbs",
+            "duration_minutes",
+            "duration_threshold_minutes",
+        ]
+        export_df = df[[col for col in export_columns if col in df.columns]]
+        export_df.to_csv(csv_buffer, index=False)
+        st.download_button(
+            "Download high pax weight flights as CSV",
+            csv_buffer.getvalue(),
+            file_name="oca_high_pax_weight_report.csv",
+            mime="text/csv",
+        )
+
+    with st.expander("FL3XX request metadata", expanded=False):
+        st.json(metadata)
+
+    with st.expander("Diagnostics", expanded=False):
+        st.json(diagnostics)
+
+
 def _render_primary_results(state: Dict[str, Any]) -> None:
     normalised = _normalise_state(state)
 
@@ -433,8 +548,9 @@ def _render_primary_results(state: Dict[str, Any]) -> None:
 
     max_time_data = normalised.get("max_time") or {}
     zfw_data = normalised.get("zfw") or {}
+    high_pax_weight_data = normalised.get("high_pax_weight") or {}
 
-    if not any((max_time_data, zfw_data, start_label, end_label)):
+    if not any((max_time_data, zfw_data, high_pax_weight_data, start_label, end_label)):
         return
 
     if max_time_data:
@@ -442,6 +558,9 @@ def _render_primary_results(state: Dict[str, Any]) -> None:
 
     if zfw_data:
         _render_zfw_results(zfw_data, start_label, end_label)
+
+    if high_pax_weight_data:
+        _render_high_pax_weight_results(high_pax_weight_data, start_label, end_label)
 
 
 def _render_runway_results(state: Mapping[str, Any]) -> None:
@@ -622,6 +741,7 @@ with primary_tab:
 
                 max_time_state: Dict[str, Any] = {}
                 zfw_state: Dict[str, Any] = {}
+                high_pax_weight_state: Dict[str, Any] = {}
 
                 try:
                     with st.spinner("Evaluating max flight time limits..."):
@@ -669,6 +789,33 @@ with primary_tab:
                         "diagnostics": zfw_diagnostics,
                     }
 
+                try:
+                    with st.spinner("Evaluating high pax weight thresholds..."):
+                        high_pax_items, high_pax_metadata, high_pax_diagnostics = (
+                            evaluate_flights_for_high_pax_weight(
+                                config,
+                                from_date=start_date,
+                                to_date=to_date_exclusive,
+                            )
+                        )
+                except FlightDataError as exc:
+                    high_pax_weight_state["error"] = str(exc)
+                    st.error(str(exc))
+                except Exception as exc:  # pragma: no cover - defensive UI path
+                    high_pax_weight_state["error"] = str(exc)
+                    st.error(str(exc))
+                else:
+                    high_pax_weight_state = {
+                        "items": [
+                            item.as_dict()
+                            if isinstance(item, HighPaxWeightAlert)
+                            else dict(item)
+                            for item in high_pax_items
+                        ],
+                        "metadata": high_pax_metadata,
+                        "diagnostics": high_pax_diagnostics,
+                    }
+
                 _store_state(
                     {
                         "start_date": start_date.isoformat(),
@@ -676,6 +823,7 @@ with primary_tab:
                         "days": int(day_count),
                         "max_time": max_time_state,
                         "zfw": zfw_state,
+                        "high_pax_weight": high_pax_weight_state,
                     }
                 )
                 st.rerun()

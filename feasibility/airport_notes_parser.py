@@ -388,7 +388,11 @@ def is_explicit_deice_note(text: str) -> bool:
     if not text:
         return False
 
-    first_line = text.strip().splitlines()[0].strip().lower()
+    lines = [line.strip() for line in text.strip().splitlines() if line.strip()]
+    if not lines:
+        return False
+
+    first_line = lines[0].lower()
     return first_line.startswith("deice") or first_line.startswith("de-ice") or "deice/anti-ice" in first_line
 
 
@@ -786,10 +790,13 @@ def parse_customs_notes(notes: Sequence[str]) -> ParsedCustoms:
             parsed["aoe_type"] = parsed["aoe_type"] or "AOE"
             parsed["aoe_notes"].append(text)
         mentions_24_7 = "24/7" in lower or "24 hrs" in lower or "24hours" in lower or "24 hours" in lower
+        mentions_24_hour_notice = bool(
+            re.search(r"\b24\s*(?:hr|hrs|hour|hours)\b", lower) and re.search(r"\bnotice\b", lower)
+        )
         references_other_airport = any(
             phrase in lower for phrase in ("another airport", "other airport", "alternate airport")
         )
-        if mentions_24_7 and not references_other_airport:
+        if mentions_24_7 and not references_other_airport and not mentions_24_hour_notice:
             parsed["customs_hours"].append({"start": "0000", "end": "2400", "days": ["Daily"]})
         if "canpass" in lower:
             if "only" in lower or "canpass arrival" in lower or "arrival by canpass" in lower:

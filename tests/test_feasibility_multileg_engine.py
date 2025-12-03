@@ -653,6 +653,41 @@ def test_weight_balance_reads_deeply_nested_payloads() -> None:
     assert details["highRiskCargo"] is True
 
 
+def test_weight_balance_counts_animals_as_cargo() -> None:
+    payload = {
+        "pax": {
+            "tickets": [
+                {"paxUser": {"gender": "Female"}},
+            ]
+        },
+        "cargo": [
+            {"weightQty": 100, "note": "Luggage"},
+        ],
+        "animal": [
+            {"weightQty": 19, "note": "Archie the dog"},
+            {"weightQty": 49, "note": "Jet the dog"},
+        ],
+    }
+
+    result = checker_weight_balance.evaluate_weight_balance(
+        {"aircraft_type": "C25A"},
+        pax_payload=payload,
+        aircraft_type="C25A",
+        season="Winter",
+        payload_source="api",
+    )
+
+    details = result.details
+    assert details["paxCount"] == 1
+    assert details["cargoWeight"] == 168
+    assert details["totalPayload"] == details["paxWeight"] + 168
+    assert details["cargoEntries"] == [
+        {"note": "Luggage", "type": None, "unit": None, "weight": 100.0},
+        {"note": "Archie the dog", "type": None, "unit": None, "weight": 19.0},
+        {"note": "Jet the dog", "type": None, "unit": None, "weight": 49.0},
+    ]
+
+
 def test_aircraft_endurance_is_evaluated_for_each_leg() -> None:
     quote = {
         "bookingIdentifier": "ACFT1",

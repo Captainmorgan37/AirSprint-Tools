@@ -1886,6 +1886,24 @@ def _render_weight_balance_details(category) -> None:
             count = breakdown.get(label, 0)
             col.metric(label, count)
 
+    cargo_entries = details.get("cargoEntries") if isinstance(details, Mapping) else None
+    if isinstance(cargo_entries, list) and cargo_entries:
+        st.markdown("**Cargo / Animals Included**")
+        rows = []
+        for item in cargo_entries:
+            if not isinstance(item, Mapping):
+                continue
+            rows.append(
+                {
+                    "Note": item.get("note") or "",
+                    "Type": item.get("type") or "",
+                    "Weight": item.get("weight"),
+                    "Unit": item.get("unit") or "",
+                }
+            )
+        if rows:
+            st.table(rows)
+
     pax_keys = details.get("paxPayloadKeys") if isinstance(details, Mapping) else None
     if pax_keys:
         st.caption(f"PAX payload keys: {pax_keys}")
