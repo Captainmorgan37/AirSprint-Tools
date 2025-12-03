@@ -327,6 +327,9 @@ try:
             continue
 
         primary_leg = _select_primary_leg(flight_legs)
+        booking_identifier = _normalise_identifier(
+            primary_leg.get("bookingIdentifier") or primary_leg.get("booking_identifier")
+        )
         dep_airport = _coerce_code(
             primary_leg.get("departure_airport")
             or primary_leg.get("departureAirport")
@@ -342,10 +345,12 @@ try:
         tail = str(primary_leg.get("tail") or "").strip()
         leg_id = primary_leg.get("leg_id") or primary_leg.get("legId") or ""
 
+        display_identifier = booking_identifier or flight_id
+
         for alert in alerts:
             missing_rows.append(
                 {
-                    "Flight ID": flight_id,
+                    "Booking Identifier": display_identifier,
                     "Leg": leg_id,
                     "Tail": tail or "—",
                     "Route": f"{dep_airport or 'UNK'} → {arr_airport or 'UNK'}",
@@ -360,7 +365,7 @@ try:
         for conflict in conflicts:
             conflict_rows.append(
                 {
-                    "Flight ID": flight_id,
+                    "Booking Identifier": display_identifier,
                     "Leg": leg_id,
                     "Tail": tail or "—",
                     "Route": f"{dep_airport or 'UNK'} → {arr_airport or 'UNK'}",
@@ -388,14 +393,14 @@ else:
     issues_df = pd.DataFrame(missing_rows)
     st.warning(
         f"Detected {len(missing_rows)} missing qualification entry{'ies' if len(missing_rows) != 1 else ''} "
-        f"across {len({row['Flight ID'] for row in missing_rows})} flight{'s' if len({row['Flight ID'] for row in missing_rows}) != 1 else ''}."
+        f"across {len({row['Booking Identifier'] for row in missing_rows})} booking{'s' if len({row['Booking Identifier'] for row in missing_rows}) != 1 else ''}."
     )
     st.dataframe(issues_df, use_container_width=True, hide_index=True)
 
 if conflict_rows:
     st.error(
         f"Detected {len(conflict_rows)} preflight conflict entry{'ies' if len(conflict_rows) != 1 else ''} "
-        f"across {len({row['Flight ID'] for row in conflict_rows})} flight{'s' if len({row['Flight ID'] for row in conflict_rows}) != 1 else ''}."
+        f"across {len({row['Booking Identifier'] for row in conflict_rows})} booking{'s' if len({row['Booking Identifier'] for row in conflict_rows}) != 1 else ''}."
     )
     conflict_df = pd.DataFrame(conflict_rows)
     st.dataframe(conflict_df, use_container_width=True, hide_index=True)
