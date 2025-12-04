@@ -1140,11 +1140,12 @@ if fl3xx_frames and ocs_files:
     mis_tail_df      = pd.DataFrame(results["MisalignedTail"])
     mis_time_df      = pd.DataFrame(results["MisalignedTime"])
     stale_df         = with_datestr(stale)  # if you added the pretty date helper
-    
+
     show_table(matched_df,  "✔ Matched",          "matched")
     show_table(missing_df,  "⚠ Missing",          "missing")
     show_table(mis_time_df, "⚠ Time mismatch",    "misaligned_time")
     show_table(mis_tail_df, "⚠ Tail mismatch",    "misaligned_tail")
+    show_table(stale_df,    "Unused Slots",       "unused_slots")
 
 
 elif not ocs_files:
