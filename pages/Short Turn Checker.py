@@ -34,6 +34,25 @@ LOCAL_TZ = ZoneInfo(os.getenv("LOCAL_TZ", "America/Edmonton"))
 DEFAULT_TURN_THRESHOLD_MIN = int(os.getenv("TURN_THRESHOLD_MIN", "45"))
 PRIORITY_TURN_THRESHOLD_MIN = int(os.getenv("PRIORITY_TURN_THRESHOLD_MIN", "90"))
 PRIORITY_DUAL_LIST_THRESHOLD_MIN = 45
+EXTRA_TURN_THRESHOLD_MIN = 60
+EXTRA_TURN_US_AIRPORTS = {
+    "KSFO",
+    "KPSP",
+    "KSEA",
+    "KSDL",
+    "KBOS",
+    "KIAD",
+    "KFLL",
+    "KFXE",
+    "KMIA",
+    "KOPF",
+    "KPBI",
+    "KSAV",
+    "KTEB",
+    "KLGA",
+    "KJFK",
+    "KSUA",
+}
 
 # ----------------------------
 # Helper: Normalize / Parse datetimes
@@ -120,6 +139,26 @@ def _first_stripped(*values):
             if candidate:
                 return candidate
     return None
+
+
+def _is_non_us_or_canada_airport(station: Any) -> bool:
+    if not isinstance(station, str):
+        return False
+    code = station.strip().upper()
+    if not code:
+        return False
+    return not code.startswith("K") and not code.startswith("C")
+
+
+def _is_extra_turn_airport(station: Any) -> bool:
+    if not isinstance(station, str):
+        return False
+    code = station.strip().upper()
+    if not code:
+        return False
+    if code in EXTRA_TURN_US_AIRPORTS:
+        return True
+    return _is_non_us_or_canada_airport(code)
 
 
 def _coerce_datetime(value):
@@ -1026,6 +1065,89 @@ if not legs_df.empty:
 
     short_df = compute_short_turns(legs_df, threshold)
 
+    col_config = {
+        "arr_leg_id": st.column_config.TextColumn(
+            "Arrival Booking",
+            help="Booking identifier for the arrival leg",
+        ),
+        "dep_leg_id": st.column_config.TextColumn(
+            "Departure Booking",
+            help="Booking identifier for the departure leg",
+        ),
+        "turn_min": st.column_config.NumberColumn(
+            "Turn (min)",
+            help="Minutes between ARR on-block and next DEP off-block at the same station",
+            step=0.1,
+        ),
+        "required_threshold_min": st.column_config.NumberColumn(
+            "Req. Min",
+            help="Minimum minutes required (priority legs may require more time)",
+            step=5,
+        ),
+        "tail": st.column_config.TextColumn(
+            "Tail",
+            help="Aircraft registration",
+        ),
+        "station": st.column_config.TextColumn(
+            "Station",
+            help="ICAO airport where the turn occurs",
+        ),
+        "arr_onblock": st.column_config.DatetimeColumn(
+            "ARR On-block",
+            help="Actual or scheduled arrival on-block time at the station",
+        ),
+        "dep_offblock": st.column_config.DatetimeColumn(
+            "DEP Off-block",
+            help="Actual or scheduled departure off-block time from the station",
+        ),
+        "arr_priority_label": st.column_config.TextColumn(
+            "Arr Priority",
+            help="Priority metadata associated with the arrival (if any)",
+        ),
+        "dep_priority_label": st.column_config.TextColumn(
+            "Dep Priority",
+            help="Priority metadata associated with the departure (if any)",
+        ),
+        "same_booking_code": st.column_config.CheckboxColumn(
+            "Same Booking?",
+            help="Whether arrival and departure share the same booking code",
+            default=False,
+        ),
+        "priority_flag": st.column_config.CheckboxColumn(
+            "Priority",
+            help="Whether the departure is marked as priority",
+            default=False,
+        ),
+    }
+
+    desired_order = [
+        "tail",
+        "station",
+        "arr_onblock",
+        "arr_leg_id",
+        "dep_offblock",
+        "dep_leg_id",
+        "same_booking_code",
+        "turn_min",
+        "required_threshold_min",
+        "priority_flag",
+        "dep_priority_label",
+    ]
+
+    def _prepare_turn_display_df(df: pd.DataFrame) -> pd.DataFrame:
+        cleaned = df.drop(columns=["arr_booking_code", "dep_booking_code"], errors="ignore")
+        if "arr_onblock" in cleaned.columns:
+            cleaned = cleaned.sort_values(
+                "arr_onblock", ascending=True, kind="mergesort"
+            )
+        return cleaned
+
+    def _column_order_for(df: pd.DataFrame) -> list[str]:
+        return [col for col in desired_order if col in df.columns]
+
+    display_short_df = _prepare_turn_display_df(short_df)
+    column_order = _column_order_for(display_short_df)
+
     st.subheader(
         f"Short turns (≥{threshold} min standard / ≥{PRIORITY_TURN_THRESHOLD_MIN} min priority) for {window_label} ({LOCAL_TZ.key})"
     )
@@ -1033,66 +1155,6 @@ if not legs_df.empty:
     if short_df.empty:
         st.success(f"No short turns found in the selected window ({window_label}). 🎉")
     else:
-        # Nice column formatting
-        col_config = {
-            "arr_leg_id": st.column_config.TextColumn(
-                "Arrival Booking",
-                help="Booking identifier for the arrival leg",
-            ),
-            "dep_leg_id": st.column_config.TextColumn(
-                "Departure Booking",
-                help="Booking identifier for the departure leg",
-            ),
-            "turn_min": st.column_config.NumberColumn(
-                "Turn (min)",
-                help="Minutes between ARR on-block and next DEP off-block at the same station",
-                step=0.1,
-            ),
-        }
-        if "priority_flag" in short_df.columns:
-            col_config["priority_flag"] = st.column_config.CheckboxColumn(
-                "Priority",
-                help="Turn involves at least one priority flight",
-                disabled=True,
-            )
-        if "required_threshold_min" in short_df.columns:
-            col_config["required_threshold_min"] = st.column_config.NumberColumn(
-                "Required Min",
-                help="Minimum minutes required for this turn",
-                step=5,
-            )
-        if "dep_priority_label" in short_df.columns:
-            col_config["dep_priority_label"] = st.column_config.TextColumn(
-                "Departure Priority Detail",
-                help="Priority metadata tied to the departure leg",
-            )
-        if "same_booking_code" in short_df.columns:
-            col_config["same_booking_code"] = st.column_config.CheckboxColumn(
-                "Same Booking",
-                help="Arrival and departure legs share the same booking code",
-                disabled=True,
-            )
-
-        desired_order = [
-            "tail",
-            "station",
-            "arr_leg_id",
-            "dep_leg_id",
-            "same_booking_code",
-            "turn_min",
-            "required_threshold_min",
-            "priority_flag",
-            "dep_priority_label",
-        ]
-        display_short_df = short_df.drop(
-            columns=["arr_booking_code", "dep_booking_code"], errors="ignore"
-        )
-        if "arr_onblock" in display_short_df.columns:
-            display_short_df = display_short_df.sort_values(
-                "arr_onblock", ascending=True, kind="mergesort"
-            )
-        column_order = [col for col in desired_order if col in display_short_df.columns]
-
         if "priority_flag" in display_short_df.columns:
             priority_mask = (
                 display_short_df["priority_flag"].fillna(False).astype(bool)
@@ -1315,6 +1377,31 @@ if not legs_df.empty:
     elif source == "FL3XX API" and not priority_errors:
         st.info(
             "No priority first departures were found in the selected window, so no duty-start validation was required."
+        )
+
+    extra_turn_df = compute_short_turns(
+        legs_df,
+        threshold_min=EXTRA_TURN_THRESHOLD_MIN,
+        priority_threshold_min=EXTRA_TURN_THRESHOLD_MIN,
+    )
+    extra_turn_df = extra_turn_df[
+        extra_turn_df["station"].apply(_is_extra_turn_airport)
+    ]
+
+    st.subheader("Extra Turn Time Airports")
+    if extra_turn_df.empty:
+        st.info(
+            "No turns under 60 minutes were found for the listed US airports or for airports outside of the US/Canada."
+        )
+    else:
+        extra_display_df = _prepare_turn_display_df(extra_turn_df)
+        extra_column_order = _column_order_for(extra_display_df)
+        st.dataframe(
+            extra_display_df,
+            use_container_width=True,
+            hide_index=True,
+            column_config=col_config,
+            column_order=extra_column_order if extra_column_order else None,
         )
 else:
     st.info("Select a data source and load legs to see short turns.")
