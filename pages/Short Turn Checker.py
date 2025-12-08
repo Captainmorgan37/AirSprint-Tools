@@ -1,6 +1,6 @@
 import os
 from collections.abc import Mapping
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any, Optional
 from zoneinfo_compat import ZoneInfo
 import pandas as pd
@@ -827,6 +827,26 @@ def _checkin_to_datetime(value: Any, target_tz: ZoneInfo) -> Optional[datetime]:
         return dt_utc
 
 
+def _format_timestamp_with_tz(value: Any) -> str:
+    ts = parse_dt(value)
+    if ts is pd.NaT or pd.isna(ts):
+        return ""
+    try:
+        return ts.strftime("%Y-%m-%d %H:%M %Z")
+    except Exception:
+        return str(value)
+
+
+def _format_date(value: Any) -> str:
+    if isinstance(value, (datetime, pd.Timestamp)):
+        return value.strftime("%Y-%m-%d")
+    if isinstance(value, date):
+        return value.strftime("%Y-%m-%d")
+    if pd.isna(value):
+        return ""
+    return str(value)
+
+
 def compute_priority_checkin_warnings(
     legs: pd.DataFrame,
     token: Optional[str],
@@ -1092,13 +1112,13 @@ if not legs_df.empty:
             "Station",
             help="ICAO airport where the turn occurs",
         ),
-        "arr_onblock": st.column_config.DatetimeColumn(
-            "ARR On-block",
-            help="Actual or scheduled arrival on-block time at the station",
+        "arr_onblock": st.column_config.TextColumn(
+            "ARR On-block (Local)",
+            help="Actual or scheduled arrival on-block time at the station (local with timezone)",
         ),
-        "dep_offblock": st.column_config.DatetimeColumn(
-            "DEP Off-block",
-            help="Actual or scheduled departure off-block time from the station",
+        "dep_offblock": st.column_config.TextColumn(
+            "DEP Off-block (Local)",
+            help="Actual or scheduled departure off-block time from the station (local with timezone)",
         ),
         "arr_priority_label": st.column_config.TextColumn(
             "Arr Priority",
@@ -1145,6 +1165,13 @@ if not legs_df.empty:
     def _column_order_for(df: pd.DataFrame) -> list[str]:
         return [col for col in desired_order if col in df.columns]
 
+    def _format_turn_table(df: pd.DataFrame) -> pd.DataFrame:
+        formatted = df.copy()
+        for ts_col in ("arr_onblock", "dep_offblock"):
+            if ts_col in formatted.columns:
+                formatted[ts_col] = formatted[ts_col].apply(_format_timestamp_with_tz)
+        return formatted
+
     display_short_df = _prepare_turn_display_df(short_df)
     column_order = _column_order_for(display_short_df)
 
@@ -1185,8 +1212,9 @@ if not legs_df.empty:
             if df.empty:
                 st.info(empty_message)
                 return
+            display_df = _format_turn_table(df)
             st.dataframe(
-                df,
+                display_df,
                 use_container_width=True,
                 hide_index=True,
                 column_config=col_config,
@@ -1309,7 +1337,7 @@ if not legs_df.empty:
         extra_display_df = _prepare_turn_display_df(extra_turn_df)
         extra_column_order = _column_order_for(extra_display_df)
         st.dataframe(
-            extra_display_df,
+            _format_turn_table(extra_display_df),
             use_container_width=True,
             hide_index=True,
             column_config=col_config,
@@ -1388,6 +1416,10 @@ if not legs_df.empty:
                 display_priority_warnings = display_priority_warnings.sort_values(
                     "departure_time", ascending=True, kind="mergesort"
                 )
+            if "dep_date" in display_priority_warnings.columns:
+                display_priority_warnings["dep_date"] = display_priority_warnings[
+                    "dep_date"
+                ].apply(_format_date)
             st.dataframe(
                 display_priority_warnings,
                 use_container_width=True,
@@ -1422,7 +1454,7 @@ if not legs_df.empty:
         extra_display_df = _prepare_turn_display_df(extra_turn_df)
         extra_column_order = _column_order_for(extra_display_df)
         st.dataframe(
-            extra_display_df,
+            _format_turn_table(extra_display_df),
             use_container_width=True,
             hide_index=True,
             column_config=col_config,
