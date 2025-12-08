@@ -64,6 +64,16 @@ def _load_fl3xx_settings() -> Dict[str, Any]:
 
 
 _CHUNK_SIZE_DAYS = 5
+CUBAN_OVERFLIGHT_COUNTRIES = {
+    "aruba",
+    "aw",
+    "cayman islands",
+    "ky",
+    "curacao",
+    "cw",
+    "jamaica",
+    "jm",
+}
 
 
 def _iter_date_chunks(start: date, end: date, chunk_size: int) -> Iterable[Tuple[date, date]]:
@@ -288,6 +298,7 @@ if not lookup:
 
 missing_airports: set[str] = set()
 report_entries: List[Tuple[float, int, str]] = []
+cuban_overflight_entries: List[Tuple[float, int, str]] = []
 
 
 def _preferred_airport_display(
@@ -319,7 +330,18 @@ for idx, (_, leg) in enumerate(legs_df.iterrows()):
         display = country_display_name(arr_country) or arr_normalized.title()
         triggered_countries.append(display)
 
-    if not triggered_countries:
+    cuban_overflight_countries: List[str] = []
+    if dep_normalized in CUBAN_OVERFLIGHT_COUNTRIES:
+        cuban_overflight_countries.append(
+            country_display_name(dep_country) or dep_normalized.title()
+        )
+    if arr_normalized in CUBAN_OVERFLIGHT_COUNTRIES:
+        cuban_overflight_countries.append(
+            country_display_name(arr_country) or arr_normalized.title()
+        )
+    cuban_overflight_countries = list(dict.fromkeys(cuban_overflight_countries))
+
+    if not triggered_countries and not cuban_overflight_countries:
         continue
 
     dep_code_display = dep_code or _preferred_airport_display(
@@ -347,16 +369,29 @@ for idx, (_, leg) in enumerate(legs_df.iterrows()):
         sort_key = inf
 
     country_display = ", ".join(dict.fromkeys(triggered_countries))
-    report_entries.append(
-        (
-            sort_key,
-            idx,
-            f"{dep_date} - {booking_identifier} - {account_name} - {dep_code_display} to {arr_code_display} ({country_display})",
+    if triggered_countries:
+        report_entries.append(
+            (
+                sort_key,
+                idx,
+                f"{dep_date} - {booking_identifier} - {account_name} - {dep_code_display} to {arr_code_display} ({country_display})",
+            )
         )
-    )
+
+    if cuban_overflight_countries:
+        display = ", ".join(cuban_overflight_countries)
+        cuban_overflight_entries.append(
+            (
+                sort_key,
+                idx,
+                f"{dep_date} - {booking_identifier} - {account_name} - {dep_code_display} to {arr_code_display} ({display})",
+            )
+        )
 
 report_entries.sort(key=lambda item: (item[0], item[1]))
 report_rows = [entry[2] for entry in report_entries]
+cuban_overflight_entries.sort(key=lambda item: (item[0], item[1]))
+cuban_overflight_rows = [entry[2] for entry in cuban_overflight_entries]
 
 if not report_rows:
     st.success("No Jeppesen ITP-required flights detected for the selected window.")
@@ -365,10 +400,26 @@ else:
     date_range_line = f"{start_date.strftime('%d%b%y').upper()} to {end_date.strftime('%d%b%y').upper()}"
     output_lines = [header, date_range_line, ""] + report_rows
     report_text = "\n".join(output_lines)
-    st.subheader("Report preview")
+    st.subheader("Jeppesen ITP Required Flights")
     st.code(report_text, language="text")
     st.download_button(
         "Download report", report_text, file_name="jeppesen_itp_required_flights.txt", mime="text/plain"
+    )
+
+if not cuban_overflight_rows:
+    st.success("No Cuban overflight requirements detected for the selected window.")
+else:
+    header = "Cuban Overflight Requirements"
+    date_range_line = f"{start_date.strftime('%d%b%y').upper()} to {end_date.strftime('%d%b%y').upper()}"
+    output_lines = [header, date_range_line, ""] + cuban_overflight_rows
+    report_text = "\n".join(output_lines)
+    st.subheader("Cuban Overflight Requirements")
+    st.code(report_text, language="text")
+    st.download_button(
+        "Download Cuban overflight report",
+        report_text,
+        file_name="cuban_overflight_requirements.txt",
+        mime="text/plain",
     )
 
 if missing_airports:
