@@ -1403,6 +1403,31 @@ if not legs_df.empty:
         st.info(
             "No priority first departures were found in the selected window, so no duty-start validation was required."
         )
+
+    extra_turn_df = compute_short_turns(
+        legs_df,
+        threshold_min=EXTRA_TURN_THRESHOLD_MIN,
+        priority_threshold_min=EXTRA_TURN_THRESHOLD_MIN,
+    )
+    extra_turn_df = extra_turn_df[
+        extra_turn_df["station"].apply(_is_extra_turn_airport)
+    ]
+
+    st.subheader("Extra Turn Time Airports")
+    if extra_turn_df.empty:
+        st.info(
+            "No turns under 60 minutes were found for the listed US airports or for airports outside of the US/Canada."
+        )
+    else:
+        extra_display_df = _prepare_turn_display_df(extra_turn_df)
+        extra_column_order = _column_order_for(extra_display_df)
+        st.dataframe(
+            extra_display_df,
+            use_container_width=True,
+            hide_index=True,
+            column_config=col_config,
+            column_order=extra_column_order if extra_column_order else None,
+        )
 else:
     st.info("Select a data source and load legs to see short turns.")
 
