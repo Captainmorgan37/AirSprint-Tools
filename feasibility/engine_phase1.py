@@ -25,6 +25,7 @@ from .common import OSA_CATEGORY, SSA_CATEGORY, classify_airport_category
 from .duty_module import evaluate_generic_duty_day
 from .models import DayContext, FeasibilityRequest, FullFeasibilityResult
 from .planning_notes import (
+    airport_code_matches,
     extract_requested_aircraft_from_note,
     parse_route_entries_from_note,
 )
@@ -289,10 +290,26 @@ def _collect_planning_note_feedback(day: DayContext) -> tuple[List[str], List[st
     tz_lookup = load_airport_tz_lookup()
     has_planning_notes = False
 
-    def _route_contains_segment(route: Sequence[str], dep: str, arr: str) -> bool:
+    legs = day.get("legs", [])
+    day_origin = (legs[0].get("departure_icao") or "").upper() if legs else ""
+    day_destination = (legs[-1].get("arrival_icao") or "").upper() if legs else ""
+
+    def _route_matches_leg(route: Sequence[str], dep: str, arr: str) -> bool:
         for idx, code in enumerate(route[:-1]):
-            if code == dep and route[idx + 1] == arr:
+            if airport_code_matches(code, dep) and airport_code_matches(
+                route[idx + 1], arr
+            ):
                 return True
+
+        if (
+            len(route) == 2
+            and day_origin
+            and day_destination
+            and airport_code_matches(route[0], day_origin)
+            and airport_code_matches(route[-1], day_destination)
+        ):
+            return True
+
         return False
 
     for index, leg in enumerate(day.get("legs", []), start=1):
@@ -326,7 +343,7 @@ def _collect_planning_note_feedback(day: DayContext) -> tuple[List[str], List[st
             continue
 
         entry_date, route = matching[0]
-        if _route_contains_segment(route, dep, arr):
+        if _route_matches_leg(route, dep, arr):
             confirmations.append(
                 f"Leg {index} {dep}→{arr}: Planning notes route for {entry_date.isoformat()} matches booked {dep}→{arr}."
             )
