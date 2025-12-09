@@ -807,6 +807,7 @@ def evaluate_suitability(
     fl3xx_category = (airport_profile.fl3xx_category or "").strip().upper()
     summary = f"Fl3xx category {fl3xx_category}" if fl3xx_category else "Airport approved"
     summary_locked = False
+    leg_date = _get_leg_date(leg, side)
 
     if fl3xx_category in approved_categories:
         summary = f"Fl3xx category {fl3xx_category} approved"
@@ -860,6 +861,10 @@ def evaluate_suitability(
         body = text_body.lower()
         if "customs" in body or _is_fuel_service_closure(body, closure_fail_keywords + closure_caution_keywords):
             continue
+        if leg_date is not None:
+            applies = _note_applies_to_leg_date(note, leg_date)
+            if applies is False:
+                continue
         if any(keyword in body for keyword in closure_fail_keywords):
             if has_partial_closure:
                 closure_caution_found = True
@@ -901,6 +906,80 @@ def _is_closure_caution_exempt(icao: str, body: str) -> bool:
         normalized_exemption and normalized_exemption in body_normalized
         for normalized_exemption in (_normalize_text(exemption) for exemption in exemptions)
     )
+
+
+def _get_leg_date(leg: LegContext, side: str) -> date | None:
+    date_str = leg.get("departure_date_utc") if side.upper() == "DEP" else leg.get("arrival_date_utc")
+    if not date_str:
+        return None
+    if parsed := safe_parse_dt(str(date_str)):
+        return parsed.date()
+    return None
+
+
+_MONTHS = {
+    "jan": 1,
+    "feb": 2,
+    "mar": 3,
+    "apr": 4,
+    "may": 5,
+    "jun": 6,
+    "jul": 7,
+    "aug": 8,
+    "sep": 9,
+    "sept": 9,
+    "oct": 10,
+    "nov": 11,
+    "dec": 12,
+}
+_MONTH_DAY_PATTERN = re.compile(r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+(\d{1,2})\b", re.IGNORECASE)
+
+
+def _note_applies_to_leg_date(note: Mapping[str, Any], leg_date: date) -> bool | None:
+    valid_from = note.get("valid_from")
+    valid_to = note.get("valid_to")
+
+    if isinstance(valid_from, str) and isinstance(valid_to, str):
+        start = safe_parse_dt(valid_from)
+        end = safe_parse_dt(valid_to)
+        if start and end:
+            start_date, end_date = start.date(), end.date()
+            if leg_date < start_date or leg_date > end_date:
+                return False
+            return True
+
+    text = note_text(note)
+    if not text:
+        return None
+
+    year_match = re.search(r"\b(20\d{2})\b", text)
+    year = int(year_match.group(1)) if year_match else None
+
+    if year and leg_date.year != year:
+        return False
+
+    matches = list(_MONTH_DAY_PATTERN.finditer(text))
+    if not matches:
+        return None
+
+    applicable_dates: list[date] = []
+    for match in matches:
+        month_label, day_str = match.groups()
+        month = _MONTHS.get(month_label[:3].lower())
+        if not month:
+            continue
+        day = int(day_str)
+        target_year = year or leg_date.year
+        try:
+            applicable_dates.append(date(target_year, month, day))
+        except ValueError:
+            continue
+
+    if applicable_dates and leg_date in applicable_dates:
+        return True
+    if applicable_dates:
+        return False
+    return None
 
 
 def _is_fuel_service_closure(body: str, closure_keywords: tuple[str, ...]) -> bool:

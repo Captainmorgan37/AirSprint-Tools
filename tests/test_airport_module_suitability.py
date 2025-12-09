@@ -192,6 +192,30 @@ def test_fuel_service_closure_does_not_trigger_fail() -> None:
     assert result.issues == []
 
 
+def test_date_specific_closure_note_ignored_when_not_applicable() -> None:
+    profile = _default_profile()
+    leg = {
+        "aircraft_category": "SUPER_MIDSIZE_JET",
+        "arrival_date_utc": "2025-12-12T18:00:00Z",
+    }
+    notes = [
+        {
+            "note": "2025 HOLIDAY HOURS \nDEC 24 - WILL NOT ACCEPT FLIGHTS AFTER 1200\nDEC 25 - CLOSED",
+        }
+    ]
+
+    result = evaluate_suitability(
+        airport_profile=profile,
+        leg=leg,
+        operational_notes=notes,
+        side="arrival",
+    )
+
+    assert result.status == "PASS"
+    assert result.summary == "Fl3xx category A approved"
+    assert result.issues == []
+
+
 def test_customs_closure_note_not_treated_as_operational_closure() -> None:
     profile = _default_profile()
     leg = {"aircraft_category": "SUPER_MIDSIZE_JET"}
