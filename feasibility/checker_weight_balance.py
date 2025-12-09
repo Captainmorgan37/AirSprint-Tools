@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Iterable, Mapping, MutableMapping, Optional
+from typing import Any, Iterable, Mapping, MutableMapping, Optional, Tuple
 
 from .schemas import CategoryResult
 
@@ -202,8 +202,13 @@ def _iter_tickets(payload: Mapping[str, Any]) -> Iterable[Mapping[str, Any]]:
                     search_queue.append(child)
 
 
-def _iter_cargo(payload: Mapping[str, Any]) -> Iterable[Mapping[str, Any]]:
-    """Yield cargo item mappings from nested payload structures."""
+def _iter_cargo(payload: Mapping[str, Any]) -> Iterable[Tuple[Mapping[str, Any], str]]:
+    """Yield cargo item mappings from nested payload structures.
+
+    Returns tuples of ``(entry, entry_type)`` where ``entry_type`` is
+    ``"animal"`` when the item originates from ``animal``/``animals`` keys and
+    ``"cargo"`` otherwise.
+    """
 
     search_queue: list[Any] = []
     if payload is not None:
@@ -230,7 +235,8 @@ def _iter_cargo(payload: Mapping[str, Any]) -> Iterable[Mapping[str, Any]]:
                             if entry_marker in yielded:
                                 continue
                             yielded.add(entry_marker)
-                            yield entry
+                            entry_type = "animal" if key in {"animal", "animals"} else "cargo"
+                            yield entry, entry_type
 
             for child in (
                 current.get("pax"),
@@ -270,8 +276,10 @@ def _extract_ticket_stats(ticket: Mapping[str, Any], season: str) -> tuple[float
     return base_weight + luggage_weight, category
 
 
-def _detect_high_risk_items(cargo_entries: Iterable[Mapping[str, Any]]) -> bool:
-    for entry in cargo_entries:
+def _detect_high_risk_items(
+    cargo_entries: Iterable[Tuple[Mapping[str, Any], str]]
+) -> bool:
+    for entry, _ in cargo_entries:
         note = str(entry.get("note") or "")
         if any(keyword in note.upper() for keyword in HIGH_RISK_KEYWORDS):
             return True
@@ -326,12 +334,14 @@ def evaluate_weight_balance(
     cargo_entries = list(_iter_cargo(pax_payload))
     cargo_summary = []
     cargo_weights = []
-    for item in cargo_entries:
+    for item, entry_type in cargo_entries:
         weight = _coerce_number(
             item.get("weightQty")
             or item.get("weight")
             or item.get("weight_qty")
         )
+        if weight is None and entry_type == "animal":
+            weight = 30.0
         cargo_summary.append(
             {
                 "note": item.get("note"),
