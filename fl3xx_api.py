@@ -92,6 +92,7 @@ def fetch_flights(
     to_date: Optional[date] = None,
     session: Optional[requests.Session] = None,
     now: Optional[datetime] = None,
+    _allow_split_retry: bool = True,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """Retrieve flights from the FL3XX API and return them with metadata."""
 
@@ -123,15 +124,58 @@ def fetch_flights(
     headers = config.build_headers()
 
     http = session or requests.Session()
-    response = http.get(
-        config.base_url,
-        params=params_sequence,
-        headers=headers,
-        timeout=config.timeout,
-        verify=config.verify_ssl,
-    )
-    response.raise_for_status()
-    payload = response.json()
+    def _issue_request() -> Any:
+        response = http.get(
+            config.base_url,
+            params=params_sequence,
+            headers=headers,
+            timeout=config.timeout,
+            verify=config.verify_ssl,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    try:
+        payload = _issue_request()
+    except requests.HTTPError as exc:
+        if exc.response is not None and exc.response.status_code == 400 and _allow_split_retry:
+            total_days = (to_date - from_date).days if from_date and to_date else 0
+            if total_days >= 2:
+                midpoint = from_date + timedelta(days=total_days // 2)
+                left_flights, left_meta = fetch_flights(
+                    config,
+                    from_date=from_date,
+                    to_date=midpoint,
+                    session=http,
+                    now=reference_time,
+                    _allow_split_retry=False,
+                )
+                right_flights, right_meta = fetch_flights(
+                    config,
+                    from_date=midpoint,
+                    to_date=to_date,
+                    session=http,
+                    now=reference_time,
+                    _allow_split_retry=False,
+                )
+
+                flights = left_flights + right_flights
+                digest = compute_flights_digest(flights)
+                fetched_at = reference_time.isoformat().replace("+00:00", "Z")
+
+                metadata = {
+                    "from_date": from_date.isoformat(),
+                    "to_date": to_date.isoformat(),
+                    "time_zone": params["timeZone"],
+                    "value": params["value"],
+                    "fetched_at": fetched_at,
+                    "hash": digest,
+                    "request_url": config.base_url,
+                    "request_params": params,
+                    "partial_requests": [left_meta, right_meta],
+                }
+                return flights, metadata
+        raise
     flights = _normalise_payload(payload)
 
     digest = compute_flights_digest(flights)
