@@ -749,6 +749,32 @@ def test_weight_balance_counts_animals_as_cargo() -> None:
     ]
 
 
+def test_weight_balance_defaults_missing_animal_weight() -> None:
+    payload = {
+        "pax": {
+            "tickets": [
+                {"paxUser": {"gender": "Female"}},
+            ]
+        },
+        "animal": [
+            {"note": "Bubbles the cat"},
+            {"weightQty": 15, "note": "Goldie the dog"},
+        ],
+    }
+
+    result = checker_weight_balance.evaluate_weight_balance(
+        {"aircraft_type": "C25A"},
+        pax_payload=payload,
+        aircraft_type="C25A",
+        season="Winter",
+        payload_source="api",
+    )
+
+    details = result.details
+    assert details["cargoWeight"] == 45
+    assert {entry["weight"] for entry in details["cargoEntries"]} == {30.0, 15.0}
+
+
 def test_aircraft_endurance_is_evaluated_for_each_leg() -> None:
     quote = {
         "bookingIdentifier": "ACFT1",
