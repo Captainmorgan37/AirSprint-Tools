@@ -1,13 +1,22 @@
+import json
 import os
 import re
 from datetime import date, datetime, timedelta, timezone
+from html import escape
 from typing import Any, Iterable, Mapping, Optional, Sequence, Tuple
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 from fl3xx_api import Fl3xxApiConfig, fetch_flights, compute_flights_digest
-from flight_leg_utils import filter_out_subcharter_rows, normalize_fl3xx_payload, safe_parse_dt
+from flight_leg_utils import (
+    filter_out_subcharter_rows,
+    load_airport_tz_lookup,
+    normalize_fl3xx_payload,
+    safe_parse_dt,
+)
 from Home import configure_page, get_secret, password_gate, render_sidebar
 
 configure_page(page_title="OCS vs Fl3xx Slot Compliance")
@@ -34,6 +43,8 @@ MONTHS = {m: i for i, m in enumerate(
 
 # Pretty month names for displaying Date tuples like (13, 9)
 MONTH_ABBR = {1:"Jan",2:"Feb",3:"Mar",4:"Apr",5:"May",6:"Jun",7:"Jul",8:"Aug",9:"Sep",10:"Oct",11:"Nov",12:"Dec"}
+
+AIRPORT_TZ_LOOKUP = load_airport_tz_lookup()
 
 def with_datestr(df: pd.DataFrame, date_col="Date"):
     """Add a human-friendly DateStr column next to the Date tuple."""
@@ -563,6 +574,438 @@ def show_table(df: pd.DataFrame, title: str, key: str):
         key=f"dl_{key}"
     )
 
+
+def _format_slot_json_time(sched_dt: Any, airport: str) -> tuple[Optional[str], Optional[str]]:
+    if sched_dt is None:
+        return None, None
+
+    try:
+        parsed_dt = pd.to_datetime(sched_dt)
+    except Exception:
+        return None, None
+
+    if isinstance(parsed_dt, pd.Timestamp):
+        if pd.isna(parsed_dt):
+            return None, None
+        if parsed_dt.tzinfo is None:
+            parsed_dt = parsed_dt.replace(tzinfo=timezone.utc)
+        else:
+            parsed_dt = parsed_dt.tz_convert(timezone.utc)
+        dt_obj = parsed_dt.to_pydatetime()
+    elif isinstance(parsed_dt, datetime):
+        dt_obj = parsed_dt
+        if dt_obj.tzinfo is None:
+            dt_obj = dt_obj.replace(tzinfo=timezone.utc)
+        else:
+            dt_obj = dt_obj.astimezone(timezone.utc)
+    else:
+        return None, None
+
+    tz_name = AIRPORT_TZ_LOOKUP.get(str(airport).upper())
+    try:
+        local_dt = dt_obj.astimezone(ZoneInfo(tz_name)) if tz_name else dt_obj
+    except Exception:
+        local_dt = dt_obj
+
+    return local_dt.strftime("%d%b").upper(), local_dt.strftime("%H%M")
+
+
+def _build_missing_slot_copy_payloads(df: pd.DataFrame) -> dict[int, dict[str, object]]:
+    payloads: dict[int, dict[str, object]] = {}
+    if df is None or df.empty:
+        return payloads
+
+    for idx, row in df.iterrows():
+        airport = str(row.get("Airport") or "").upper()
+        if not airport:
+            continue
+        movement = str(row.get("Movement") or "").upper()
+        operation = "arrival" if movement == "ARR" else "departure"
+        sched_dt = row.get("SchedDT")
+        local_date, local_time = _format_slot_json_time(sched_dt, airport)
+
+        other_airport = row.get("OtherAirport") or ""
+        other_airport = str(other_airport).upper() if other_airport else ""
+
+        aircraft_type = str(row.get("AircraftType") or "").upper()
+        tail = str(row.get("Tail") or "").upper()
+        reason = str(row.get("Reason") or "").strip()
+
+        payload: dict[str, object] = {
+            "label": f"{tail} {operation.title()} {airport}",
+            "json": {"operation": operation, "airport": airport},
+            "reason": reason,
+        }
+
+        if tail:
+            payload["json"]["tail"] = tail
+
+        if local_date:
+            payload["json"]["date"] = local_date
+        if local_time:
+            payload["json"]["time"] = local_time
+        if other_airport:
+            payload["json"]["other_airport"] = other_airport
+            if operation == "departure":
+                payload["json"]["dest"] = other_airport
+            else:
+                payload["json"]["orig"] = other_airport
+        if aircraft_type:
+            payload["json"]["ac_type"] = aircraft_type
+
+        payloads[idx] = payload
+
+    return payloads
+
+
+def _render_slot_copy_controls(container, payloads: Sequence[Mapping[str, object]]) -> None:
+    if not payloads:
+        return
+
+    selected_payload = payloads[0]
+    widget_suffix = st.session_state.get("slot_copy_counter", 0) + 1
+    st.session_state["slot_copy_counter"] = widget_suffix
+    button_id = f"slot-copy-btn-{widget_suffix}"
+    text_id = f"slot-copy-text-{widget_suffix}"
+    status_id = f"slot-copy-status-{widget_suffix}"
+
+    payload_json = selected_payload.get("json") if isinstance(selected_payload, Mapping) else None
+    if not isinstance(payload_json, Mapping):
+        return
+
+    json_text = json.dumps(payload_json, indent=2)
+    escaped_json = escape(json_text)
+    safe_json_for_js = json.dumps(json_text)
+
+    with container:
+        components.html(
+            f"""
+            <style>
+                .slot-copy-banner {{
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 0.4rem;
+                    padding: 0.3rem 0.5rem;
+                    background: linear-gradient(120deg, rgba(10, 14, 26, 0.9), rgba(15, 23, 42, 0.85));
+                    border-radius: 999px;
+                    border: 1px solid #1f2937;
+                    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+                    width: auto;
+                    white-space: nowrap;
+                }}
+                .slot-copy-button {{
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 0.35rem;
+                    padding: 0.35rem 0.75rem;
+                    background: linear-gradient(135deg, #0f172a, #111827);
+                    color: #e2e8f0;
+                    border: 1px solid #1f2937;
+                    border-radius: 999px;
+                    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+                    cursor: pointer;
+                    transition: transform 120ms ease, box-shadow 120ms ease, background 120ms ease, border-color 120ms ease;
+                    width: auto;
+                    white-space: nowrap;
+                }}
+                .slot-copy-button:hover {{
+                    transform: translateY(-1px);
+                    box-shadow: 0 10px 20px rgba(0, 0, 0, 0.4);
+                    background: linear-gradient(135deg, #111827, #0f172a);
+                    border-color: #475569;
+                }}
+                .slot-copy-button .slot-copy-icon {{ opacity: 0.85; margin-right: 0.25rem; }}
+                .slot-copy-button .slot-copy-copy {{ color: #60a5fa; }}
+                .slot-copy-button .slot-copy-slot {{ color: #e2e8f0; }}
+                .slot-copy-button .slot-copy-json {{ color: #f472b6; }}
+                .slot-copy-status {{
+                    font-size: 0.82rem;
+                    font-weight: 700;
+                    color: #cbd5e1;
+                    padding: 0.15rem 0.55rem;
+                    border-radius: 999px;
+                    background: rgba(17, 24, 39, 0.78);
+                    border: 1px solid #1f2937;
+                    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+                    min-width: 3.9rem;
+                    text-align: center;
+                }}
+                .slot-copy-status.success {{ color: #bbf7d0; border-color: #14532d; background: rgba(20, 83, 45, 0.32); }}
+                .slot-copy-status.error {{ color: #fecdd3; border-color: #7f1d1d; background: rgba(127, 29, 29, 0.28); }}
+                .slot-copy-label {{
+                    color: #e2e8f0;
+                    font-weight: 600;
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 0.3rem;
+                    letter-spacing: 0.01em;
+                }}
+                .slot-copy-label .slot-copy-label-icon {{ opacity: 0.85; }}
+                .slot-copy-label .slot-copy-label-text {{ color: #cbd5e1; font-weight: 500; }}
+            </style>
+            <div class="slot-copy-banner">
+                <span class="slot-copy-label">
+                    <span class="slot-copy-label-icon">📄</span>
+                    <span class="slot-copy-label-text">OCS Slot JSON</span>
+                </span>
+                <button id="{button_id}" class="slot-copy-button" type="button">
+                    <span class="slot-copy-icon">📄</span>
+                    <span class="slot-copy-copy">Copy</span>
+                    <span class="slot-copy-slot">Slot</span>
+                    <span class="slot-copy-json">JSON</span>
+                </button>
+                <span id="{status_id}" class="slot-copy-status"></span>
+                <textarea id="{text_id}" style="position:absolute; left:-1000px; top:-1000px; height:1px; width:1px;">{escaped_json}</textarea>
+            </div>
+            <script>
+                (function() {{
+                    const button = document.getElementById("{button_id}");
+                    const textArea = document.getElementById("{text_id}");
+                    const status = document.getElementById("{status_id}");
+                    if (!button || !textArea) return;
+
+                    const setStatus = (label, isError = false) => {{
+                        if (status) {{
+                            status.textContent = label;
+                            status.classList.toggle("success", !isError);
+                            status.classList.toggle("error", isError);
+                        }}
+                    }};
+
+                    const fallbackCopy = (value) => {{
+                        try {{
+                            textArea.value = value;
+                            textArea.removeAttribute("disabled");
+                            textArea.style.position = "absolute";
+                            textArea.style.left = "-1000px";
+                            textArea.style.top = "-1000px";
+                            textArea.style.width = "1px";
+                            textArea.style.height = "1px";
+                            textArea.select();
+                            textArea.setSelectionRange(0, value.length);
+                            const successful = document.execCommand("copy");
+                            setStatus(successful ? "Copied ✓" : "Copy failed", !successful);
+                        }} catch (err) {{
+                            setStatus("Copy failed", true);
+                        }}
+                    }};
+
+                    const copyPayload = () => {{
+                        const value = {safe_json_for_js};
+                        if (navigator.clipboard && window.isSecureContext) {{
+                            navigator.clipboard.writeText(value).then(
+                                () => setStatus("Copied ✓"),
+                                () => fallbackCopy(value)
+                            );
+                            return;
+                        }}
+                        fallbackCopy(value);
+                    }};
+
+                    button.addEventListener("click", copyPayload);
+                }})();
+            </script>
+            """,
+            height=82,
+        )
+
+
+def show_missing_table(df: pd.DataFrame, title: str, key: str):
+    st.subheader(title)
+    if df is None or df.empty:
+        st.write("— no rows —")
+        return
+
+    download_data = df.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        f"Download {title} CSV",
+        download_data,
+        file_name=f"{key}.csv",
+        mime="text/csv",
+        key=f"dl_{key}"
+    )
+
+    payloads = _build_missing_slot_copy_payloads(df)
+
+    display_cols = [
+        col for col in [
+            "Flight", "Tail", "Airport", "Movement", "SchedDT", "PAX/OCS",
+            "OtherAirport", "AircraftType", "Reason"
+        ]
+        if col in df.columns
+    ]
+    extra_cols = [col for col in df.columns if col not in display_cols]
+    display_cols.extend(extra_cols)
+
+    table_df = df.copy()
+    if "SchedDT" in table_df.columns:
+        try:
+            table_df["SchedDT"] = pd.to_datetime(table_df["SchedDT"]).dt.strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            table_df["SchedDT"] = table_df["SchedDT"].astype(str)
+
+    rows_html = []
+    for idx, row in table_df.iterrows():
+        cells = []
+        for col in display_cols:
+            value = row.get(col, "")
+            if pd.isna(value):
+                value = "—"
+            cells.append(f"<td class='slot-cell'>{escape(str(value))}</td>")
+
+        payload = payloads.get(idx)
+        if payload and isinstance(payload.get("json"), Mapping):
+            button_id = f"slot-copy-btn-{idx}"
+            status_id = f"slot-copy-status-{idx}"
+            json_text = json.dumps(payload["json"], indent=2)
+            json_attr = escape(json_text, quote=True)
+            copy_cell = (
+                f"<td class='slot-copy-cell'>"
+                f"  <button class='slot-copy-button' id='{button_id}' data-json=\"{json_attr}\" data-status='{status_id}'>📄 Copy JSON</button>"
+                f"  <span id='{status_id}' class='slot-copy-status'></span>"
+                f"</td>"
+            )
+        else:
+            copy_cell = "<td class='slot-copy-cell slot-copy-cell--empty'>—</td>"
+
+        row_html = "<tr>" + "".join(cells) + copy_cell + "</tr>"
+        rows_html.append(row_html)
+
+    table_height = max(220, min(120 + 36 * len(rows_html), 860))
+
+    components.html(
+        f"""
+        <style>
+            .slot-table-wrapper {{
+                width: 100%;
+                overflow-x: auto;
+            }}
+            table.slot-table {{
+                width: 100%;
+                border-collapse: collapse;
+                font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+                font-size: 14px;
+                color: #e2e8f0;
+            }}
+            table.slot-table thead th {{
+                background: linear-gradient(120deg, rgba(15, 23, 42, 0.9), rgba(30, 41, 59, 0.85));
+                padding: 10px 8px;
+                text-align: left;
+                position: sticky;
+                top: 0;
+                z-index: 1;
+                border-bottom: 1px solid #1f2937;
+                white-space: nowrap;
+            }}
+            table.slot-table tbody tr:nth-child(odd) {{ background: rgba(15, 23, 42, 0.55); }}
+            table.slot-table tbody tr:nth-child(even) {{ background: rgba(15, 23, 42, 0.4); }}
+            table.slot-table td {{
+                padding: 8px;
+                border-bottom: 1px solid #1f2937;
+                white-space: nowrap;
+            }}
+            table.slot-table td.slot-cell {{
+                max-width: 180px;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }}
+            table.slot-table td.slot-copy-cell {{
+                min-width: 160px;
+                text-align: left;
+            }}
+            .slot-copy-button {{
+                display: inline-flex;
+                align-items: center;
+                gap: 0.35rem;
+                padding: 0.35rem 0.75rem;
+                background: linear-gradient(135deg, #0f172a, #111827);
+                color: #e2e8f0;
+                border: 1px solid #1f2937;
+                border-radius: 999px;
+                box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+                cursor: pointer;
+                transition: transform 120ms ease, box-shadow 120ms ease, background 120ms ease, border-color 120ms ease;
+                white-space: nowrap;
+            }}
+            .slot-copy-button:hover {{
+                transform: translateY(-1px);
+                box-shadow: 0 10px 20px rgba(0, 0, 0, 0.4);
+                background: linear-gradient(135deg, #111827, #0f172a);
+                border-color: #475569;
+            }}
+            .slot-copy-status {{
+                margin-left: 0.45rem;
+                font-size: 0.85rem;
+                font-weight: 700;
+                color: #cbd5e1;
+            }}
+            .slot-copy-status.success {{ color: #bbf7d0; }}
+            .slot-copy-status.error {{ color: #fecdd3; }}
+            .slot-copy-cell--empty {{ color: #64748b; font-style: italic; }}
+        </style>
+        <div class="slot-table-wrapper">
+            <table class="slot-table">
+                <thead>
+                    <tr>
+                        {''.join(f'<th>{escape(col)}</th>' for col in display_cols)}
+                        <th>Copy</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {''.join(rows_html)}
+                </tbody>
+            </table>
+        </div>
+        <textarea id="slot-copy-hidden" style="position:absolute; left:-1000px; top:-1000px; height:1px; width:1px;"></textarea>
+        <script>
+            (function() {{
+                const buttons = Array.from(document.querySelectorAll('.slot-copy-button'));
+                const hidden = document.getElementById('slot-copy-hidden');
+
+                const setStatus = (statusEl, label, isError = false) => {{
+                    if (!statusEl) return;
+                    statusEl.textContent = label;
+                    statusEl.classList.toggle('success', !isError);
+                    statusEl.classList.toggle('error', isError);
+                }};
+
+                const fallbackCopy = (value, statusEl) => {{
+                    try {{
+                        hidden.value = value;
+                        hidden.removeAttribute('disabled');
+                        hidden.select();
+                        hidden.setSelectionRange(0, value.length);
+                        const successful = document.execCommand('copy');
+                        setStatus(statusEl, successful ? 'Copied ✓' : 'Copy failed', !successful);
+                    }} catch (err) {{
+                        setStatus(statusEl, 'Copy failed', true);
+                    }}
+                }};
+
+                const copyJson = (btn) => {{
+                    const payload = btn.getAttribute('data-json');
+                    const statusId = btn.getAttribute('data-status');
+                    const statusEl = statusId ? document.getElementById(statusId) : null;
+                    if (!payload) return;
+
+                    if (navigator.clipboard && window.isSecureContext) {{
+                        navigator.clipboard.writeText(payload).then(
+                            () => setStatus(statusEl, 'Copied ✓'),
+                            () => fallbackCopy(payload, statusEl)
+                        );
+                        return;
+                    }}
+                    fallbackCopy(payload, statusEl);
+                }};
+
+                buttons.forEach((btn) => btn.addEventListener('click', () => copyJson(btn)));
+            }})();
+        </script>
+        """,
+        height=table_height,
+    )
+
+
 def _tail_future_exempt(sched_dt: pd.Timestamp, threshold_days: int = 3) -> bool:
     """Hide tail-mismatch items when the leg is >= threshold_days (3+) days in the future."""
     if pd.isna(sched_dt):
@@ -909,6 +1352,7 @@ def compare(fl3xx_df: pd.DataFrame, ocs_df: pd.DataFrame):
         tail = str(r.get("Tail", "")).upper()
         flight_type = r.get("Flight Type")
         workflow = r.get("Workflow")
+        aircraft_type = str(r.get("Aircraft Type") or "").upper()
         category = ""
         ft_norm = _normalize_str(flight_type)
         if ft_norm:
@@ -927,11 +1371,13 @@ def compare(fl3xx_df: pd.DataFrame, ocs_df: pd.DataFrame):
         to_ap = r.get("To (ICAO)")
         if isinstance(to_ap, str) and to_ap in SLOT_AIRPORTS and pd.notna(r.get("OnBlock")):
             legs.append({"Flight": r.get("Booking"), "Tail": tail, "Airport": to_ap,
-                         "Movement": "ARR", "SchedDT": r.get("OnBlock"), "PAX/OCS": category})
+                         "Movement": "ARR", "SchedDT": r.get("OnBlock"), "PAX/OCS": category,
+                         "OtherAirport": r.get("From (ICAO)"), "AircraftType": aircraft_type})
         from_ap = r.get("From (ICAO)")
         if isinstance(from_ap, str) and from_ap in SLOT_AIRPORTS and pd.notna(r.get("OffBlock")):
             legs.append({"Flight": r.get("Booking"), "Tail": tail, "Airport": from_ap,
-                         "Movement": "DEP", "SchedDT": r.get("OffBlock"), "PAX/OCS": category})
+                         "Movement": "DEP", "SchedDT": r.get("OffBlock"), "PAX/OCS": category,
+                         "OtherAirport": r.get("To (ICAO)"), "AircraftType": aircraft_type})
 
     # De-duplicate legs so the same flight isn't processed twice
     if legs:
@@ -1142,7 +1588,7 @@ if fl3xx_frames and ocs_files:
     stale_df         = with_datestr(stale)  # if you added the pretty date helper
 
     show_table(matched_df,  "✔ Matched",          "matched")
-    show_table(missing_df,  "⚠ Missing",          "missing")
+    show_missing_table(missing_df,  "⚠ Missing",          "missing")
     show_table(mis_time_df, "⚠ Time mismatch",    "misaligned_time")
     show_table(mis_tail_df, "⚠ Tail mismatch",    "misaligned_tail")
     show_table(stale_df,    "Unused Slots",       "unused_slots")
