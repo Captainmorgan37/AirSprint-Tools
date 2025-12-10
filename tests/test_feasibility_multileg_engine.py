@@ -438,6 +438,67 @@ def test_planning_notes_route_match_no_issue() -> None:
     )
 
 
+def test_planning_notes_summary_route_allows_fuel_stop() -> None:
+    quote = {
+        "bookingIdentifier": "ROUTE-SUMMARY-FUEL-STOP",
+        "aircraftObj": {"type": "CJ3", "category": "LIGHT_JET"},
+        "legs": [
+            {
+                "id": "LEG-FUEL-1",
+                "departureAirport": "CYVR",
+                "arrivalAirport": "CYWG",
+                "departureDateUTC": "2025-12-21T15:00:00Z",
+                "arrivalDateUTC": "2025-12-21T18:00:00Z",
+                "blockTime": 180,
+                "planningNotes": "21DEC CYVR-CYQS",
+            },
+            {
+                "id": "LEG-FUEL-2",
+                "departureAirport": "CYWG",
+                "arrivalAirport": "CYQS",
+                "departureDateUTC": "2025-12-21T19:00:00Z",
+                "arrivalDateUTC": "2025-12-21T21:30:00Z",
+                "blockTime": 150,
+                "planningNotes": "21DEC CYVR-CYQS",
+            },
+        ],
+    }
+
+    result = run_feasibility_phase1({"quote": quote, "tz_provider": _tz_provider})
+
+    assert not any("Planning notes route" in issue for issue in result["issues"])
+    assert any(
+        "Planning notes route" in entry and "matches booked" in entry
+        for entry in result.get("validation_checks", [])
+    )
+
+
+def test_planning_notes_allow_missing_country_prefix_in_route() -> None:
+    quote = {
+        "bookingIdentifier": "ROUTE-PREFIX-OPTIONAL",
+        "aircraftObj": {"type": "CJ3", "category": "LIGHT_JET"},
+        "legs": [
+            {
+                "id": "LEG-PREFIX",
+                "departureAirport": "CYXU",
+                "arrivalAirport": "CYOW",
+                "departureDateUTC": "2025-12-23T15:00:00Z",
+                "arrivalDateUTC": "2025-12-23T16:00:00Z",
+                "blockTime": 60,
+                "planningNotes": "23DEC YXU - YOW",
+            }
+        ],
+    }
+
+    result = run_feasibility_phase1({"quote": quote, "tz_provider": _tz_provider})
+
+    assert not any("Planning notes route" in issue for issue in result["issues"])
+    assert any(
+        "Planning notes route" in entry and "matches booked" in entry
+        for entry in result.get("validation_checks", [])
+    )
+
+
 def test_planning_notes_route_confirmation_surfaces_alongside_other_checks() -> None:
     quote = {
         "bookingIdentifier": "ROUTE-CONFIRM-WITH-OTHER",
@@ -686,6 +747,32 @@ def test_weight_balance_counts_animals_as_cargo() -> None:
         {"note": "Archie the dog", "type": None, "unit": None, "weight": 19.0},
         {"note": "Jet the dog", "type": None, "unit": None, "weight": 49.0},
     ]
+
+
+def test_weight_balance_defaults_missing_animal_weight() -> None:
+    payload = {
+        "pax": {
+            "tickets": [
+                {"paxUser": {"gender": "Female"}},
+            ]
+        },
+        "animal": [
+            {"note": "Bubbles the cat"},
+            {"weightQty": 15, "note": "Goldie the dog"},
+        ],
+    }
+
+    result = checker_weight_balance.evaluate_weight_balance(
+        {"aircraft_type": "C25A"},
+        pax_payload=payload,
+        aircraft_type="C25A",
+        season="Winter",
+        payload_source="api",
+    )
+
+    details = result.details
+    assert details["cargoWeight"] == 45
+    assert {entry["weight"] for entry in details["cargoEntries"]} == {30.0, 15.0}
 
 
 def test_aircraft_endurance_is_evaluated_for_each_leg() -> None:

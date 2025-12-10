@@ -113,6 +113,32 @@ def _extract_route_points(route_text: str) -> List[str]:
     return points
 
 
+def airport_code_matches(route_code: str, target_code: str) -> bool:
+    """Return whether route_code refers to the same airport as target_code.
+
+    Planning notes sometimes omit the country prefix (e.g., "YOW" instead of
+    "CYOW"). Treat such three-letter forms as equivalent to their four-letter
+    counterparts when the remaining suffix matches.
+    """
+
+    route = (route_code or "").upper()
+    target = (target_code or "").upper()
+
+    if not route or not target:
+        return False
+
+    if route == target:
+        return True
+
+    if len(route) == 3 and len(target) == 4 and target[1:] == route:
+        return True
+
+    if len(route) == 4 and len(target) == 3 and route[1:] == target:
+        return True
+
+    return False
+
+
 def parse_route_entries_from_note(
     note: str, *, default_year: Optional[int]
 ) -> List[Tuple[date, List[str]]]:
@@ -166,7 +192,9 @@ def find_route_mismatch(
 
     def _route_contains_segment(route: Sequence[str]) -> bool:
         for idx, code in enumerate(route[:-1]):
-            if code == dep and route[idx + 1] == arr:
+            if airport_code_matches(code, dep) and airport_code_matches(
+                route[idx + 1], arr
+            ):
                 return True
         return False
 
