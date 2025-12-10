@@ -637,6 +637,9 @@ def _build_missing_slot_copy_payloads(df: pd.DataFrame) -> dict[int, dict[str, o
             "reason": reason,
         }
 
+        if tail:
+            payload["json"]["tail"] = tail
+
         if local_date:
             payload["json"]["date"] = local_date
         if local_time:
