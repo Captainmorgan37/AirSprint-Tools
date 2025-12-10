@@ -33,7 +33,9 @@ from flight_leg_utils import (
     compute_departure_window_bounds,
     fetch_legs_dataframe,
     format_utc,
+    is_canadian_country,
     is_customs_leg,
+    leg_countries,
     load_airport_metadata_lookup,
     safe_parse_dt,
 )
@@ -465,8 +467,14 @@ def build_tail_packages(df: pd.DataFrame, target_date: date) -> Tuple[List[TailP
         priority_values: Set[str] = set()
         for _, row in g.iterrows():
             row_dict = row.to_dict()
+            dep_country, arr_country = leg_countries(row_dict, airport_lookup)
+            row_dict["departure_country"] = dep_country
+            row_dict["arrival_country"] = arr_country
             is_customs = is_customs_leg(row_dict, airport_lookup)
             row_dict["is_customs_leg"] = is_customs
+            row_dict["is_customs_workload_leg"] = bool(
+                is_customs and arr_country and not is_canadian_country(arr_country)
+            )
             all_rows.append(row_dict)
             priority_label = _priority_label(row_dict.get("workflowCustomName"))
             if priority_label:
@@ -480,11 +488,13 @@ def build_tail_packages(df: pd.DataFrame, target_date: date) -> Tuple[List[TailP
         if not legs_rows:
             legs_rows = all_rows
         first_dt = first_local_for_tail(pd.DataFrame(legs_rows))
-        customs_count = sum(1 for leg in legs_rows if leg.get("is_customs_leg"))
+        customs_count = sum(
+            1 for leg in legs_rows if leg.get("is_customs_workload_leg")
+        )
         workload = _TAIL_BASE_WORKLOAD
         for leg in legs_rows:
             workload += _BASE_LEG_WORKLOAD
-            if leg.get("is_customs_leg"):
+            if leg.get("is_customs_workload_leg"):
                 workload += _CUSTOMS_LEG_BONUS
         packages.append(
             TailPackage(
