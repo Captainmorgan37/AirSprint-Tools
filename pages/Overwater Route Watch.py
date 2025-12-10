@@ -26,7 +26,7 @@ _MAPBOX_TOKEN = st.secrets.get("mapbox_token")  # type: ignore[attr-defined]
 if isinstance(_MAPBOX_TOKEN, str) and _MAPBOX_TOKEN.strip():
     os.environ["MAPBOX_API_KEY"] = _MAPBOX_TOKEN.strip()
 
-TARGET_TAILS: Tuple[str, ...] = ("C-GASE", "C-FSBR")
+TARGET_TAILS: Tuple[str, ...] = ("C-FSJR", "C-GASE", "C-GASL")
 TAIL_KEYS = {"".join(tail.upper().split("-")) for tail in TARGET_TAILS}
 LAND_BUFFER_NM = 200
 SAMPLES_PER_LEG = 18
