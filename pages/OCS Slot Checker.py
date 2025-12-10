@@ -610,12 +610,12 @@ def _format_slot_json_time(sched_dt: Any, airport: str) -> tuple[Optional[str], 
     return local_dt.strftime("%d%b").upper(), local_dt.strftime("%H%M")
 
 
-def _build_missing_slot_copy_payloads(df: pd.DataFrame) -> list[dict[str, object]]:
-    payloads: list[dict[str, object]] = []
+def _build_missing_slot_copy_payloads(df: pd.DataFrame) -> dict[int, dict[str, object]]:
+    payloads: dict[int, dict[str, object]] = {}
     if df is None or df.empty:
         return payloads
 
-    for _, row in df.iterrows():
+    for idx, row in df.iterrows():
         airport = str(row.get("Airport") or "").upper()
         if not airport:
             continue
@@ -650,7 +650,7 @@ def _build_missing_slot_copy_payloads(df: pd.DataFrame) -> list[dict[str, object
         if aircraft_type:
             payload["json"]["ac_type"] = aircraft_type
 
-        payloads.append(payload)
+        payloads[idx] = payload
 
     return payloads
 
@@ -813,24 +813,194 @@ def show_missing_table(df: pd.DataFrame, title: str, key: str):
         st.write("— no rows —")
         return
 
-    st.dataframe(df, use_container_width=True)
+    download_data = df.to_csv(index=False).encode("utf-8")
     st.download_button(
         f"Download {title} CSV",
-        df.to_csv(index=False).encode("utf-8"),
+        download_data,
         file_name=f"{key}.csv",
         mime="text/csv",
         key=f"dl_{key}"
     )
 
     payloads = _build_missing_slot_copy_payloads(df)
-    if payloads:
-        st.markdown("**📄 Copy OCS slot JSON for each missing leg:**")
-        for payload in payloads:
-            label = str(payload.get("label") or "Missing slot")
-            reason = payload.get("reason")
-            slot_container = st.container()
-            slot_container.caption(f"{label}{f' — {reason}' if reason else ''}")
-            _render_slot_copy_controls(slot_container, [payload])
+
+    display_cols = [
+        col for col in [
+            "Flight", "Tail", "Airport", "Movement", "SchedDT", "PAX/OCS",
+            "OtherAirport", "AircraftType", "Reason"
+        ]
+        if col in df.columns
+    ]
+    extra_cols = [col for col in df.columns if col not in display_cols]
+    display_cols.extend(extra_cols)
+
+    table_df = df.copy()
+    if "SchedDT" in table_df.columns:
+        try:
+            table_df["SchedDT"] = pd.to_datetime(table_df["SchedDT"]).dt.strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            table_df["SchedDT"] = table_df["SchedDT"].astype(str)
+
+    rows_html = []
+    for idx, row in table_df.iterrows():
+        cells = []
+        for col in display_cols:
+            value = row.get(col, "")
+            if pd.isna(value):
+                value = "—"
+            cells.append(f"<td class='slot-cell'>{escape(str(value))}</td>")
+
+        payload = payloads.get(idx)
+        if payload and isinstance(payload.get("json"), Mapping):
+            button_id = f"slot-copy-btn-{idx}"
+            status_id = f"slot-copy-status-{idx}"
+            json_text = json.dumps(payload["json"], indent=2)
+            json_attr = escape(json_text, quote=True)
+            copy_cell = (
+                f"<td class='slot-copy-cell'>"
+                f"  <button class='slot-copy-button' id='{button_id}' data-json=\"{json_attr}\" data-status='{status_id}'>📄 Copy JSON</button>"
+                f"  <span id='{status_id}' class='slot-copy-status'></span>"
+                f"</td>"
+            )
+        else:
+            copy_cell = "<td class='slot-copy-cell slot-copy-cell--empty'>—</td>"
+
+        row_html = "<tr>" + "".join(cells) + copy_cell + "</tr>"
+        rows_html.append(row_html)
+
+    table_height = max(220, min(120 + 36 * len(rows_html), 860))
+
+    components.html(
+        f"""
+        <style>
+            .slot-table-wrapper {{
+                width: 100%;
+                overflow-x: auto;
+            }}
+            table.slot-table {{
+                width: 100%;
+                border-collapse: collapse;
+                font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+                font-size: 14px;
+                color: #e2e8f0;
+            }}
+            table.slot-table thead th {{
+                background: linear-gradient(120deg, rgba(15, 23, 42, 0.9), rgba(30, 41, 59, 0.85));
+                padding: 10px 8px;
+                text-align: left;
+                position: sticky;
+                top: 0;
+                z-index: 1;
+                border-bottom: 1px solid #1f2937;
+                white-space: nowrap;
+            }}
+            table.slot-table tbody tr:nth-child(odd) {{ background: rgba(15, 23, 42, 0.55); }}
+            table.slot-table tbody tr:nth-child(even) {{ background: rgba(15, 23, 42, 0.4); }}
+            table.slot-table td {{
+                padding: 8px;
+                border-bottom: 1px solid #1f2937;
+                white-space: nowrap;
+            }}
+            table.slot-table td.slot-cell {{
+                max-width: 180px;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }}
+            table.slot-table td.slot-copy-cell {{
+                min-width: 160px;
+                text-align: left;
+            }}
+            .slot-copy-button {{
+                display: inline-flex;
+                align-items: center;
+                gap: 0.35rem;
+                padding: 0.35rem 0.75rem;
+                background: linear-gradient(135deg, #0f172a, #111827);
+                color: #e2e8f0;
+                border: 1px solid #1f2937;
+                border-radius: 999px;
+                box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+                cursor: pointer;
+                transition: transform 120ms ease, box-shadow 120ms ease, background 120ms ease, border-color 120ms ease;
+                white-space: nowrap;
+            }}
+            .slot-copy-button:hover {{
+                transform: translateY(-1px);
+                box-shadow: 0 10px 20px rgba(0, 0, 0, 0.4);
+                background: linear-gradient(135deg, #111827, #0f172a);
+                border-color: #475569;
+            }}
+            .slot-copy-status {{
+                margin-left: 0.45rem;
+                font-size: 0.85rem;
+                font-weight: 700;
+                color: #cbd5e1;
+            }}
+            .slot-copy-status.success {{ color: #bbf7d0; }}
+            .slot-copy-status.error {{ color: #fecdd3; }}
+            .slot-copy-cell--empty {{ color: #64748b; font-style: italic; }}
+        </style>
+        <div class="slot-table-wrapper">
+            <table class="slot-table">
+                <thead>
+                    <tr>
+                        {''.join(f'<th>{escape(col)}</th>' for col in display_cols)}
+                        <th>Copy</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {''.join(rows_html)}
+                </tbody>
+            </table>
+        </div>
+        <textarea id="slot-copy-hidden" style="position:absolute; left:-1000px; top:-1000px; height:1px; width:1px;"></textarea>
+        <script>
+            (function() {{
+                const buttons = Array.from(document.querySelectorAll('.slot-copy-button'));
+                const hidden = document.getElementById('slot-copy-hidden');
+
+                const setStatus = (statusEl, label, isError = false) => {{
+                    if (!statusEl) return;
+                    statusEl.textContent = label;
+                    statusEl.classList.toggle('success', !isError);
+                    statusEl.classList.toggle('error', isError);
+                }};
+
+                const fallbackCopy = (value, statusEl) => {{
+                    try {{
+                        hidden.value = value;
+                        hidden.removeAttribute('disabled');
+                        hidden.select();
+                        hidden.setSelectionRange(0, value.length);
+                        const successful = document.execCommand('copy');
+                        setStatus(statusEl, successful ? 'Copied ✓' : 'Copy failed', !successful);
+                    }} catch (err) {{
+                        setStatus(statusEl, 'Copy failed', true);
+                    }}
+                }};
+
+                const copyJson = (btn) => {{
+                    const payload = btn.getAttribute('data-json');
+                    const statusId = btn.getAttribute('data-status');
+                    const statusEl = statusId ? document.getElementById(statusId) : null;
+                    if (!payload) return;
+
+                    if (navigator.clipboard && window.isSecureContext) {{
+                        navigator.clipboard.writeText(payload).then(
+                            () => setStatus(statusEl, 'Copied ✓'),
+                            () => fallbackCopy(payload, statusEl)
+                        );
+                        return;
+                    }}
+                    fallbackCopy(payload, statusEl);
+                }};
+
+                buttons.forEach((btn) => btn.addEventListener('click', () => copyJson(btn)));
+            }})();
+        </script>
+        """,
+        height=table_height,
+    )
 
 
 def _tail_future_exempt(sched_dt: pd.Timestamp, threshold_days: int = 3) -> bool:
