@@ -246,16 +246,46 @@ def _airport_country_from_row(
     return None
 
 
+def normalize_country_code(country: Optional[str]) -> Optional[str]:
+    if not country:
+        return None
+    try:
+        if isinstance(country, float) and pd.isna(country):
+            return None
+    except Exception:
+        return None
+    text = str(country).strip()
+    if not text:
+        return None
+    return text.upper()
+
+
+_CANADA_CODES = {"CA", "CANADA"}
+
+
+def is_canadian_country(country: Optional[str]) -> bool:
+    normalized = normalize_country_code(country)
+    return bool(normalized and normalized in _CANADA_CODES)
+
+
+def leg_countries(
+    row: Mapping[str, Any],
+    lookup: Optional[Dict[str, Dict[str, Optional[str]]]] = None,
+) -> Tuple[Optional[str], Optional[str]]:
+    if lookup is None:
+        lookup = load_airport_metadata_lookup()
+    if not lookup:
+        return None, None
+    dep_country = _airport_country_from_row(row, DEPARTURE_AIRPORT_COLUMNS, lookup)
+    arr_country = _airport_country_from_row(row, ARRIVAL_AIRPORT_COLUMNS, lookup)
+    return dep_country, arr_country
+
+
 def is_customs_leg(
     row: Mapping[str, Any],
     lookup: Optional[Dict[str, Dict[str, Optional[str]]]] = None,
 ) -> bool:
-    if lookup is None:
-        lookup = load_airport_metadata_lookup()
-    if not lookup:
-        return False
-    dep_country = _airport_country_from_row(row, DEPARTURE_AIRPORT_COLUMNS, lookup)
-    arr_country = _airport_country_from_row(row, ARRIVAL_AIRPORT_COLUMNS, lookup)
+    dep_country, arr_country = leg_countries(row, lookup)
     if dep_country and arr_country:
         return dep_country != arr_country
     return False
@@ -1349,9 +1379,12 @@ __all__ = [
     "format_utc",
     "generate_frms_report_for_today",
     "get_todays_sorted_legs_by_tail",
+    "is_canadian_country",
     "is_customs_leg",
+    "leg_countries",
     "load_airport_metadata_lookup",
     "load_airport_tz_lookup",
+    "normalize_country_code",
     "normalize_fl3xx_payload",
     "summarize_frms_watch_items",
     "safe_parse_dt",

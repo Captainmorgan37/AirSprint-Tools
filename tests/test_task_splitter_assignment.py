@@ -1,9 +1,11 @@
 import sys
 import types
-from datetime import datetime
+from datetime import date, datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
+import pandas as pd
 
 
 class _ContextStub:
@@ -127,13 +129,18 @@ def _ensure_stubs():
     if "Home" not in sys.modules:
         home = types.ModuleType("Home")
         home.password_gate = lambda: None
+        home.configure_page = lambda *args, **kwargs: None
+        home.get_secret = lambda *args, **kwargs: None
+        home.render_sidebar = lambda *args, **kwargs: None
         sys.modules["Home"] = home
 
 
 @pytest.fixture(scope="module")
 def task_splitter_module():
     _ensure_stubs()
-    sys.path.append("AirSprint-Tools")
+    repo_root = Path(__file__).resolve().parents[1]
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
     module = __import__("pages.Task_Splitter", fromlist=["*"])
     return module
 
@@ -219,6 +226,37 @@ def test_westerly_tails_prefer_last_shift(TailPackage, assign_preference_weighte
     last_shift = labels[-1]
     last_shift_tails = {pkg.tail for pkg in buckets.get(last_shift, [])}
     assert western_tails.issubset(last_shift_tails)
+
+
+def test_customs_workload_excludes_canadian_arrivals(task_splitter_module):
+    df = pd.DataFrame(
+        [
+            {
+                "tail": "C-FGHI",
+                "leg_id": "1",
+                "dep_time": "2024-01-01T08:00:00Z",
+                "dep_tz": "UTC",
+                "dep_airport": "KJFK",
+                "arr_airport": "CYYC",
+            },
+            {
+                "tail": "C-FGHI",
+                "leg_id": "2",
+                "dep_time": "2024-01-01T12:00:00Z",
+                "dep_tz": "UTC",
+                "dep_airport": "CYYC",
+                "arr_airport": "KSEA",
+            },
+        ]
+    )
+
+    packages, invalid = task_splitter_module.build_tail_packages(df, date(2024, 1, 1))
+
+    assert invalid == set()
+    assert len(packages) == 1
+    pkg = packages[0]
+    assert pkg.customs_legs == 1
+    assert pkg.workload == pytest.approx(3.25)
 
 
 def test_is_westerly_offset_bounds(is_westerly_offset):
