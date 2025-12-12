@@ -1,0 +1,2525 @@
+{
+    "booking": "BUAGM4",
+    "bookingId": 3542674,
+    "flight": null,
+    "tailNumber": "C-FJAS",
+    "aircraftId": 5648,
+    "mtowUnit": "POUND",
+    "reducedRestEnabled": false,
+    "crewBrief": {
+        "id": null,
+        "status": "REQ",
+        "by": "CUSTOM1",
+        "crewNotes": null,
+        "permitProviderId": null,
+        "flightSelection": {
+            "bookings": [
+                {
+                    "id": 3542674,
+                    "operator": {
+                        "id": 209,
+                        "name": "AirSprint"
+                    },
+                    "bookingIdentifier": "BUAGM4",
+                    "sourcingBookingReference": null,
+                    "creationDate": 1761157434152,
+                    "color": "#D70EA8",
+                    "statusSymbol": "F",
+                    "customerInfo": {
+                        "id": 594764,
+                        "firstName": "Kelly",
+                        "lastName": "Lennon",
+                        "account": {
+                            "id": 114105,
+                            "operator": {
+                                "id": 209,
+                                "name": "AirSprint"
+                            },
+                            "name": "Jane Shevlen",
+                            "status": "ACTIVE",
+                            "accountNumber": "114105"
+                        },
+                        "nickname": null,
+                        "userCommercialComment": null,
+                        "accountCommercialComment": "Access Level: Infinity\n\nBooking Guarantee: 8\n\nFlight Regulations: FEX\n\nSales Person:\nScott Wenz\nPraetor 500 Syndicate: 2428580 Ontario Inc.\nEnsure jet has an operative lav - Jane has had extreme airsickness on a couple of our flights and on one occasion an ambulance had to be called \n---\nKeep Jane on the newest jet as possible (one where the seats don't jostle as much due to her air sickness) - her A/C is C-FSBR and she would prefer that one\n---\nInclude her flight in daily ops meetings to check weather and provide her with as much notice as possible for any potential weather/turbulence issues\n---\nAdd 90 min turn after her flights in case clean up is necessary\nJane has a place near Vero Beach KVRB (no customs there so use KMLB/KFPR). She will most likely drive from the nearest airport to Vero Beach rather than take a 2nd flight - does not want any enroute stops\nFor final manifests, advise the year of AC Ms. Shevlen's flying on - wants the newest possible\nJane Shevlen is susceptible to extreme airsickness during turbulence - ensure extra sick bags available and accessible. \nPlace moist towelettes in the drink drawer to keep them cool - ensure Dramamine and Gingerale onboard - ensure operative lav\n---\nBefore takeoff please debrief Mrs. Shevlen prior to departure about any potential weather or turbulence - approach truthfully but also carefully to not build into her anxiety\n--\nAsk what you can do to make her more comfortable  for the flight (lighting, window shades, sick bags, moist towels)\n---\nJane prefers to only fly one leg per day - does not want any enroute stops\n---\nPick the routing with the least amount of turbulence even if that adds to the flying time\n---\nContinuously evaluate her condition to weigh against the need for medical diversion/attention\n---\nAfter flight, ensure she is in a position to care for herself and her dogs. If not, call appropriate assistance.\nMs. Shevlen often flies with dogs: Jo-Jo 44lbs and Pepper 44lbs\nFrequent airports - KVRB / KMLB / KFPR / CYYG\nKVRB / KMLB / KFPR: 835 Hibiscus Lane, Vero Beach, Florida, 32963\n-\nKVRB - does not have customs - use Fort Pierce KFPR  instead",
+                        "commercialPreferences": [],
+                        "accountCustomFields": [
+                            {
+                                "template": {
+                                    "id": 116,
+                                    "order": 0,
+                                    "name": "Account Overview",
+                                    "showInSales": true,
+                                    "showAsImportant": false
+                                },
+                                "description": "Access Level: Infinity\n\nBooking Guarantee: 8\n\nFlight Regulations: FEX\n\nSales Person:\nScott Wenz"
+                            },
+                            {
+                                "template": {
+                                    "id": 160,
+                                    "order": 1,
+                                    "name": "Aircraft Owned (1) & Syndicate",
+                                    "showInSales": true,
+                                    "showAsImportant": false
+                                },
+                                "description": "Praetor 500 Syndicate: 2428580 Ontario Inc."
+                            },
+                            {
+                                "template": {
+                                    "id": 165,
+                                    "order": 5,
+                                    "name": "Additional Ownership Notes (cc to: BOOKING NOTES)",
+                                    "showInSales": true,
+                                    "showAsImportant": false
+                                },
+                                "description": "Ensure jet has an operative lav - Jane has had extreme airsickness on a couple of our flights and on one occasion an ambulance had to be called \n---\nKeep Jane on the newest jet as possible (one where the seats don't jostle as much due to her air sickness) - her A/C is C-FSBR and she would prefer that one\n---\nInclude her flight in daily ops meetings to check weather and provide her with as much notice as possible for any potential weather/turbulence issues\n---\nAdd 90 min turn after her flights in case clean up is necessary"
+                            },
+                            {
+                                "template": {
+                                    "id": 162,
+                                    "order": 6,
+                                    "name": "Internal Account Notes (FYI ONLY - do not cc to flight)",
+                                    "showInSales": true,
+                                    "showAsImportant": false
+                                },
+                                "description": "Jane has a place near Vero Beach KVRB (no customs there so use KMLB/KFPR). She will most likely drive from the nearest airport to Vero Beach rather than take a 2nd flight - does not want any enroute stops"
+                            },
+                            {
+                                "template": {
+                                    "id": 163,
+                                    "order": 7,
+                                    "name": "Email Instructions (cc to: INTERNAL COMMENTS)",
+                                    "showInSales": true,
+                                    "showAsImportant": false
+                                },
+                                "description": "For final manifests, advise the year of AC Ms. Shevlen's flying on - wants the newest possible"
+                            },
+                            {
+                                "template": {
+                                    "id": 164,
+                                    "order": 8,
+                                    "name": "Notes for Pilots (cc to: FLIGHT NOTES)",
+                                    "showInSales": true,
+                                    "showAsImportant": false
+                                },
+                                "description": "Jane Shevlen is susceptible to extreme airsickness during turbulence - ensure extra sick bags available and accessible. \nPlace moist towelettes in the drink drawer to keep them cool - ensure Dramamine and Gingerale onboard - ensure operative lav\n---\nBefore takeoff please debrief Mrs. Shevlen prior to departure about any potential weather or turbulence - approach truthfully but also carefully to not build into her anxiety\n--\nAsk what you can do to make her more comfortable  for the flight (lighting, window shades, sick bags, moist towels)\n---\nJane prefers to only fly one leg per day - does not want any enroute stops\n---\nPick the routing with the least amount of turbulence even if that adds to the flying time\n---\nContinuously evaluate her condition to weigh against the need for medical diversion/attention\n---\nAfter flight, ensure she is in a position to care for herself and her dogs. If not, call appropriate assistance."
+                            },
+                            {
+                                "template": {
+                                    "id": 171,
+                                    "order": 11,
+                                    "name": "Pet Information (cc to: FLIGHT MANIFEST INFO, ANIMALS & FLIGHT NOTES)",
+                                    "showInSales": true,
+                                    "showAsImportant": false
+                                },
+                                "description": "Ms. Shevlen often flies with dogs: Jo-Jo 44lbs and Pepper 44lbs"
+                            },
+                            {
+                                "template": {
+                                    "id": 173,
+                                    "order": 13,
+                                    "name": "Preferred FBO (cc to: BOOKING NOTES & FLIGHT NOTES)",
+                                    "showInSales": true,
+                                    "showAsImportant": false
+                                },
+                                "description": "Frequent airports - KVRB / KMLB / KFPR / CYYG"
+                            },
+                            {
+                                "template": {
+                                    "id": 170,
+                                    "order": 14,
+                                    "name": "US Address (cc to: BOOKING NOTES & Customs - eAPIS)",
+                                    "showInSales": true,
+                                    "showAsImportant": false
+                                },
+                                "description": "KVRB / KMLB / KFPR: 835 Hibiscus Lane, Vero Beach, Florida, 32963\n-\nKVRB - does not have customs - use Fort Pierce KFPR  instead"
+                            }
+                        ]
+                    },
+                    "salesInfo": {
+                        "id": 854073,
+                        "firstName": "Kaila",
+                        "lastName": "Steinke",
+                        "account": null,
+                        "nickname": null,
+                        "changedManually": false
+                    },
+                    "currency": "CAD",
+                    "defaultCurrency": "CAD",
+                    "operatorCurrencyCode": "CAD",
+                    "displayPrice": 28240.00,
+                    "priceInOperatorCurrency": 28240.00,
+                    "origin": "EMAIL",
+                    "legInfo": {
+                        "legId": null,
+                        "flightNumber": "",
+                        "date": 1765643700000,
+                        "from": "MYNN",
+                        "fromId": 21448,
+                        "to": "CYUL",
+                        "toId": 14297,
+                        "duration": "3h13",
+                        "flightSequence": "MYNN-CYUL",
+                        "fromTimeZone": "America/Nassau"
+                    },
+                    "tailNum": "Add EMB East",
+                    "aircraftId": 5575,
+                    "validUntil": null,
+                    "unseenNotificationsCount": 1,
+                    "totalNotificationsCount": 11,
+                    "unseenAvinodeNotificationsCount": 0,
+                    "totalAvinodeNotificationsCount": 0,
+                    "rootId": 3532277,
+                    "hasChildren": null,
+                    "avinodeAccepted": null,
+                    "versionDetails": null,
+                    "operatorWorkflow": {
+                        "id": 786,
+                        "name": "PRIVATE",
+                        "operatorId": 209,
+                        "workflow": "FEX Guaranteed",
+                        "nature": 2,
+                        "order": 1,
+                        "hidden": false,
+                        "deleted": null,
+                        "cargo": null,
+                        "useFlightReleaseProcess": true,
+                        "fplType": "G",
+                        "operationType": {
+                            "id": 20,
+                            "label": "CAR 604 FEX — PRIVATE"
+                        },
+                        "is91Flight": true,
+                        "is135Flight": false
+                    },
+                    "externalOperator": null,
+                    "integrations": [],
+                    "tags": []
+                }
+            ],
+            "flightSelection": [
+                {
+                    "flight": {
+                        "id": 1020629,
+                        "operator": {
+                            "id": 209,
+                            "name": "AirSprint"
+                        },
+                        "bookingIdentifier": "BUAGM4",
+                        "bookingExternalIdentifier": null,
+                        "tripNumber": null,
+                        "bookingId": 3542674,
+                        "customerName": "Jane Shevlen",
+                        "customerAccountNumber": "114105",
+                        "customerId": 114105,
+                        "buyerFirstName": "Kelly",
+                        "buyerLastName": "Lennon",
+                        "flightNumber": null,
+                        "flightNumberSource": "FLO",
+                        "tailNumber": "C-FJAS",
+                        "workflow": "PRIVATE",
+                        "operatorWorkflow": {
+                            "id": 786,
+                            "name": "PRIVATE",
+                            "operatorId": 209,
+                            "workflow": "FEX Guaranteed",
+                            "nature": 2,
+                            "order": 1,
+                            "hidden": false,
+                            "deleted": null,
+                            "cargo": null,
+                            "useFlightReleaseProcess": true,
+                            "fplType": "G",
+                            "operationType": {
+                                "id": 20,
+                                "label": "CAR 604 FEX — PRIVATE"
+                            },
+                            "is91Flight": true,
+                            "is135Flight": false
+                        },
+                        "aircraftId": 5648,
+                        "flightType": "PAX",
+                        "aircraftType": "Legacy 450",
+                        "passengers": 6,
+                        "passengersActual": null,
+                        "maxCargo": 0.0,
+                        "modificationUser": {
+                            "id": 1,
+                            "firstName": "System",
+                            "middleName": null,
+                            "lastName": "FL3XX",
+                            "accountName": null,
+                            "nickname": "FL3",
+                            "pilot": false,
+                            "status": null,
+                            "jobTitle": null,
+                            "gender": "FEMALE",
+                            "weight": null,
+                            "height": null,
+                            "personnelNumber": null,
+                            "nationalityCountryName": null,
+                            "userCharacteristics": null
+                        },
+                        "modificationDate": 1765571625740,
+                        "revisionUser": {
+                            "id": 854073,
+                            "firstName": "Kaila",
+                            "middleName": "Carrie Lynn",
+                            "lastName": "Steinke",
+                            "accountName": null,
+                            "nickname": null,
+                            "pilot": false,
+                            "status": "ACTIVE",
+                            "jobTitle": "Personal Flight Concierge",
+                            "gender": "FEMALE",
+                            "weight": null,
+                            "height": null,
+                            "personnelNumber": null,
+                            "nationalityCountryName": "Canada",
+                            "userCharacteristics": null
+                        },
+                        "depDate": 1765643700000,
+                        "takeOff": 1765644060000,
+                        "depAirport": {
+                            "name": "Lynden Pindling International",
+                            "alternates": null,
+                            "longestRunwayLength": 3460.0,
+                            "widestRunwayWidth": 46.0,
+                            "airportElevation": 5.0,
+                            "icao": "MYNN",
+                            "airportid": 21448,
+                            "rescueAndFireFightingCategory": "A_8",
+                            "categoryInfo": {
+                                "category": "A",
+                                "remarks": null,
+                                "validFrom": null,
+                                "validTo": null
+                            },
+                            "pilotQualification": null,
+                            "handler": {
+                                "id": 562216727,
+                                "airportId": 21448,
+                                "company": "JET NASSAU",
+                                "mainContact": true,
+                                "global": false,
+                                "useMyHandling": null,
+                                "useFboOne": null,
+                                "fboOneTeamEmail": null,
+                                "fboOneShadow": false,
+                                "sourceType": "PRIVATE",
+                                "email": "jnas@jet-nassau.com",
+                                "dispatchNotes": "Has ice \nHas decaf\n\nNo cancellation fee for GT",
+                                "crewNotes": null
+                            },
+                            "requestedHandler": {
+                                "id": 562216727,
+                                "airportId": 21448,
+                                "company": "JET NASSAU",
+                                "mainContact": true,
+                                "global": false,
+                                "useMyHandling": null,
+                                "useFboOne": null,
+                                "fboOneTeamEmail": null,
+                                "fboOneShadow": false,
+                                "sourceType": "PRIVATE",
+                                "email": "jnas@jet-nassau.com",
+                                "dispatchNotes": "Has ice \nHas decaf\n\nNo cancellation fee for GT",
+                                "crewNotes": null
+                            },
+                            "servedCity": "Nassau",
+                            "iata": "NAS",
+                            "timeZone": "America/Nassau",
+                            "warning": false,
+                            "danger": false,
+                            "latitude": 25.039114,
+                            "longitude": -77.466368,
+                            "countryIso2": "BS",
+                            "faa": null,
+                            "localIdentifier": "MYNN",
+                            "category": "A"
+                        },
+                        "arrAirport": {
+                            "name": "Montréal Pierre-Elliott-Trudeau Intl, Qc",
+                            "alternates": null,
+                            "longestRunwayLength": 3353.0,
+                            "widestRunwayWidth": 61.0,
+                            "airportElevation": 37.0,
+                            "icao": "CYUL",
+                            "airportid": 14297,
+                            "rescueAndFireFightingCategory": "A_9",
+                            "categoryInfo": {
+                                "category": "A",
+                                "remarks": null,
+                                "validFrom": null,
+                                "validTo": null
+                            },
+                            "pilotQualification": null,
+                            "handler": {
+                                "id": 517480901,
+                                "airportId": 14297,
+                                "company": "EXECAIRE AVIATION",
+                                "mainContact": true,
+                                "global": false,
+                                "useMyHandling": null,
+                                "useFboOne": null,
+                                "fboOneTeamEmail": null,
+                                "fboOneShadow": false,
+                                "sourceType": "PRIVATE",
+                                "email": "montrealfbo@execaire.com",
+                                "dispatchNotes": "",
+                                "crewNotes": null
+                            },
+                            "requestedHandler": null,
+                            "servedCity": "Dorval",
+                            "iata": "YUL",
+                            "timeZone": "America/Toronto",
+                            "warning": false,
+                            "danger": false,
+                            "latitude": 45.4704639,
+                            "longitude": -73.7409306,
+                            "countryIso2": "CA",
+                            "faa": null,
+                            "localIdentifier": null,
+                            "category": "A"
+                        },
+                        "landing": 1765655640000,
+                        "arrDate": 1765656000000,
+                        "mvtBlocksOffEst": null,
+                        "mvtBlocksOnEst": null,
+                        "cfmuCalcTakeOff": null,
+                        "details": {
+                            "id": null,
+                            "hndlgAndSvcs": {
+                                "id": 4048751,
+                                "worst": "REQ_REVISED",
+                                "target": "DEPARTURE",
+                                "hndlr": "OK",
+                                "fuel": null,
+                                "migr": "OK",
+                                "cstm": "REQ_REVISED",
+                                "ctrn": "OK",
+                                "htc": null,
+                                "grndTrnsp": null
+                            },
+                            "notif": {
+                                "id": 1893754,
+                                "worst": "OK_REVISED",
+                                "target": "DEPARTURE",
+                                "movementMsg": "DO",
+                                "manifest": null,
+                                "crew": null,
+                                "pax": "OK_REVISED"
+                            },
+                            "crw": {
+                                "id": 1261644,
+                                "worst": "DO",
+                                "target": "DEPARTURE",
+                                "crewBriefing": "REQ",
+                                "crewAssign": "DO",
+                                "dtl": "OK"
+                            },
+                            "log": {
+                                "id": 612745,
+                                "worst": "DO",
+                                "target": "DEPARTURE",
+                                "preFlight": null,
+                                "postFlight": null,
+                                "deice": null,
+                                "defect": "DO",
+                                "documents": null,
+                                "time": null,
+                                "maintenance": "OK"
+                            },
+                            "nts": {
+                                "id": null,
+                                "worst": null,
+                                "target": "DEPARTURE",
+                                "notes": null
+                            },
+                            "flt": {
+                                "weightAndBalance": "NR",
+                                "flightPlan": "OK",
+                                "flightRiskAssessment": "NA",
+                                "slot": "NR",
+                                "fuel": "OK",
+                                "flightPlanAndFlightRiskAssessment": "OK",
+                                "overflightPermissions": "NR"
+                            },
+                            "flightRelease": {
+                                "id": 1020629,
+                                "worst": "DO",
+                                "target": null,
+                                "flightRelease": "DO"
+                            },
+                            "tasks": {
+                                "worst": "NA",
+                                "tasks": []
+                            }
+                        },
+                        "detailsArrival": {
+                            "id": null,
+                            "hndlgAndSvcs": {
+                                "id": 4048752,
+                                "worst": "REQ_REVISED",
+                                "target": "ARRIVAL",
+                                "hndlr": "OK",
+                                "fuel": null,
+                                "migr": "OK",
+                                "cstm": "REQ_REVISED",
+                                "ctrn": null,
+                                "htc": "OK",
+                                "grndTrnsp": "OK"
+                            },
+                            "notif": {
+                                "id": 1893755,
+                                "worst": "OK_REVISED",
+                                "target": "ARRIVAL",
+                                "movementMsg": "DO",
+                                "manifest": null,
+                                "crew": "NA",
+                                "pax": "NA"
+                            },
+                            "crw": {
+                                "id": 1261645,
+                                "worst": "DO",
+                                "target": "ARRIVAL",
+                                "crewBriefing": null,
+                                "crewAssign": null,
+                                "dtl": null
+                            },
+                            "log": {
+                                "id": null,
+                                "worst": "DO",
+                                "target": "ARRIVAL",
+                                "preFlight": null,
+                                "postFlight": null,
+                                "deice": null,
+                                "defect": null,
+                                "documents": null,
+                                "time": null,
+                                "maintenance": null
+                            },
+                            "nts": {
+                                "id": null,
+                                "worst": null,
+                                "target": "ARRIVAL",
+                                "notes": null
+                            },
+                            "flt": {
+                                "weightAndBalance": "NA",
+                                "flightPlan": "NA",
+                                "flightRiskAssessment": null,
+                                "slot": "OK",
+                                "fuel": "NR",
+                                "flightPlanAndFlightRiskAssessment": "NA",
+                                "overflightPermissions": null
+                            },
+                            "flightRelease": {
+                                "id": 1020629,
+                                "worst": null,
+                                "target": null,
+                                "flightRelease": "DO"
+                            },
+                            "tasks": {
+                                "worst": "NA",
+                                "tasks": []
+                            }
+                        },
+                        "worstStatus": "REQ_REVISED",
+                        "oldLeg": {
+                            "id": 13435496,
+                            "flightNumber": "",
+                            "flightNumberSource": "FLO",
+                            "worstStatus": null,
+                            "earliestDeparture": 1765645200000,
+                            "latestArrival": 1765657500000,
+                            "from": {
+                                "id": 21448,
+                                "avgTaxiInTime": null,
+                                "avgTaxiOutTime": null,
+                                "avgTurnaroundTime": null,
+                                "cfmuTaxiInTime": null,
+                                "cfmuTaxiOutTime": null,
+                                "elevation": 5.0,
+                                "latitude": 25.039114,
+                                "longitude": -77.466368,
+                                "icao": "MYNN",
+                                "iata": "NAS",
+                                "faa": null,
+                                "localIdentifier": "MYNN",
+                                "longestRunwayLength": 3460.0,
+                                "widestRunwayWidth": 46.0,
+                                "servedCity": "Nassau",
+                                "state": null,
+                                "country": "BS",
+                                "timeZone": "America/Nassau",
+                                "rescueFireCategory": "A_8",
+                                "rescueFireHeliCategory": null,
+                                "aid": "APT-XE2A-9GAX",
+                                "name": "Lynden Pindling International",
+                                "countryDetails": {
+                                    "iso2": "BS",
+                                    "iso3": "BHS",
+                                    "isoNumeric": null,
+                                    "name": "Bahamas",
+                                    "officialName": "Bahamas",
+                                    "localIdentifierName": null
+                                },
+                                "servedCityGoverningDistrict": null,
+                                "administrativeCity": null,
+                                "administrativeCityGoverningDistrict": null,
+                                "distanceFromSearchCoordinates": null,
+                                "fuelPriceIndex": null,
+                                "fuelPriceIndexComercial": null,
+                                "customsAvailability": "AVAILABLE",
+                                "operatorCategoryInfo": null,
+                                "operatorCategory": null,
+                                "airportElevation": 5.0
+                            },
+                            "to": {
+                                "id": 14297,
+                                "avgTaxiInTime": null,
+                                "avgTaxiOutTime": null,
+                                "avgTurnaroundTime": null,
+                                "cfmuTaxiInTime": 420000,
+                                "cfmuTaxiOutTime": 1140000,
+                                "elevation": 37.0,
+                                "latitude": 45.4704639,
+                                "longitude": -73.7409306,
+                                "icao": "CYUL",
+                                "iata": "YUL",
+                                "faa": null,
+                                "localIdentifier": null,
+                                "longestRunwayLength": 3353.0,
+                                "widestRunwayWidth": 61.0,
+                                "servedCity": "Dorval",
+                                "state": "QC",
+                                "country": "CA",
+                                "timeZone": "America/Toronto",
+                                "rescueFireCategory": "A_9",
+                                "rescueFireHeliCategory": null,
+                                "aid": "APT-7Z6U-F5BH",
+                                "name": "Montréal Pierre-Elliott-Trudeau Intl, Qc",
+                                "countryDetails": {
+                                    "iso2": "CA",
+                                    "iso3": "CAN",
+                                    "isoNumeric": null,
+                                    "name": "Canada",
+                                    "officialName": "Canada",
+                                    "localIdentifierName": null
+                                },
+                                "servedCityGoverningDistrict": null,
+                                "administrativeCity": null,
+                                "administrativeCityGoverningDistrict": null,
+                                "distanceFromSearchCoordinates": null,
+                                "fuelPriceIndex": null,
+                                "fuelPriceIndexComercial": null,
+                                "customsAvailability": "AVAILABLE",
+                                "operatorCategoryInfo": null,
+                                "operatorCategory": null,
+                                "airportElevation": 37.0
+                            },
+                            "block": 205,
+                            "passengers": 6,
+                            "maxCargo": 0.0,
+                            "cargoUnit": "POUND",
+                            "patients": 0,
+                            "warnings": null,
+                            "oldLeg": null,
+                            "aircraftId": 5648,
+                            "aircraftTailNumber": "C-FJAS",
+                            "distance": 1240,
+                            "type": "PAX",
+                            "legPrice": 0,
+                            "flightId": null,
+                            "reviseFlight": null,
+                            "cmdName": null,
+                            "showInDocument": true,
+                            "crewSwap": false,
+                            "techStop": null,
+                            "fuelStop": null,
+                            "datesTBA": null,
+                            "originalTaxiTimeDeparture": null,
+                            "taxiTimeDeparture": null,
+                            "originalTaxiTimeArrival": null,
+                            "taxiTimeArrival": null,
+                            "crewMembers": null,
+                            "dailyDutyTime": 280,
+                            "dailyFlightTime": 205,
+                            "flight24": 205,
+                            "flightTimeCalculationResult": {
+                                "provider": null,
+                                "estimatedElapsedTime": 0,
+                                "blockTime": 0,
+                                "status": "NOT_CALCULATED",
+                                "flightLevel": 0,
+                                "route": null,
+                                "flightTimeWithinDelta": false,
+                                "originHash": 0,
+                                "warnings": [],
+                                "errors": [],
+                                "empty": true
+                            },
+                            "flightTimeSource": "FL3XX",
+                            "rejectReasons": [],
+                            "otherRejectReason": null,
+                            "status": "OK",
+                            "feasibilityCheckStatus": null,
+                            "notes": null,
+                            "posExplainer": null,
+                            "postFlightLocked": false,
+                            "operatorWorkflow": null,
+                            "modificationDate": 1765477840802,
+                            "modificationUser": {
+                                "id": 619069,
+                                "firstName": "Hugh",
+                                "middleName": "",
+                                "lastName": "Baillie",
+                                "accountName": null,
+                                "nickname": null,
+                                "pilot": false,
+                                "status": "ACTIVE",
+                                "jobTitle": "Duty Manager",
+                                "gender": "MALE",
+                                "weight": null,
+                                "height": null,
+                                "personnelNumber": null,
+                                "nationalityCountryName": null,
+                                "userCharacteristics": null
+                            },
+                            "rocketRouteResult": {
+                                "provider": null,
+                                "estimatedElapsedTime": 0,
+                                "blockTime": 0,
+                                "status": "NOT_CALCULATED",
+                                "flightLevel": 0,
+                                "route": null,
+                                "flightTimeWithinDelta": false,
+                                "originHash": 0,
+                                "warnings": [],
+                                "errors": [],
+                                "empty": true
+                            },
+                            "maxFlightTime": 600,
+                            "maxDutyTime": 840
+                        },
+                        "ffCat": null,
+                        "aircraftReqRw": 1190.854,
+                        "flightDetails": {
+                            "dep": {
+                                "handlerName": "JET NASSAU",
+                                "catering": null,
+                                "numberOfCateringServices": 2,
+                                "gndTrsService": null,
+                                "gndTrs": null,
+                                "hotacService": null,
+                                "hotacs": null,
+                                "ppr": null,
+                                "fuelCurrency": "USD",
+                                "fuelPrice": null,
+                                "fuelPriceIndex": null,
+                                "fuelPriceIndexCommercial": null,
+                                "slotFromTime": null,
+                                "slotToTime": null,
+                                "pprFromTime": null,
+                                "pprToTime": null,
+                                "numberOfCountries": 0,
+                                "overalCountriesTodo": 0,
+                                "numberOfOverFlightCountries": 0,
+                                "overalOverFlightCountriesTodo": 0
+                            },
+                            "arr": {
+                                "handlerName": "EXECAIRE AVIATION",
+                                "catering": null,
+                                "numberOfCateringServices": null,
+                                "gndTrsService": "COOP TAXI DE L'OUEST",
+                                "gndTrs": 1,
+                                "hotacService": null,
+                                "hotacs": 2,
+                                "ppr": null,
+                                "fuelCurrency": "USD",
+                                "fuelPrice": null,
+                                "fuelPriceIndex": null,
+                                "fuelPriceIndexCommercial": null,
+                                "slotFromTime": 1765655700000,
+                                "slotToTime": null,
+                                "pprFromTime": null,
+                                "pprToTime": null,
+                                "numberOfCountries": 0,
+                                "overalCountriesTodo": 0,
+                                "numberOfOverFlightCountries": 0,
+                                "overalOverFlightCountriesTodo": 0
+                            },
+                            "catering": null,
+                            "cmd": {
+                                "id": 395655,
+                                "firstName": "Steward",
+                                "middleName": "John",
+                                "lastName": "Van Male",
+                                "accountName": null,
+                                "nickname": "SJV",
+                                "pilot": true,
+                                "status": "ACTIVE",
+                                "jobTitle": "Captain",
+                                "gender": "MALE",
+                                "weight": null,
+                                "height": 0.0,
+                                "personnelNumber": "628",
+                                "nationalityCountryName": "Canada",
+                                "userCharacteristics": {
+                                    "eyeColor": null,
+                                    "hairColor": null,
+                                    "defaultLuggageWeight": 13.609999656677246
+                                },
+                                "pilotRole": "CMD",
+                                "crewPosition": null,
+                                "crewType": null,
+                                "acknowledgementDate": 1765479085170,
+                                "readFromCrewApp": 1765479085170
+                            },
+                            "fo": {
+                                "id": 395559,
+                                "firstName": "Robert",
+                                "middleName": "Lewis Cameron",
+                                "lastName": "Foster",
+                                "accountName": null,
+                                "nickname": "RLF",
+                                "pilot": true,
+                                "status": "ACTIVE",
+                                "jobTitle": "First Officer",
+                                "gender": "MALE",
+                                "weight": null,
+                                "height": null,
+                                "personnelNumber": "698",
+                                "nationalityCountryName": "Canada",
+                                "userCharacteristics": {
+                                    "eyeColor": null,
+                                    "hairColor": null,
+                                    "defaultLuggageWeight": 13.609999656677246
+                                },
+                                "pilotRole": "FO",
+                                "crewPosition": null,
+                                "crewType": null,
+                                "acknowledgementDate": 1765478975588,
+                                "readFromCrewApp": 1765478975588
+                            },
+                            "fa": [],
+                            "ca": [],
+                            "additionalCrew": [],
+                            "onBoardEngineers": [],
+                            "emptySeats": {
+                                "fd": 0,
+                                "fdExt": 0,
+                                "cc": 0,
+                                "ccExt": 0,
+                                "eng": 0,
+                                "expected": {
+                                    "fd": 2,
+                                    "fdExt": 0,
+                                    "cc": 0,
+                                    "ccExt": 0,
+                                    "eng": 0
+                                }
+                            },
+                            "pax": [
+                                {
+                                    "id": 568400,
+                                    "firstName": "Jonathan",
+                                    "middleName": "Patrick Nelse",
+                                    "lastName": "Aune",
+                                    "accountName": null,
+                                    "nickname": null,
+                                    "pilot": false,
+                                    "status": "ACTIVE",
+                                    "jobTitle": null,
+                                    "gender": "MALE",
+                                    "weight": null,
+                                    "height": null,
+                                    "personnelNumber": null,
+                                    "nationalityCountryName": "Canada",
+                                    "userCharacteristics": null
+                                }
+                            ],
+                            "fpl": "G",
+                            "wAndB": false,
+                            "fuelUnit": "LITER",
+                            "numberOfPax": 6,
+                            "cargo": 117.02683,
+                            "blocksOn": null,
+                            "blocksOff": null,
+                            "takeOff": null,
+                            "landing": null,
+                            "takeOffDefault": 1765644060000,
+                            "landingDefault": 1765655640000,
+                            "blocksOffDefault": 1765643700000,
+                            "blocksOnDefault": 1765656000000,
+                            "etaDefault": 1765655640000,
+                            "techlogNumber": null,
+                            "hilNumber": null,
+                            "maintananceExpired": null,
+                            "maintananceCount": 0,
+                            "totalLandings": null,
+                            "noFlightApproaches": null,
+                            "approachesDiscrepancy": null
+                        },
+                        "warnings": [
+                            {
+                                "id": 49335959,
+                                "type": "OPERATIONAL_NOTE_ALERT",
+                                "relatedObjectId": 14297,
+                                "relatedObjectClass": "com.fl3xx.flo.shared.entity.Airport",
+                                "relatedObjectName": "CYUL",
+                                "notes": "OPERATIONAL RESTRICTIONS/CAUTIONS\n\nOperational Restrictions:\n-\tSlot reservation required (see operational note for more details)\n\nCautions: \n-\tMultiple hot spots near threshold RWY 28\n-\tHold short line on A3 set far back from runway – use caution in poor weather. \n-\tNoise: Maintain 3000 or above until established on Final. No turns below 4000’ on departure from 24L/R",
+                                "validUntil": null,
+                                "aircraftCategory": null,
+                                "aircraftHeliCategory": null,
+                                "airportCategory": null,
+                                "airportHeliCategory": null,
+                                "extendedAirportCategory": null,
+                                "extendedAirportHeliCategory": null
+                            },
+                            {
+                                "id": 49335960,
+                                "type": "OPERATIONAL_NOTE",
+                                "relatedObjectId": 21448,
+                                "relatedObjectClass": "com.fl3xx.flo.shared.entity.Airport",
+                                "relatedObjectName": "MYNN",
+                                "notes": "DE-ICE/ANTI ICE: \n\n•\tNot available",
+                                "validUntil": null,
+                                "aircraftCategory": null,
+                                "aircraftHeliCategory": null,
+                                "airportCategory": null,
+                                "airportHeliCategory": null,
+                                "extendedAirportCategory": null,
+                                "extendedAirportHeliCategory": null
+                            },
+                            {
+                                "id": 49335961,
+                                "type": "OPERATIONAL_NOTE",
+                                "relatedObjectId": 14297,
+                                "relatedObjectClass": "com.fl3xx.flo.shared.entity.Airport",
+                                "relatedObjectName": "CYUL",
+                                "notes": "DE-ICE/ANTI-ICE\n\nType 4 hangar anti-ice available through Execaire. \n\nCDF Company: AeroMag\nType(s) Available: Type 1 & 4\nBrand: LNT E188 / Endurance EG106\nHours of Operation: 0500-2300 (OT available on case-by-case basis)\nPhone: 514-636-1850\nSpecial Procedures: AeroMag Form Required (procedure below)\n\nAeroMag Form:\n- Crew to request form from FBO CSR team or Flight Support after hours.\n- Crew to fill out applicable information on the form. \n- Execaire will send the completed form to AeroMag on behalf of the crew during regular business hours.\n- Form to be sent to yuladhoc@aeromag2000.com\n- AMEX ending in 1001 is on file. Crew can put \"On File\" in the payment section.\n- Send the form 30 min – 1 hour prior to make sure we have time to process and approve the spot\n- Form location (FS): Dropbox/FC Flight Ops Shared/Airport Specific Documents/CYUL\n- PH: 514-636-1930 ext. 127",
+                                "validUntil": null,
+                                "aircraftCategory": null,
+                                "aircraftHeliCategory": null,
+                                "airportCategory": null,
+                                "airportHeliCategory": null,
+                                "extendedAirportCategory": null,
+                                "extendedAirportHeliCategory": null
+                            },
+                            {
+                                "id": 49335962,
+                                "type": "OPERATIONAL_NOTE_ALERT",
+                                "relatedObjectId": 21448,
+                                "relatedObjectClass": "com.fl3xx.flo.shared.entity.Airport",
+                                "relatedObjectName": "MYNN",
+                                "notes": "RESTRICTIONS:\n\n•\tMINIMUM 1.5 HOUR TURN TIME",
+                                "validUntil": null,
+                                "aircraftCategory": null,
+                                "aircraftHeliCategory": null,
+                                "airportCategory": null,
+                                "airportHeliCategory": null,
+                                "extendedAirportCategory": null,
+                                "extendedAirportHeliCategory": null
+                            },
+                            {
+                                "id": 49335963,
+                                "type": "OPERATIONAL_NOTE",
+                                "relatedObjectId": 21448,
+                                "relatedObjectClass": "com.fl3xx.flo.shared.entity.Airport",
+                                "relatedObjectName": "MYNN",
+                                "notes": "CUSTOMS [06MAY24]:\n\nAvailable\n•\tLocation: Proceed to FBO\n•\tHours of operation: 0700 - 2200, callout fee of $500/HR between 2300 - 0600\n\nNotes:\n•\t$125.00 for processing - call in advance to arrange\n•\tOnboard customs clearance can be arranged through handler for $500USD.",
+                                "validUntil": null,
+                                "aircraftCategory": null,
+                                "aircraftHeliCategory": null,
+                                "airportCategory": null,
+                                "airportHeliCategory": null,
+                                "extendedAirportCategory": null,
+                                "extendedAirportHeliCategory": null
+                            },
+                            {
+                                "id": 49335964,
+                                "type": "OPERATIONAL_NOTE",
+                                "relatedObjectId": 14297,
+                                "relatedObjectClass": "com.fl3xx.flo.shared.entity.Airport",
+                                "relatedObjectName": "CYUL",
+                                "notes": "CUSTOMS - AOE\n\nLocation: Execaire FBO\nHours of Operation: 24/7\nPhone: 1-888-226-7277 / 514-633-7752\nFax: 905-679-3300\n\nCommercial Customs Clearance: \n(If maintenance performed on aircraft outside of Canada)\n1.\tProceed with standard CANPASS arrival set up process.\n2.\tThe customs broker will electronically submit all necessary documentation to the Commercial Customs Office at YUL.\n3.\tOnce the broker has confirmation the documents have been accepted and CANPASS has been setup you are good to proceed. \n4.\tOn landing, report with CANPASS as you normally would. If there are issues or questions on the commercial clearance, officers from the commercial customs office will meet aircraft. \n5.\tNo further requirements are needed. This procedure has been approved by Sebastien-Max Huneault, Superintendent, commercial station CBSA YUL. \nContact Information: 1.514-633-7844 ext. 2001 or 1-800-461-9999",
+                                "validUntil": null,
+                                "aircraftCategory": null,
+                                "aircraftHeliCategory": null,
+                                "airportCategory": null,
+                                "airportHeliCategory": null,
+                                "extendedAirportCategory": null,
+                                "extendedAirportHeliCategory": null
+                            },
+                            {
+                                "id": 49335965,
+                                "type": "OPERATIONAL_NOTE",
+                                "relatedObjectId": 14297,
+                                "relatedObjectClass": "com.fl3xx.flo.shared.entity.Airport",
+                                "relatedObjectName": "CYUL",
+                                "notes": "TC NOTES [25NOV25]:\n- When positioning pilots between CYUL-CYHU, please allow for 1:15 travel time.",
+                                "validUntil": null,
+                                "aircraftCategory": null,
+                                "aircraftHeliCategory": null,
+                                "airportCategory": null,
+                                "airportHeliCategory": null,
+                                "extendedAirportCategory": null,
+                                "extendedAirportHeliCategory": null
+                            },
+                            {
+                                "id": 49335966,
+                                "type": "OPERATIONAL_NOTE",
+                                "relatedObjectId": 21448,
+                                "relatedObjectClass": "com.fl3xx.flo.shared.entity.Airport",
+                                "relatedObjectName": "MYNN",
+                                "notes": "FBO INFORMATION [06MAY24]:\n\nJet Nassau\n•\tPH: 242-377-3355\n•\tFax: 242-377-3475\n•\tEmail: jnas@jet-nassau.com\n•\tHours of operation: 0700L - 2200L\n•\tHangar space available on request\n\n\nFUEL:\n\n•\tAvFuel (Contract) / AvCard or AmEx\n•\tOrganized through FBO in advance\n•\t24hr availability on request",
+                                "validUntil": null,
+                                "aircraftCategory": null,
+                                "aircraftHeliCategory": null,
+                                "airportCategory": null,
+                                "airportHeliCategory": null,
+                                "extendedAirportCategory": null,
+                                "extendedAirportHeliCategory": null
+                            },
+                            {
+                                "id": 49335967,
+                                "type": "OPERATIONAL_NOTE",
+                                "relatedObjectId": 21448,
+                                "relatedObjectClass": "com.fl3xx.flo.shared.entity.Airport",
+                                "relatedObjectName": "MYNN",
+                                "notes": "NOTES:\n\n•\tFlight must be filed 90 mins prior to ETD. Flights departing prior 0700 local file flight plans the night prior to avoid delays.\n\n•\tUse caution for non-standard hold short lines between RWY 14/32 and 09/27 on B1 taxiway if given a clearance to cross one runway but hold short the other, as this is a very short taxiway in close proximity to both runways.\n\n•\tPer Jet Nassau, only Inbound and Outbound GenDec required when sending handling requests for private flights (Email 1225074). Please note that document requirements may change as operations progress.",
+                                "validUntil": null,
+                                "aircraftCategory": null,
+                                "aircraftHeliCategory": null,
+                                "airportCategory": null,
+                                "airportHeliCategory": null,
+                                "extendedAirportCategory": null,
+                                "extendedAirportHeliCategory": null
+                            },
+                            {
+                                "id": 49335968,
+                                "type": "OPERATIONAL_NOTE",
+                                "relatedObjectId": 14297,
+                                "relatedObjectClass": "com.fl3xx.flo.shared.entity.Airport",
+                                "relatedObjectName": "CYUL",
+                                "notes": "FBO INFORMATION\n\nYUL Execaire FBO - 514-636-5870\n\nGPU: Yes\nHangar: AirSprint has 2 spots available. All other spots are on an as available basis. \nShuttle: Available\nThere is a keypad for entry into the commissary area - the code is 5870#  \nRemind crew not to lock the door to the Commissary Room\nFuel: When fueling at CYYZ Execaire, please attempt to take the max fuel that will still allow you to meet downline requirements for waiving ramp fees",
+                                "validUntil": null,
+                                "aircraftCategory": null,
+                                "aircraftHeliCategory": null,
+                                "airportCategory": null,
+                                "airportHeliCategory": null,
+                                "extendedAirportCategory": null,
+                                "extendedAirportHeliCategory": null
+                            },
+                            {
+                                "id": 49335969,
+                                "type": "OPERATIONAL_NOTE",
+                                "relatedObjectId": 14297,
+                                "relatedObjectClass": "com.fl3xx.flo.shared.entity.Airport",
+                                "relatedObjectName": "CYUL",
+                                "notes": "OS NOTES:  USING SKYSERVICE FBO INSTEAD OF EXECAIRE - THIS IS POSSIBLE HOWEVER OWNERS WILL NEED TO PAY THE FBO SERVICE FEES OF:\n$450 CAD - CJ2/3\n$1150 - EMB",
+                                "validUntil": null,
+                                "aircraftCategory": null,
+                                "aircraftHeliCategory": null,
+                                "airportCategory": null,
+                                "airportHeliCategory": null,
+                                "extendedAirportCategory": null,
+                                "extendedAirportHeliCategory": null
+                            },
+                            {
+                                "id": 49335970,
+                                "type": "OPERATIONAL_NOTE_ALERT",
+                                "relatedObjectId": 14297,
+                                "relatedObjectClass": "com.fl3xx.flo.shared.entity.Airport",
+                                "relatedObjectName": "CYUL",
+                                "notes": "SLOT RESERVATION REQUIREMENT\n\nContact Info: Airport office for slot inquiries 514-633-3223\nProcedure: OC team to book through OCS website. Required 24/7 for arrivals/departures.\nSlots to be booked 10 days out \nValidity Period: +/- 15 minutes\nCrew: Do NOT land in YUL without a slot, even if ATC says it’s okay.",
+                                "validUntil": null,
+                                "aircraftCategory": null,
+                                "aircraftHeliCategory": null,
+                                "airportCategory": null,
+                                "airportHeliCategory": null,
+                                "extendedAirportCategory": null,
+                                "extendedAirportHeliCategory": null
+                            },
+                            {
+                                "id": null,
+                                "type": "UNCORRECTED_HOLD_ITEM",
+                                "relatedObjectId": 5648,
+                                "relatedObjectClass": "com.fl3xx.flo.shared.entity.Aircraft",
+                                "relatedObjectName": "C-FJAS",
+                                "notes": "\nNOT APPROVED FOR NAT OPS, NOT RECOMMENDED FOR PAC OPS - Due date at: 2030-01-01",
+                                "validUntil": null,
+                                "aircraftCategory": null,
+                                "aircraftHeliCategory": null,
+                                "airportCategory": null,
+                                "airportHeliCategory": null,
+                                "extendedAirportCategory": null,
+                                "extendedAirportHeliCategory": null
+                            }
+                        ],
+                        "unseenNotificationsCount": 2,
+                        "unseenNotificationsByConversationType": {
+                            "CREW_BRIEFING": 2
+                        },
+                        "notes": "SJV and RLF to ensure the following on board C-FJAS  as collected from CYYC OST on the 12th of December ( REF UVIXX):\n\n2x Chilled Ruinard champagne or Belvedere or Grey Goose vodka \nChablis Grand Cru\nCasanova di Neri Tenuta Nuova Brunello di Montalcino 2018\nSalted pistachios with Shell\nSmarties\nFrito's regular chips\nCheddar sun chips\nFlavored Perrier (lime, lemon or grapefruit)\nOrange Juice\n\nAune is pronounced AWNEE\n-\nJonathan Aune and Georgia Liakopoulos are married\n-\nPlease ensure the champagne is extra chilled\n-\nPlease verify expiry dates on all the commissary as owner has complained on previous flights that certain items have been expired\n-\nWhen Mr. Jonathan Aune is travelling (not to be catered) stored in CYUL/CYYZ:\n-2x Chilled Ruinard champagne or Veuve Clicquot required\nPreferred champagne is Ruinard. If there's not Ruinard, then he will do Veuve Clicquot. Please note that if they are the smaller bottles, then he will require 3 or 4 per flight. If they are the regular sized bottles, 1 will be fine unless requesting more\n-Belvedere or Grey Goose vodka required\n-Chablis Grand Cru required\n-Casanova di Neri Tenuta Nuova Brunello di Montalcino 2018 required\n-\nRed-Cristom Pinot Noir Eileen vineyard 2018 or 2019 (fyi this wine is tough to find but can be a second option if the Brunello is not available) - the alternative is Domaine Faiveley Nuits-Saint-Georges les Montroziers 2020\n-",
+                        "planningNotes": "05NOV CYUL-TBPB\n12NOV TBPB-MBPV\n24NOV MBPV-CYUL\n03DEC CYUL-MYNN\n13DEC MYNN-CYUL [ROUND TRIP]\n-\n8HR INFINITY P500 OWNER REQUESTING P500",
+                        "bookingNotes": "Praetor 500 Syndicate: 2428580 Ontario Inc. [No conflict: 10/22]\n-\nPassengers are from Carriage House Air Limited Partnership, by its general partner, 1000547620 Ontario Inc.\n-\nSSA: MYNN\n-\nFadia advised re change to Execaire FBO in YYZ and YUL, acknowledged\n\nND:\nPreferences confirmed from CYYZ OST via HS: 1942269, and Pilots notified on HS:1942291/C-FJAS/12 DECEMBER/SM",
+                        "externalNotes": null,
+                        "setup": true,
+                        "readFromCrewApp": null,
+                        "crewTime": null,
+                        "crewNotes": null,
+                        "opsTeamIds": [
+                            422,
+                            473,
+                            475,
+                            333
+                        ],
+                        "distanceFromToKm": 2296,
+                        "acknowledgementDate": null,
+                        "feasibilityCheckStatus": null,
+                        "paymentGuarantee": "NOT_GUARANTEED",
+                        "paymentStatus": "NOT_PAID",
+                        "serviceCancellationRequired": false,
+                        "aoc": "AirSprint Inc.",
+                        "aocId": 90751,
+                        "serviceCostBookingStatus": "OPEN",
+                        "crewWarningsSummary": null,
+                        "cancelled": false
+                    },
+                    "selected": true
+                }
+            ]
+        }
+    },
+    "flightId": null,
+    "crewAssign": {
+        "id": null,
+        "status": "DO",
+        "by": "CUSTOM1",
+        "hasOnBoardEng": false,
+        "numberOfFA": 0,
+        "commander": {
+            "id": 2709050,
+            "user": {
+                "id": 395655,
+                "firstName": "Steward",
+                "middleName": "John",
+                "lastName": "Van Male",
+                "accountName": null,
+                "nickname": "SJV",
+                "pilot": true,
+                "status": "ACTIVE",
+                "jobTitle": "Captain",
+                "gender": "MALE",
+                "weight": null,
+                "height": 0.0,
+                "personnelNumber": "628",
+                "nationalityCountryName": null,
+                "userCharacteristics": {
+                    "eyeColor": null,
+                    "hairColor": null,
+                    "defaultLuggageWeight": 13.609999656677246
+                },
+                "catering": "No allergies\nNo seafood please\neats anything else\nprefer healthy options",
+                "interest": "Tailwinds #909992649\nWorld Fuel #236962183\nAir Canada #929 249 092\nWestjet #555801352\nPLEASE BOOK RENTAL CAR FOR YEG LAYOVERS AND CYVR LAYOVERS\nNo allergies\nNo seafood please\neats anything else\nprefer healthy options",
+                "important": "PLEASE BOOK RENTAL CAR FOR YEG LAYOVERS AND CYVR LAYOVERS\nNo allergies\nNo seafood please\neats anything else\nprefer healthy options",
+                "preferences": [
+                    {
+                        "template": {
+                            "id": 462,
+                            "order": 1,
+                            "name": "Loyalty Memberships (DO NOT COPY TO FLIGHT)",
+                            "showInPax": true,
+                            "showInCatering": false,
+                            "showInSales": true,
+                            "showAsImportant": false
+                        },
+                        "description": "Tailwinds #909992649\nWorld Fuel #236962183\nAir Canada #929 249 092\nWestjet #555801352"
+                    },
+                    {
+                        "template": {
+                            "id": 463,
+                            "order": 2,
+                            "name": "Important (FYI ONLY - DO NOT COPY TO BOOKING)",
+                            "showInPax": true,
+                            "showInCatering": false,
+                            "showInSales": true,
+                            "showAsImportant": true
+                        },
+                        "description": "PLEASE BOOK RENTAL CAR FOR YEG LAYOVERS AND CYVR LAYOVERS"
+                    },
+                    {
+                        "template": {
+                            "id": 461,
+                            "order": 3,
+                            "name": "Catering Preferences (COPY TO CATERING TAB - DO NOT COPY INFO FOR BC)",
+                            "showInPax": true,
+                            "showInCatering": true,
+                            "showInSales": true,
+                            "showAsImportant": true
+                        },
+                        "description": "No allergies\nNo seafood please\neats anything else\nprefer healthy options"
+                    }
+                ],
+                "phoneNumber": "",
+                "birthDate": -69638400000,
+                "birthPlace": "Calgary",
+                "salutation": "unDef",
+                "emailAddress": "svanmale@airsprint.com",
+                "idsCount": 6,
+                "vaccinations": null
+            },
+            "idCard": {
+                "id": 231111,
+                "number": "AL678654",
+                "type": "PASSPORT",
+                "userId": 395655,
+                "issueCountry": {
+                    "id": 108,
+                    "name": "Kanada",
+                    "iso2": "CA",
+                    "continent": "Nordamerika",
+                    "intname": "Canada",
+                    "capital": "Ottawa",
+                    "iso3": "CAN",
+                    "ioc": "CAN",
+                    "domain": ".ca",
+                    "currencyCode": null,
+                    "phone": "+1NXX"
+                },
+                "copy": {
+                    "id": 6286760,
+                    "name": "20220207-233011-391-Passport_SJV.pdf",
+                    "uuid": "30680f49-78b9-4862-a01f-0b23153f8316",
+                    "customName": null,
+                    "originalName": "Passport_SJV.pdf",
+                    "fileSize": 75596,
+                    "imageSizeX": 0,
+                    "imageSizeY": 0,
+                    "isThumbnail": false,
+                    "target": null,
+                    "entityName": "com.fl3xx.flo.shared.entity.User$HibernateProxy$1YSP8NJc",
+                    "refEntityId": 395655,
+                    "status": null,
+                    "thumbnail": null,
+                    "creationDate": null
+                },
+                "issueDate": 1629417600000,
+                "lastMailSent": null,
+                "issueCountryId": null,
+                "expirationDate": 1944950400000,
+                "issueAuthority": "",
+                "issuePlace": "Mississauga",
+                "main": true,
+                "visaType": "P",
+                "passportId": null,
+                "state": null,
+                "deleted": false,
+                "externalReference": null
+            },
+            "idCardArrival": null,
+            "messages": [
+                "Duty_0"
+            ],
+            "warnings": {
+                "assignmentGraceExpires": 1767225600000,
+                "hasRhsEndorsment": false,
+                "hasLhsEndorsement": false,
+                "messages": [
+                    {
+                        "type": "QUALIFICATION",
+                        "status": "EXPIRING",
+                        "name": "2Y Customs",
+                        "important": false
+                    },
+                    {
+                        "type": "QUALIFICATION",
+                        "status": "EXPIRING",
+                        "name": "2Y Lithium-Ion Battery Safety",
+                        "important": false
+                    },
+                    {
+                        "type": "QUALIFICATION",
+                        "status": "EXPIRING",
+                        "name": "TP Radar - Recurrent",
+                        "important": false
+                    },
+                    {
+                        "type": "QUALIFICATION",
+                        "status": "EXPIRING",
+                        "name": "2Y Flight Following Procedures",
+                        "important": false
+                    },
+                    {
+                        "type": "DUTY",
+                        "status": "SETUP",
+                        "name": "Duty_0"
+                    },
+                    {
+                        "type": "QUALIFICATION",
+                        "status": "EXPIRING",
+                        "name": "TP ACAS/TCAS",
+                        "important": false
+                    },
+                    {
+                        "type": "QUALIFICATION",
+                        "status": "EXPIRING",
+                        "name": "2Y Disability Awareness",
+                        "important": false
+                    },
+                    {
+                        "type": "QUALIFICATION",
+                        "status": "EXPIRING",
+                        "name": "2Y Calgary McCall Hangar and Ramp Safety",
+                        "important": false
+                    },
+                    {
+                        "type": "QUALIFICATION",
+                        "status": "EXPIRING",
+                        "name": "TP Operations Review 704 (Incl. RCAP, RNPC and No Alt IFR)",
+                        "important": false
+                    },
+                    {
+                        "type": "QUALIFICATION",
+                        "status": "EXPIRING",
+                        "name": "TP Fatigue Management",
+                        "important": false
+                    },
+                    {
+                        "type": "QUALIFICATION",
+                        "status": "EXPIRING",
+                        "name": "2Y Departure Procedures",
+                        "important": false
+                    },
+                    {
+                        "type": "QUALIFICATION",
+                        "status": "EXPIRING",
+                        "name": "2Y Calgary McCall Hangar Security",
+                        "important": false
+                    },
+                    {
+                        "type": "QUALIFICATION",
+                        "status": "EXPIRING",
+                        "name": "2Y Circuit Breaker",
+                        "important": false
+                    }
+                ],
+                "matchedAssignments": [
+                    {
+                        "satisfied": true,
+                        "expires": 1767225600000,
+                        "expiresControllingItem": {
+                            "satisfied": true,
+                            "expires": 1767225600000,
+                            "issueDate": 1734984988000,
+                            "graceExpires": 1767225600000,
+                            "neverExpires": false,
+                            "revalidationPeriodStart": 1759449600000,
+                            "revalidationPeriodEnd": 1767225600000,
+                            "hasGrace": true,
+                            "baseMonth": null,
+                            "baseDelta": null,
+                            "userQualificationId": 564170542,
+                            "qualificationId": 23489,
+                            "qualificationName": "TP Fatigue Management",
+                            "qualificationActive": true,
+                            "mandatoryForFlight": true
+                        },
+                        "issueDate": null,
+                        "graceExpires": 1767225600000,
+                        "neverExpires": false,
+                        "revalidationPeriodStart": null,
+                        "revalidationPeriodEnd": null,
+                        "hasGrace": false,
+                        "baseMonth": null,
+                        "baseDelta": null,
+                        "graceControllingItem": {
+                            "satisfied": true,
+                            "expires": 1767225600000,
+                            "issueDate": 1734984988000,
+                            "graceExpires": 1767225600000,
+                            "neverExpires": false,
+                            "revalidationPeriodStart": 1759449600000,
+                            "revalidationPeriodEnd": 1767225600000,
+                            "hasGrace": true,
+                            "baseMonth": null,
+                            "baseDelta": null,
+                            "userQualificationId": 564170542,
+                            "qualificationId": 23489,
+                            "qualificationName": "TP Fatigue Management",
+                            "qualificationActive": true,
+                            "mandatoryForFlight": true
+                        },
+                        "recency": {
+                            "conditions": [
+                                {
+                                    "satisfied": true,
+                                    "expires": 1773014399000,
+                                    "type": "THREE_TO_AND_LDG_IN_90_DAYS",
+                                    "name": "Legacy/Praetor Fleet - (90d) 3 TO/Ldg",
+                                    "period": "90d",
+                                    "typeRating": "Legacy/Praetor Fleet",
+                                    "completed": 1765228620000,
+                                    "data": {
+                                        "takeoffsInPeriod": [
+                                            1765476660000,
+                                            1765309440000,
+                                            1765228620000
+                                        ],
+                                        "takeoffs": [
+                                            1765476660000,
+                                            1765309440000,
+                                            1765228620000
+                                        ],
+                                        "landingsInPeriod": [
+                                            1765485180000,
+                                            1765320540000,
+                                            1765231200000
+                                        ],
+                                        "landings": [
+                                            1765485180000,
+                                            1765320540000,
+                                            1765231200000
+                                        ]
+                                    }
+                                },
+                                {
+                                    "satisfied": true,
+                                    "expires": 1778889599000,
+                                    "type": "FIVE_NIGHT_TO_AND_LDG_IN_6_MONTHS_ON_DATE",
+                                    "name": "(6m) 5 Night TO/Ldg",
+                                    "period": "6m",
+                                    "completed": 1763211600000,
+                                    "data": {
+                                        "takeoffsInPeriod": [
+                                            1765309440000,
+                                            1763211600000,
+                                            1763211600000,
+                                            1763211600000,
+                                            1763211600000
+                                        ],
+                                        "takeoffs": [
+                                            1765309440000,
+                                            1763211600000,
+                                            1763211600000,
+                                            1763211600000,
+                                            1763211600000
+                                        ],
+                                        "landingsInPeriod": [
+                                            1763211600000,
+                                            1763211600000,
+                                            1763211600000,
+                                            1763211600000,
+                                            1763211600000
+                                        ],
+                                        "landings": [
+                                            1763211600000,
+                                            1763211600000,
+                                            1763211600000,
+                                            1763211600000,
+                                            1763211600000
+                                        ]
+                                    }
+                                }
+                            ],
+                            "satisfied": true,
+                            "expires": 1773014399000,
+                            "expiresControllingItem": {
+                                "satisfied": true,
+                                "expires": 1773014399000,
+                                "type": "THREE_TO_AND_LDG_IN_90_DAYS",
+                                "name": "Legacy/Praetor Fleet - (90d) 3 TO/Ldg",
+                                "period": "90d",
+                                "typeRating": "Legacy/Praetor Fleet",
+                                "completed": 1765228620000,
+                                "data": {
+                                    "takeoffsInPeriod": [
+                                        1765476660000,
+                                        1765309440000,
+                                        1765228620000
+                                    ],
+                                    "takeoffs": [
+                                        1765476660000,
+                                        1765309440000,
+                                        1765228620000
+                                    ],
+                                    "landingsInPeriod": [
+                                        1765485180000,
+                                        1765320540000,
+                                        1765231200000
+                                    ],
+                                    "landings": [
+                                        1765485180000,
+                                        1765320540000,
+                                        1765231200000
+                                    ]
+                                }
+                            },
+                            "currency": 1773014399000
+                        },
+                        "qualificationId": 18505,
+                        "qualificationName": "Legacy/Praetor Fleet",
+                        "typeRating": "Legacy/Praetor Fleet",
+                        "explainer": [
+                            "Controlling items:",
+                            "* Good Through With Grace: TP Fatigue Management - 01.01.2026",
+                            "* Good Through (No Grace): TP Fatigue Management - 01.01.2026",
+                            "* Good Through Recency: Legacy/Praetor Fleet - (90d) 3 TO/Ldg - 08.03.2026"
+                        ],
+                        "mandatoryForFlight": false,
+                        "name": "PIC Type Rating",
+                        "position": "PIC",
+                        "treeNodeName": "Type Rating"
+                    }
+                ]
+            },
+            "pilotRole": "CMD",
+            "crewType": null,
+            "pilotSeat": null,
+            "crewPosition": null,
+            "hiddenForFlight": null,
+            "order": null,
+            "deleted": false,
+            "acknowledgementDate": 1765479085170,
+            "readFromCrewApp": 1765479085170,
+            "departureAddress": null,
+            "destinationAddress": null,
+            "sanctionList": null,
+            "sanctionListNote": null,
+            "visaDep": null,
+            "visaNoteDep": null,
+            "visa": null,
+            "visaNote": null,
+            "fitForDuty": null,
+            "fitForDutyDate": null,
+            "inTransitAtDeparture": null,
+            "inTransitAtArrival": null
+        },
+        "firstOfficer": {
+            "id": 2709051,
+            "user": {
+                "id": 395559,
+                "firstName": "Robert",
+                "middleName": "Lewis Cameron",
+                "lastName": "Foster",
+                "accountName": null,
+                "nickname": "RLF",
+                "pilot": true,
+                "status": "ACTIVE",
+                "jobTitle": "First Officer",
+                "gender": "MALE",
+                "weight": null,
+                "height": null,
+                "personnelNumber": "698",
+                "nationalityCountryName": null,
+                "userCharacteristics": {
+                    "eyeColor": null,
+                    "hairColor": null,
+                    "defaultLuggageWeight": 13.609999656677246
+                },
+                "catering": null,
+                "interest": "Tailwins: 91007173\nWorldFuel: 236962401\nPrefer Westjet ",
+                "important": "Prefer Westjet ",
+                "preferences": [
+                    {
+                        "template": {
+                            "id": 462,
+                            "order": 1,
+                            "name": "Loyalty Memberships (DO NOT COPY TO FLIGHT)",
+                            "showInPax": true,
+                            "showInCatering": false,
+                            "showInSales": true,
+                            "showAsImportant": false
+                        },
+                        "description": "Tailwins: 91007173\nWorldFuel: 236962401"
+                    },
+                    {
+                        "template": {
+                            "id": 463,
+                            "order": 2,
+                            "name": "Important (FYI ONLY - DO NOT COPY TO BOOKING)",
+                            "showInPax": true,
+                            "showInCatering": false,
+                            "showInSales": true,
+                            "showAsImportant": true
+                        },
+                        "description": "Prefer Westjet "
+                    }
+                ],
+                "phoneNumber": "",
+                "birthDate": 419817600000,
+                "birthPlace": "Calgary",
+                "salutation": "unDef",
+                "emailAddress": "rfoster@airsprint.com",
+                "idsCount": 6,
+                "vaccinations": null
+            },
+            "idCard": {
+                "id": 230839,
+                "number": "AB698200",
+                "type": "PASSPORT",
+                "userId": 395559,
+                "issueCountry": {
+                    "id": 108,
+                    "name": "Kanada",
+                    "iso2": "CA",
+                    "continent": "Nordamerika",
+                    "intname": "Canada",
+                    "capital": "Ottawa",
+                    "iso3": "CAN",
+                    "ioc": "CAN",
+                    "domain": ".ca",
+                    "currencyCode": null,
+                    "phone": "+1NXX"
+                },
+                "copy": {
+                    "id": 5663408,
+                    "name": "20210616-212919-267-Passport_RLF.pdf",
+                    "uuid": "148f7896-b21a-4709-82c9-f177803b46e8",
+                    "customName": null,
+                    "originalName": "Passport_RLF.pdf",
+                    "fileSize": 144978,
+                    "imageSizeX": 0,
+                    "imageSizeY": 0,
+                    "isThumbnail": false,
+                    "target": null,
+                    "entityName": "com.fl3xx.flo.shared.entity.User$HibernateProxy$fKVqYtoX",
+                    "refEntityId": 395559,
+                    "status": null,
+                    "thumbnail": null,
+                    "creationDate": null
+                },
+                "issueDate": 1506902400000,
+                "lastMailSent": null,
+                "issueCountryId": null,
+                "expirationDate": 1822435200000,
+                "issueAuthority": "",
+                "issuePlace": "Mississauga",
+                "main": true,
+                "visaType": "P",
+                "passportId": null,
+                "state": null,
+                "deleted": false,
+                "externalReference": null
+            },
+            "idCardArrival": null,
+            "messages": [
+                "Duty_0"
+            ],
+            "warnings": {
+                "assignmentGraceExpires": 1769904000000,
+                "hasRhsEndorsment": true,
+                "hasLhsEndorsement": false,
+                "messages": [
+                    {
+                        "type": "QUALIFICATION",
+                        "status": "EXPIRING",
+                        "name": "2Y Customs",
+                        "important": false
+                    },
+                    {
+                        "type": "QUALIFICATION",
+                        "status": "EXPIRING",
+                        "name": "2Y Lithium-Ion Battery Safety",
+                        "important": false
+                    },
+                    {
+                        "type": "QUALIFICATION",
+                        "status": "EXPIRING",
+                        "name": "1Y E550 Servicing and Ground Handling",
+                        "important": false
+                    },
+                    {
+                        "type": "QUALIFICATION",
+                        "status": "EXPIRING",
+                        "name": "1Y Take off and Landing Performance Assessment",
+                        "important": false
+                    },
+                    {
+                        "type": "QUALIFICATION",
+                        "status": "EXPIRING",
+                        "name": "TP Radar - Recurrent",
+                        "important": false
+                    },
+                    {
+                        "type": "QUALIFICATION",
+                        "status": "EXPIRING",
+                        "name": "TP Upset Prevention and Recovery Training (UPRT)",
+                        "important": false
+                    },
+                    {
+                        "type": "QUALIFICATION",
+                        "status": "EXPIRING",
+                        "name": "2Y Flight Following Procedures",
+                        "important": false
+                    },
+                    {
+                        "type": "QUALIFICATION",
+                        "status": "EXPIRING",
+                        "name": "2Y CPDLC",
+                        "important": false
+                    },
+                    {
+                        "type": "QUALIFICATION",
+                        "status": "EXPIRING",
+                        "name": "1Y CAT II (DF) E550",
+                        "important": false
+                    },
+                    {
+                        "type": "DUTY",
+                        "status": "SETUP",
+                        "name": "Duty_0"
+                    },
+                    {
+                        "type": "QUALIFICATION",
+                        "status": "EXPIRING",
+                        "name": "1Y Customer Service",
+                        "important": false
+                    },
+                    {
+                        "type": "QUALIFICATION",
+                        "status": "EXPIRING",
+                        "name": "1Y E550 Min Equip List",
+                        "important": false
+                    },
+                    {
+                        "type": "QUALIFICATION",
+                        "status": "EXPIRING",
+                        "name": "1Y Time Pressure and Safety",
+                        "important": false
+                    },
+                    {
+                        "type": "QUALIFICATION",
+                        "status": "EXPIRING",
+                        "name": "2Y Disability Awareness",
+                        "important": false
+                    },
+                    {
+                        "type": "QUALIFICATION",
+                        "status": "EXPIRING",
+                        "name": "1Y FRMS Training",
+                        "important": false
+                    },
+                    {
+                        "type": "QUALIFICATION",
+                        "status": "EXPIRING",
+                        "name": "2Y Calgary McCall Hangar and Ramp Safety",
+                        "important": false
+                    },
+                    {
+                        "type": "QUALIFICATION",
+                        "status": "EXPIRING",
+                        "name": "1Y E550 Emergency Procedures Training",
+                        "important": false
+                    },
+                    {
+                        "type": "QUALIFICATION",
+                        "status": "EXPIRING",
+                        "name": "2Y Departure Procedures",
+                        "important": false
+                    },
+                    {
+                        "type": "QUALIFICATION",
+                        "status": "EXPIRING",
+                        "name": "2Y E550 WATRS Airspace",
+                        "important": false
+                    },
+                    {
+                        "type": "QUALIFICATION",
+                        "status": "EXPIRING",
+                        "name": "TP Crew Resource Management (CRM)",
+                        "important": false
+                    },
+                    {
+                        "type": "QUALIFICATION",
+                        "status": "EXPIRING",
+                        "name": "2Y Calgary McCall Hangar Security",
+                        "important": false
+                    },
+                    {
+                        "type": "QUALIFICATION",
+                        "status": "EXPIRING",
+                        "name": "2Y Circuit Breaker",
+                        "important": false
+                    }
+                ],
+                "matchedAssignments": [
+                    {
+                        "satisfied": true,
+                        "expires": 1769817600000,
+                        "expiresControllingItem": {
+                            "satisfied": true,
+                            "expires": 1769817600000,
+                            "issueDate": 1736899200000,
+                            "graceExpires": 1769904000000,
+                            "neverExpires": false,
+                            "revalidationPeriodStart": 1767225600000,
+                            "revalidationPeriodEnd": 1769904000000,
+                            "hasGrace": true,
+                            "baseMonth": null,
+                            "baseDelta": null,
+                            "userQualificationId": 565724779,
+                            "qualificationId": 18776,
+                            "qualificationName": "Medical Certificate (Class1)",
+                            "qualificationActive": true,
+                            "mandatoryForFlight": true
+                        },
+                        "issueDate": null,
+                        "graceExpires": 1769904000000,
+                        "neverExpires": false,
+                        "revalidationPeriodStart": null,
+                        "revalidationPeriodEnd": null,
+                        "hasGrace": false,
+                        "baseMonth": null,
+                        "baseDelta": null,
+                        "graceControllingItem": {
+                            "satisfied": true,
+                            "expires": 1769817600000,
+                            "issueDate": 1736899200000,
+                            "graceExpires": 1769904000000,
+                            "neverExpires": false,
+                            "revalidationPeriodStart": 1767225600000,
+                            "revalidationPeriodEnd": 1769904000000,
+                            "hasGrace": true,
+                            "baseMonth": null,
+                            "baseDelta": null,
+                            "userQualificationId": 565724779,
+                            "qualificationId": 18776,
+                            "qualificationName": "Medical Certificate (Class1)",
+                            "qualificationActive": true,
+                            "mandatoryForFlight": true
+                        },
+                        "recency": {
+                            "conditions": [
+                                {
+                                    "satisfied": true,
+                                    "expires": 1772323199000,
+                                    "type": "THREE_TO_AND_LDG_IN_90_DAYS",
+                                    "name": "Legacy/Praetor Fleet - (90d) 3 TO/Ldg",
+                                    "period": "90d",
+                                    "typeRating": "Legacy/Praetor Fleet",
+                                    "completed": 1764541020000,
+                                    "data": {
+                                        "takeoffsInPeriod": [
+                                            1765493940000,
+                                            1764616860000,
+                                            1764541020000
+                                        ],
+                                        "takeoffs": [
+                                            1765493940000,
+                                            1764616860000,
+                                            1764541020000
+                                        ],
+                                        "landingsInPeriod": [
+                                            1765510500000,
+                                            1764631920000,
+                                            1764544920000
+                                        ],
+                                        "landings": [
+                                            1765510500000,
+                                            1764631920000,
+                                            1764544920000
+                                        ]
+                                    }
+                                },
+                                {
+                                    "satisfied": true,
+                                    "expires": 1778111999000,
+                                    "type": "FIVE_NIGHT_TO_AND_LDG_IN_6_MONTHS_ON_DATE",
+                                    "name": "(6m) 5 Night TO/Ldg",
+                                    "period": "6m",
+                                    "completed": 1762391280000,
+                                    "data": {
+                                        "takeoffsInPeriod": [
+                                            1764203160000,
+                                            1763595000000,
+                                            1763340780000,
+                                            1762560360000,
+                                            1762391280000
+                                        ],
+                                        "takeoffs": [
+                                            1764203160000,
+                                            1763595000000,
+                                            1763340780000,
+                                            1762560360000,
+                                            1762391280000
+                                        ],
+                                        "landingsInPeriod": [
+                                            1765510500000,
+                                            1763598360000,
+                                            1763343660000,
+                                            1763268840000,
+                                            1763173560000
+                                        ],
+                                        "landings": [
+                                            1765510500000,
+                                            1763598360000,
+                                            1763343660000,
+                                            1763268840000,
+                                            1763173560000
+                                        ]
+                                    }
+                                }
+                            ],
+                            "satisfied": true,
+                            "expires": 1772323199000,
+                            "expiresControllingItem": {
+                                "satisfied": true,
+                                "expires": 1772323199000,
+                                "type": "THREE_TO_AND_LDG_IN_90_DAYS",
+                                "name": "Legacy/Praetor Fleet - (90d) 3 TO/Ldg",
+                                "period": "90d",
+                                "typeRating": "Legacy/Praetor Fleet",
+                                "completed": 1764541020000,
+                                "data": {
+                                    "takeoffsInPeriod": [
+                                        1765493940000,
+                                        1764616860000,
+                                        1764541020000
+                                    ],
+                                    "takeoffs": [
+                                        1765493940000,
+                                        1764616860000,
+                                        1764541020000
+                                    ],
+                                    "landingsInPeriod": [
+                                        1765510500000,
+                                        1764631920000,
+                                        1764544920000
+                                    ],
+                                    "landings": [
+                                        1765510500000,
+                                        1764631920000,
+                                        1764544920000
+                                    ]
+                                }
+                            },
+                            "currency": 1772323199000
+                        },
+                        "qualificationId": 18505,
+                        "qualificationName": "Legacy/Praetor Fleet",
+                        "typeRating": "Legacy/Praetor Fleet",
+                        "explainer": [
+                            "Controlling items:",
+                            "* Good Through With Grace: Medical Certificate (Class1) - 01.02.2026",
+                            "* Good Through (No Grace): Medical Certificate (Class1) - 31.01.2026",
+                            "* Good Through Recency: Legacy/Praetor Fleet - (90d) 3 TO/Ldg - 28.02.2026"
+                        ],
+                        "mandatoryForFlight": false,
+                        "name": "SIC Type Rating",
+                        "position": "SIC",
+                        "treeNodeName": "Type Rating"
+                    }
+                ]
+            },
+            "pilotRole": "FO",
+            "crewType": null,
+            "pilotSeat": null,
+            "crewPosition": null,
+            "hiddenForFlight": null,
+            "order": null,
+            "deleted": false,
+            "acknowledgementDate": 1765478975588,
+            "readFromCrewApp": 1765478975588,
+            "departureAddress": null,
+            "destinationAddress": null,
+            "sanctionList": null,
+            "sanctionListNote": null,
+            "visaDep": null,
+            "visaNoteDep": null,
+            "visa": null,
+            "visaNote": null,
+            "fitForDuty": null,
+            "fitForDutyDate": null,
+            "inTransitAtDeparture": null,
+            "inTransitAtArrival": null
+        },
+        "augmentedCrew": false,
+        "additionalCrew": [],
+        "onBoardEngineer": {
+            "id": null,
+            "user": null,
+            "idCard": null,
+            "idCardArrival": null,
+            "messages": null,
+            "warnings": null,
+            "pilotRole": null,
+            "crewType": null,
+            "pilotSeat": null,
+            "crewPosition": null,
+            "hiddenForFlight": null,
+            "order": null,
+            "deleted": false,
+            "acknowledgementDate": null,
+            "readFromCrewApp": null,
+            "departureAddress": null,
+            "destinationAddress": null,
+            "sanctionList": null,
+            "sanctionListNote": null,
+            "visaDep": null,
+            "visaNoteDep": null,
+            "visa": null,
+            "visaNote": null,
+            "fitForDuty": null,
+            "fitForDutyDate": null,
+            "inTransitAtDeparture": null,
+            "inTransitAtArrival": null
+        },
+        "onBoardEng": 0,
+        "onBoardEngineers": [],
+        "flightAttendants": [],
+        "emptySeats": {
+            "fd": 0,
+            "fdExt": 0,
+            "cc": 0,
+            "ccExt": 0,
+            "eng": 0,
+            "expected": {
+                "fd": 2,
+                "fdExt": 0,
+                "cc": 0,
+                "ccExt": 0,
+                "eng": 0
+            }
+        },
+        "permitProviderId": null,
+        "crewPositions": [],
+        "rhsMain": false
+    },
+    "dutyTimeLim": {
+        "id": null,
+        "status": "OK",
+        "by": null,
+        "dtls": null,
+        "dtlActuals": null,
+        "dtls2": [
+            {
+                "userId": 395655,
+                "pilotRole": "CMD",
+                "refDutyId": 2709050,
+                "aoc": 91486,
+                "aocName": "Air Sprint - FEX - 604",
+                "disabledFtFdpCalculation": false,
+                "inViolation": false,
+                "checkin": 1765633380.000000000,
+                "checkout": 1765656900.000000000,
+                "checkinActual": null,
+                "checkoutActual": null,
+                "reducedCheckin": null,
+                "reducedCheckout": null,
+                "checkinDefault": 1765633380.000000000,
+                "checkoutDefault": 1765656900.000000000,
+                "dp": {
+                    "min": null,
+                    "max": null,
+                    "actual": 392,
+                    "type": null
+                },
+                "fdp": {
+                    "min": null,
+                    "max": 840,
+                    "actual": 392,
+                    "type": null,
+                    "start": 1765633380.000000000,
+                    "reduction": 0
+                },
+                "blockTime": {
+                    "min": null,
+                    "max": null,
+                    "actual": 252,
+                    "type": null
+                },
+                "flightTime": {
+                    "min": null,
+                    "max": null,
+                    "actual": 252,
+                    "type": null
+                },
+                "flightTimeIn24h": null,
+                "restBeforeDuty": {
+                    "min": 600,
+                    "max": null,
+                    "actual": 891,
+                    "type": null,
+                    "templateAoc": null,
+                    "templateAocName": null
+                },
+                "restAfterDuty": {
+                    "min": 600,
+                    "max": null,
+                    "actual": null,
+                    "type": null
+                },
+                "extensionLimitations": "CAR_FEX",
+                "fdpExtensionOption": "POSSIBLE",
+                "canUseFdp1hExtension": true,
+                "restReductionIsNotPossible": null,
+                "reducedRestEnabled": null,
+                "restInSuitableAccommodationApplicable": null,
+                "restInSuitableAccommodationEnabled": null,
+                "splitDutyNotPossible": null,
+                "limitations": null,
+                "limitationGroups": {
+                    "BLOCK_TIME": [
+                        {
+                            "limitationType": "3899",
+                            "label": "7d",
+                            "value": {
+                                "min": null,
+                                "max": 2400,
+                                "actual": 1669,
+                                "type": null,
+                                "start": 1765051200.000000000,
+                                "end": 1765656000.000000000
+                            },
+                            "order": 7
+                        },
+                        {
+                            "limitationType": "2941",
+                            "label": "28d",
+                            "value": {
+                                "min": null,
+                                "max": 6720,
+                                "actual": 1669,
+                                "type": null,
+                                "start": 1763236800.000000000,
+                                "end": 1765656000.000000000
+                            },
+                            "order": 28
+                        },
+                        {
+                            "limitationType": "3894",
+                            "label": "30d",
+                            "value": {
+                                "min": null,
+                                "max": 4200,
+                                "actual": 1669,
+                                "type": "HOUR",
+                                "start": 1763064000.000000000,
+                                "end": 1765656000.000000000
+                            },
+                            "order": 30
+                        },
+                        {
+                            "limitationType": "4031",
+                            "label": "90d",
+                            "value": {
+                                "min": null,
+                                "max": 18000,
+                                "actual": 6851,
+                                "type": null,
+                                "start": 1757880000.000000000,
+                                "end": 1765656000.000000000
+                            },
+                            "order": 90
+                        },
+                        {
+                            "limitationType": "2942",
+                            "label": "365d",
+                            "value": {
+                                "min": null,
+                                "max": 72000,
+                                "actual": 33225,
+                                "type": null,
+                                "start": 1734120000.000000000,
+                                "end": 1765656000.000000000
+                            },
+                            "order": 365
+                        }
+                    ],
+                    "DUTY_TIME": [
+                        {
+                            "limitationType": "4028",
+                            "label": "7d",
+                            "value": {
+                                "min": null,
+                                "max": 10080,
+                                "actual": 2867,
+                                "type": null,
+                                "start": 1765052100.000000000,
+                                "end": 1765656900.000000000
+                            },
+                            "order": 7
+                        },
+                        {
+                            "limitationType": "4026",
+                            "label": "28d",
+                            "value": {
+                                "min": null,
+                                "max": 40320,
+                                "actual": 3336,
+                                "type": null,
+                                "start": 1763237700.000000000,
+                                "end": 1765656900.000000000
+                            },
+                            "order": 28
+                        },
+                        {
+                            "limitationType": "4027",
+                            "label": "365d",
+                            "value": {
+                                "min": null,
+                                "max": 132000,
+                                "actual": 68839,
+                                "type": null,
+                                "start": 1734120900.000000000,
+                                "end": 1765656900.000000000
+                            },
+                            "order": 365
+                        }
+                    ]
+                },
+                "explainerMap": {
+                    "ACTUAL_FDP": {
+                        "order": 30,
+                        "header": "Actual FDP = 6h32",
+                        "warning": false,
+                        "text": [
+                            "Adding adjustment of 15 minutes to calculated time of 6h17"
+                        ]
+                    },
+                    "MAX_FDP": {
+                        "order": 40,
+                        "header": "Max FDP = 14h (or 15h with extension)",
+                        "warning": null,
+                        "text": [
+                            "Max FDP for Acclimatised crew members 2 sector(s), starting at 08:43 is 14h.",
+                            "Max FDP by 22:43 local time (03:43z)",
+                            "Max FDP for Acclimatised crew members with the use of extensions 2 sector(s), starting at 08:43 is 15h.",
+                            "Max FDP by 23:43 local time (04:43z)"
+                        ]
+                    },
+                    "GENERAL": {
+                        "order": 1,
+                        "header": null,
+                        "warning": null,
+                        "text": [
+                            "Using 'default' check-in time: 1h",
+                            "Using 'default' check-out time: 15'"
+                        ]
+                    },
+                    "MIN_REST_BEFORE": {
+                        "order": 90,
+                        "header": "Minimum Rest Before Duty = 10h.",
+                        "warning": null,
+                        "text": [
+                            "Rest is away from Home Base for 8h37 preceding duty."
+                        ]
+                    },
+                    "MIN_REST_AFTER": {
+                        "order": 100,
+                        "header": "Minimum Rest After Duty = 10h.",
+                        "warning": null,
+                        "text": [
+                            "Duty period is 6h32",
+                            "Rest is away from Home Base for 6h32 duty.",
+                            "Local time difference at the end of duty period is 00'."
+                        ]
+                    },
+                    "AOC": {
+                        "order": 0,
+                        "header": "AOC rules - Air Sprint - FEX - 604",
+                        "warning": null,
+                        "text": [
+                            "This duty time limitations are calculated in accordance with aoc rules set up in AOC Air Sprint - FEX - 604"
+                        ]
+                    }
+                },
+                "closed": null,
+                "reported": null,
+                "splitDutyStart": null,
+                "splitDutyClose": null,
+                "splitDutyStarted": null,
+                "splitDutyClosed": null,
+                "fdpExtension": null,
+                "postFlightRestIncrease": null,
+                "reducedRestType": null,
+                "useReducedRest": null,
+                "reducedRestOffBySystem": null,
+                "restTravelTime": null,
+                "suitableAccommodation": null,
+                "suitableAccommodationEnabled": null,
+                "weeklyRestCalcEnabled": true,
+                "weeklyHoursLeft": 2385,
+                "lastFlightId": 1056218,
+                "lastFlightActualsEntered": false,
+                "nextWeeklyRestDueFor": 1765800000000,
+                "startOfWeeklyFirstDuty": 1765195200000,
+                "fdpEqualsDp": false,
+                "dtlRegulation": "DEFAULT",
+                "augmentedCrew": false,
+                "fullDutyState": null,
+                "fdpExtensionIsNotPossible": false
+            },
+            {
+                "userId": 395559,
+                "pilotRole": "FO",
+                "refDutyId": 2709051,
+                "aoc": 91486,
+                "aocName": "Air Sprint - FEX - 604",
+                "disabledFtFdpCalculation": false,
+                "inViolation": false,
+                "checkin": 1765633380.000000000,
+                "checkout": 1765656900.000000000,
+                "checkinActual": null,
+                "checkoutActual": null,
+                "reducedCheckin": null,
+                "reducedCheckout": null,
+                "checkinDefault": 1765633380.000000000,
+                "checkoutDefault": 1765656900.000000000,
+                "dp": {
+                    "min": null,
+                    "max": null,
+                    "actual": 392,
+                    "type": null
+                },
+                "fdp": {
+                    "min": null,
+                    "max": 840,
+                    "actual": 392,
+                    "type": null,
+                    "start": 1765633380.000000000,
+                    "reduction": 0
+                },
+                "blockTime": {
+                    "min": null,
+                    "max": null,
+                    "actual": 252,
+                    "type": null
+                },
+                "flightTime": {
+                    "min": null,
+                    "max": null,
+                    "actual": 252,
+                    "type": null
+                },
+                "flightTimeIn24h": null,
+                "restBeforeDuty": {
+                    "min": 600,
+                    "max": null,
+                    "actual": 891,
+                    "type": null,
+                    "templateAoc": null,
+                    "templateAocName": null
+                },
+                "restAfterDuty": {
+                    "min": 600,
+                    "max": null,
+                    "actual": null,
+                    "type": null
+                },
+                "extensionLimitations": "CAR_FEX",
+                "fdpExtensionOption": "POSSIBLE",
+                "canUseFdp1hExtension": true,
+                "restReductionIsNotPossible": null,
+                "reducedRestEnabled": null,
+                "restInSuitableAccommodationApplicable": null,
+                "restInSuitableAccommodationEnabled": null,
+                "splitDutyNotPossible": null,
+                "limitations": null,
+                "limitationGroups": {
+                    "BLOCK_TIME": [
+                        {
+                            "limitationType": "3899",
+                            "label": "7d",
+                            "value": {
+                                "min": null,
+                                "max": 2400,
+                                "actual": 992,
+                                "type": null,
+                                "start": 1765051200.000000000,
+                                "end": 1765656000.000000000
+                            },
+                            "order": 7
+                        },
+                        {
+                            "limitationType": "2941",
+                            "label": "28d",
+                            "value": {
+                                "min": null,
+                                "max": 6720,
+                                "actual": 4235,
+                                "type": null,
+                                "start": 1763236800.000000000,
+                                "end": 1765656000.000000000
+                            },
+                            "order": 28
+                        },
+                        {
+                            "limitationType": "3894",
+                            "label": "30d",
+                            "value": {
+                                "min": null,
+                                "max": 4200,
+                                "actual": 4447,
+                                "type": "HOUR",
+                                "start": 1763064000.000000000,
+                                "end": 1765656000.000000000
+                            },
+                            "order": 30
+                        },
+                        {
+                            "limitationType": "4031",
+                            "label": "90d",
+                            "value": {
+                                "min": null,
+                                "max": 18000,
+                                "actual": 10849,
+                                "type": null,
+                                "start": 1757880000.000000000,
+                                "end": 1765656000.000000000
+                            },
+                            "order": 90
+                        },
+                        {
+                            "limitationType": "2942",
+                            "label": "365d",
+                            "value": {
+                                "min": null,
+                                "max": 72000,
+                                "actual": 30424,
+                                "type": null,
+                                "start": 1734120000.000000000,
+                                "end": 1765656000.000000000
+                            },
+                            "order": 365
+                        }
+                    ],
+                    "DUTY_TIME": [
+                        {
+                            "limitationType": "4028",
+                            "label": "7d",
+                            "value": {
+                                "min": null,
+                                "max": 10080,
+                                "actual": 1566,
+                                "type": null,
+                                "start": 1765052100.000000000,
+                                "end": 1765656900.000000000
+                            },
+                            "order": 7
+                        },
+                        {
+                            "limitationType": "4026",
+                            "label": "28d",
+                            "value": {
+                                "min": null,
+                                "max": 40320,
+                                "actual": 7346,
+                                "type": null,
+                                "start": 1763237700.000000000,
+                                "end": 1765656900.000000000
+                            },
+                            "order": 28
+                        },
+                        {
+                            "limitationType": "4027",
+                            "label": "365d",
+                            "value": {
+                                "min": null,
+                                "max": 132000,
+                                "actual": 64690,
+                                "type": null,
+                                "start": 1734120900.000000000,
+                                "end": 1765656900.000000000
+                            },
+                            "order": 365
+                        }
+                    ]
+                },
+                "explainerMap": {
+                    "ACTUAL_FDP": {
+                        "order": 30,
+                        "header": "Actual FDP = 6h32",
+                        "warning": false,
+                        "text": [
+                            "Adding adjustment of 15 minutes to calculated time of 6h17"
+                        ]
+                    },
+                    "MAX_FDP": {
+                        "order": 40,
+                        "header": "Max FDP = 14h (or 15h with extension)",
+                        "warning": null,
+                        "text": [
+                            "Max FDP for Acclimatised crew members 2 sector(s), starting at 08:43 is 14h.",
+                            "Max FDP by 22:43 local time (03:43z)",
+                            "Max FDP for Acclimatised crew members with the use of extensions 2 sector(s), starting at 08:43 is 15h.",
+                            "Max FDP by 23:43 local time (04:43z)"
+                        ]
+                    },
+                    "GENERAL": {
+                        "order": 1,
+                        "header": null,
+                        "warning": null,
+                        "text": [
+                            "Using 'default' check-in time: 1h",
+                            "Using 'default' check-out time: 15'"
+                        ]
+                    },
+                    "MIN_REST_BEFORE": {
+                        "order": 90,
+                        "header": "Minimum Rest Before Duty = 10h.",
+                        "warning": null,
+                        "text": [
+                            "Rest is away from Home Base for 8h37 preceding duty."
+                        ]
+                    },
+                    "MIN_REST_AFTER": {
+                        "order": 100,
+                        "header": "Minimum Rest After Duty = 10h.",
+                        "warning": null,
+                        "text": [
+                            "Duty period is 6h32",
+                            "Rest is away from Home Base for 6h32 duty.",
+                            "Local time difference at the end of duty period is 00'."
+                        ]
+                    },
+                    "AOC": {
+                        "order": 0,
+                        "header": "AOC rules - Air Sprint - FEX - 604",
+                        "warning": null,
+                        "text": [
+                            "This duty time limitations are calculated in accordance with aoc rules set up in AOC Air Sprint - FEX - 604"
+                        ]
+                    }
+                },
+                "closed": null,
+                "reported": null,
+                "splitDutyStart": null,
+                "splitDutyClose": null,
+                "splitDutyStarted": null,
+                "splitDutyClosed": null,
+                "fdpExtension": null,
+                "postFlightRestIncrease": null,
+                "reducedRestType": null,
+                "useReducedRest": null,
+                "reducedRestOffBySystem": null,
+                "restTravelTime": null,
+                "suitableAccommodation": null,
+                "suitableAccommodationEnabled": null,
+                "weeklyRestCalcEnabled": true,
+                "weeklyHoursLeft": 7023,
+                "lastFlightId": 1056218,
+                "lastFlightActualsEntered": false,
+                "nextWeeklyRestDueFor": 1766078280000,
+                "startOfWeeklyFirstDuty": 1765473480000,
+                "fdpEqualsDp": false,
+                "dtlRegulation": "DEFAULT",
+                "augmentedCrew": false,
+                "fullDutyState": null,
+                "fdpExtensionIsNotPossible": false
+            }
+        ],
+        "manualStatus": true,
+        "splitDutyType": "DEFAULT",
+        "allowedReducedCheckin": true,
+        "remarks": null,
+        "operationType": {
+            "id": 20,
+            "label": "CAR 604 FEX — PRIVATE"
+        }
+    }
+}
