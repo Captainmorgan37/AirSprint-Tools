@@ -9,7 +9,18 @@ from collections.abc import Iterable as IterableABC
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Set, Tuple
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+)
 
 import requests
 
@@ -66,6 +77,8 @@ class MorningReportResult:
             return _format_cj3_on_cj2_block(self)
         if self.code == "16.1.7":
             return _format_priority_status_block(self)
+        if self.code == "16.1.12":
+            return _format_hub_duty_start_block(self)
         if self.code == "16.1.11":
             return _format_fbo_disconnect_block(self)
 
@@ -136,6 +149,14 @@ def _format_priority_status_block(report: MorningReportResult) -> str:
         report.rows,
         header=f"PRIORITY CLIENTS: (based on the {report.title})",
         line_builder=_build_priority_line,
+    )
+
+
+def _format_hub_duty_start_block(report: MorningReportResult) -> str:
+    return _render_preferred_block(
+        report.rows,
+        header=f"CYYZ/CYUL DUTY STARTS: (based on the {report.title})",
+        line_builder=_build_hub_duty_start_line,
     )
 
 
@@ -513,6 +534,25 @@ def _build_priority_line(row: Mapping[str, Any]) -> str:
             status_display,
         ]
     )
+
+
+def _build_hub_duty_start_line(row: Mapping[str, Any]) -> str:
+    tail_value = row.get("tail") or "Unknown Tail"
+    tail = str(tail_value).strip() or "Unknown Tail"
+    departure_airport = row.get("departure_airport") or "Unknown Departure"
+    has_issue = bool(row.get("has_issue"))
+    status_label = "NOT ACCOMMODATED" if has_issue else "ACCOMMODATED"
+    status_detail = row.get("status")
+    status_display = (
+        f"{status_label} - {status_detail}" if has_issue and status_detail else status_label
+    )
+    return " - ".join(
+        [
+            tail,
+            str(departure_airport).strip() or "Unknown Departure",
+            status_display,
+        ]
+    )
 _APP_BOOKING_WORKFLOW = "APP BOOKING"
 _APP_LINE_PREFIXES = (
     "APP ",
@@ -552,6 +592,74 @@ class _DutyAssignment:
     earliest_departure: datetime
     previous_arrival_dt: Optional[datetime]
     previous_arrival_row: Optional[Mapping[str, Any]]
+
+
+def _calculate_duty_assignments(
+    sorted_rows: Sequence[Mapping[str, Any]] | List[Mapping[str, Any]]
+) -> List[Optional[_DutyAssignment]]:
+    duty_states: Dict[str, _DutyState] = {}
+    duty_assignments: List[Optional[_DutyAssignment]] = [None] * len(sorted_rows)
+
+    for index, row in enumerate(sorted_rows):
+        tail = _extract_tail(row)
+        dep_dt = _extract_departure_dt(row)
+        arr_dt = _extract_arrival_dt(row)
+
+        if not tail or dep_dt is None:
+            if tail and arr_dt is not None:
+                tail_key = tail.upper() if isinstance(tail, str) else str(tail).upper()
+                state = duty_states.get(tail_key)
+                if state is not None:
+                    state.last_completion_dt = arr_dt
+                    state.last_arrival_dt = arr_dt
+                    state.last_arrival_row = row
+            continue
+
+        tail_key = tail.upper() if isinstance(tail, str) else str(tail).upper()
+        state = duty_states.get(tail_key)
+        previous_arrival_dt = state.last_arrival_dt if state else None
+        previous_arrival_row = state.last_arrival_row if state else None
+        rest_minutes: Optional[float] = None
+        if state and state.last_completion_dt is not None:
+            rest_minutes = (dep_dt - state.last_completion_dt).total_seconds() / 60.0
+
+        new_duty = state is None
+        if not new_duty:
+            if rest_minutes is None:
+                new_duty = False
+            elif rest_minutes < 0:
+                new_duty = True
+            elif rest_minutes >= _PRIORITY_DUTY_REST_THRESHOLD_MINUTES:
+                new_duty = True
+            else:
+                new_duty = False
+
+        if new_duty:
+            duty_id = 0 if state is None else state.duty_id + 1
+            state = _DutyState(duty_id=duty_id, earliest_departure=dep_dt)
+            duty_states[tail_key] = state
+            previous_arrival_dt = None
+            previous_arrival_row = None
+        else:
+            duty_id = state.duty_id
+            if dep_dt < state.earliest_departure:
+                state.earliest_departure = dep_dt
+
+        duty_assignments[index] = _DutyAssignment(
+            tail_key=tail_key,
+            duty_id=duty_id,
+            earliest_departure=state.earliest_departure,
+            previous_arrival_dt=previous_arrival_dt,
+            previous_arrival_row=previous_arrival_row,
+        )
+
+        completion_dt = arr_dt or dep_dt
+        state.last_completion_dt = completion_dt
+        if arr_dt is not None:
+            state.last_arrival_dt = arr_dt
+            state.last_arrival_row = row
+
+    return duty_assignments
 
 
 def run_morning_reports(
@@ -602,6 +710,7 @@ def run_morning_reports(
         _build_owner_continuous_flight_validation_report(normalized_rows),
         _build_cj3_owners_on_cj2_report(normalized_rows, config),
         _build_priority_status_report(normalized_rows, config),
+        _build_hub_duty_start_report(normalized_rows, config),
         _build_upgrade_workflow_validation_report(normalized_rows, config),
         _build_upgrade_flights_report(normalized_rows, config),
         _build_fbo_disconnect_report(normalized_rows, config),
@@ -1087,68 +1196,7 @@ def _build_priority_status_report(
     threshold_minutes: int = _PRIORITY_CHECKIN_THRESHOLD_MINUTES,
 ) -> MorningReportResult:
     sorted_rows = _sort_rows(rows)
-
-    duty_states: Dict[str, _DutyState] = {}
-    duty_assignments: List[Optional[_DutyAssignment]] = [None] * len(sorted_rows)
-
-    for index, row in enumerate(sorted_rows):
-        tail = _extract_tail(row)
-        dep_dt = _extract_departure_dt(row)
-        arr_dt = _extract_arrival_dt(row)
-
-        if not tail or dep_dt is None:
-            if tail and arr_dt is not None:
-                tail_key = tail.upper() if isinstance(tail, str) else str(tail).upper()
-                state = duty_states.get(tail_key)
-                if state is not None:
-                    state.last_completion_dt = arr_dt
-                    state.last_arrival_dt = arr_dt
-                    state.last_arrival_row = row
-            continue
-
-        tail_key = tail.upper() if isinstance(tail, str) else str(tail).upper()
-        state = duty_states.get(tail_key)
-        previous_arrival_dt = state.last_arrival_dt if state else None
-        previous_arrival_row = state.last_arrival_row if state else None
-        rest_minutes: Optional[float] = None
-        if state and state.last_completion_dt is not None:
-            rest_minutes = (dep_dt - state.last_completion_dt).total_seconds() / 60.0
-
-        new_duty = state is None
-        if not new_duty:
-            if rest_minutes is None:
-                new_duty = False
-            elif rest_minutes < 0:
-                new_duty = True
-            elif rest_minutes >= _PRIORITY_DUTY_REST_THRESHOLD_MINUTES:
-                new_duty = True
-            else:
-                new_duty = False
-
-        if new_duty:
-            duty_id = 0 if state is None else state.duty_id + 1
-            state = _DutyState(duty_id=duty_id, earliest_departure=dep_dt)
-            duty_states[tail_key] = state
-            previous_arrival_dt = None
-            previous_arrival_row = None
-        else:
-            duty_id = state.duty_id
-            if dep_dt < state.earliest_departure:
-                state.earliest_departure = dep_dt
-
-        duty_assignments[index] = _DutyAssignment(
-            tail_key=tail_key,
-            duty_id=duty_id,
-            earliest_departure=state.earliest_departure,
-            previous_arrival_dt=previous_arrival_dt,
-            previous_arrival_row=previous_arrival_row,
-        )
-
-        completion_dt = arr_dt or dep_dt
-        state.last_completion_dt = completion_dt
-        if arr_dt is not None:
-            state.last_arrival_dt = arr_dt
-            state.last_arrival_row = row
+    duty_assignments = _calculate_duty_assignments(sorted_rows)
 
     priority_candidates: List[Dict[str, Any]] = []
     for index, row in enumerate(sorted_rows):
@@ -1450,6 +1498,204 @@ def _build_priority_status_report(
         code="16.1.7",
         title="Priority Status Report",
         header_label="Priority Duty-Start Validation",
+        rows=matches,
+        warnings=list(dict.fromkeys(warning_messages)),
+        metadata=metadata,
+    )
+
+
+def _build_hub_duty_start_report(
+    rows: Iterable[Mapping[str, Any]],
+    config: Fl3xxApiConfig,
+    *,
+    fetch_postflight_fn: Callable[..., Any] = fetch_postflight,
+    threshold_minutes: int = _PRIORITY_CHECKIN_THRESHOLD_MINUTES,
+    target_airports: Iterable[str] = ("CYYZ", "CYUL"),
+) -> MorningReportResult:
+    sorted_rows = _sort_rows(rows)
+    duty_assignments = _calculate_duty_assignments(sorted_rows)
+
+    credentials_available = bool(config.api_token or config.auth_header)
+    warning_messages: List[str] = []
+    matches: List[Dict[str, Any]] = []
+
+    issues_found = 0
+    validation_required = 0
+    validated_without_issue = 0
+
+    shared_session: Optional[requests.Session] = None
+    postflight_cache: Dict[Any, Any] = {}
+    postflight_request_counts = {"unique": 0, "cached": 0}
+
+    normalized_airports = {airport.upper() for airport in target_airports}
+
+    try:
+        signature = inspect.signature(fetch_postflight_fn)
+    except (TypeError, ValueError):
+        accepts_session_kw = True
+    else:
+        accepts_session_kw = any(
+            param.kind is inspect.Parameter.VAR_KEYWORD or name == "session"
+            for name, param in signature.parameters.items()
+        )
+
+    try:
+        for index, row in enumerate(sorted_rows):
+            formatted = _format_report_row(row, include_tail=True)
+            dep_dt = _extract_departure_dt(row)
+            dep_airport = _normalize_airport_ident(_extract_airport(row, True))
+            tail = formatted.get("tail")
+            flight_identifier = _extract_flight_identifier(row, formatted)
+
+            assignment = duty_assignments[index]
+            is_first_departure = False
+
+            if assignment is not None and dep_dt is not None:
+                earliest = assignment.earliest_departure
+                delta = abs((dep_dt - earliest).total_seconds())
+                if delta < 1.0:
+                    is_first_departure = True
+
+            if not is_first_departure:
+                continue
+
+            if dep_airport is None or dep_airport not in normalized_airports:
+                continue
+
+            dep_date = _mountain_date_from_datetime(dep_dt) if dep_dt else None
+
+            status = ""
+            issue = False
+            minutes_before: Optional[float] = None
+            earliest_checkin: Optional[datetime] = None
+            latest_checkin: Optional[datetime] = None
+            checkin_count: Optional[int] = None
+            checkin_times_display: Optional[str] = None
+
+            needs_validation = bool(tail and dep_dt)
+            if needs_validation:
+                validation_required += 1
+
+            if dep_dt is None:
+                status = "Missing departure time; cannot validate check-in window"
+                issue = True
+            elif not tail:
+                status = "Missing tail number; cannot validate check-in window"
+                issue = True
+            elif not credentials_available:
+                status = "Missing FL3XX credentials; cannot retrieve check-in timestamps"
+                issue = True
+            elif not flight_identifier:
+                status = "Missing flight identifier; cannot retrieve check-in timestamps"
+                issue = True
+            else:
+                try:
+                    if flight_identifier in postflight_cache:
+                        payload = postflight_cache[flight_identifier]
+                        postflight_request_counts["cached"] += 1
+                    else:
+                        call_kwargs = {}
+                        if accepts_session_kw:
+                            if shared_session is None:
+                                shared_session = requests.Session()
+                            call_kwargs["session"] = shared_session
+                        payload = fetch_postflight_fn(config, flight_identifier, **call_kwargs)
+                        postflight_cache[flight_identifier] = payload
+                        postflight_request_counts["unique"] += 1
+                except Exception as exc:  # pragma: no cover - defensive path
+                    status = f"Unable to retrieve check-in data ({exc})"
+                    warning_messages.append(
+                        f"{tail or 'Unknown tail'} on {dep_date or 'unknown date'}: {exc}"
+                    )
+                    issue = True
+                else:
+                    values = _extract_checkin_values(payload)
+                    target_tz = dep_dt.tzinfo or timezone.utc
+                    checkins = [
+                        dt
+                        for value in values
+                        if (dt := _checkin_to_datetime(value, target_tz)) is not None
+                    ]
+                    if not checkins:
+                        status = "No crew check-in timestamps available"
+                        issue = True
+                    else:
+                        checkins.sort()
+                        earliest_checkin = checkins[0]
+                        latest_checkin = checkins[-1]
+                        minutes_before = (dep_dt - earliest_checkin).total_seconds() / 60.0
+                        checkin_count = len(checkins)
+                        checkin_times_display = ", ".join(
+                            dt.strftime("%H:%M") for dt in checkins
+                        )
+                        if minutes_before >= threshold_minutes:
+                            status = (
+                                f"Meets threshold ({minutes_before:.1f} min before departure)"
+                            )
+                            if needs_validation:
+                                validated_without_issue += 1
+                        else:
+                            status = (
+                                f"Check-in only {minutes_before:.1f} min before departure "
+                                f"(requires {threshold_minutes} min)"
+                            )
+                            issue = True
+
+            if issue:
+                issues_found += 1
+
+            row_data = {
+                "line": f"{formatted['line']} | {dep_airport or 'Unknown'} | {status}",
+                "date": formatted.get("date"),
+                "tail": tail,
+                "status": status,
+                "has_issue": issue,
+                "needs_validation": needs_validation,
+                "minutes_before_departure": round(minutes_before, 1)
+                if minutes_before is not None
+                else None,
+                "checkin_count": checkin_count,
+                "checkin_times": checkin_times_display,
+                "earliest_checkin": earliest_checkin.isoformat()
+                if earliest_checkin
+                else None,
+                "latest_checkin": latest_checkin.isoformat() if latest_checkin else None,
+                "departure_airport": dep_airport,
+                "departure_time": dep_dt.isoformat() if dep_dt else None,
+                "booking_reference": formatted.get("booking_reference"),
+                "account_name": formatted.get("account_name"),
+                "flight_identifier": flight_identifier,
+                "leg_id": formatted.get("leg_id"),
+                "_sort_key": dep_dt or datetime.max.replace(tzinfo=timezone.utc),
+            }
+            matches.append(row_data)
+    finally:
+        if shared_session is not None:
+            try:
+                shared_session.close()
+            except AttributeError:  # pragma: no cover - defensive cleanup
+                pass
+
+    matches.sort(key=lambda row: row["_sort_key"])
+    for row in matches:
+        row.pop("_sort_key", None)
+
+    metadata = {
+        "validation_required": validation_required,
+        "validated_without_issue": validated_without_issue,
+        "issues_found": issues_found,
+        "threshold_minutes": threshold_minutes,
+        "target_airports": sorted(normalized_airports),
+        "match_count": len(matches),
+    }
+
+    if any(postflight_request_counts.values()):
+        metadata["postflight_requests"] = postflight_request_counts
+
+    return MorningReportResult(
+        code="16.1.12",
+        title="CYYZ/CYUL Duty Start Report",
+        header_label="CYYZ/CYUL Duty-Start Validation",
         rows=matches,
         warnings=list(dict.fromkeys(warning_messages)),
         metadata=metadata,
