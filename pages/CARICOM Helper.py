@@ -177,15 +177,15 @@ def _tail_to_callsign(tail: Any) -> str:
 @st.cache_data(show_spinner=False)
 def _airport_lookup() -> dict[str, str]:
     lookup: dict[str, str] = {}
-    path = Path("Airport Deice info.csv")
+    path = Path("Airport TZ.txt")
     if not path.exists():
         return lookup
 
     with path.open(newline="", encoding="utf-8") as handle:
         reader = csv.DictReader(handle)
         for row in reader:
-            icao = (row.get("ICAO") or "").strip().upper()
-            iata = (row.get("IATA") or "").strip().upper()
+            icao = (row.get("icao") or row.get("ICAO") or "").strip().upper()
+            iata = (row.get("iata") or row.get("IATA") or "").strip().upper()
             if icao and iata:
                 lookup[icao] = iata
     return lookup
