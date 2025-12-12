@@ -108,9 +108,9 @@ def _build_workbook(leg: dict[str, Any]) -> BytesIO:
     general_ws["O18"] = arr_time
     general_ws["R18"] = leg.get("arrival_airport") or ""
 
-    general_ws["O12"] = ""
-    general_ws["S12"] = "4032161699"
-    general_ws["V12"] = "dispatch@airsprint.com"
+    general_ws["O13"] = ""
+    general_ws["S13"] = "4032161699"
+    general_ws["V13"] = "dispatch@airsprint.com"
 
     buffer = BytesIO()
     workbook.save(buffer)
