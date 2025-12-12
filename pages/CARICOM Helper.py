@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from io import BytesIO
+from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping
+
+import csv
 
 import streamlit as st
 from openpyxl import load_workbook
@@ -102,11 +105,11 @@ def _build_workbook(leg: dict[str, Any]) -> BytesIO:
 
     general_ws["B18"] = dep_date
     general_ws["E18"] = dep_time
-    general_ws["H18"] = leg.get("departure_airport") or ""
+    general_ws["H18"] = _icao_to_iata(leg.get("departure_airport"))
 
     general_ws["L18"] = arr_date
     general_ws["O18"] = arr_time
-    general_ws["R18"] = leg.get("arrival_airport") or ""
+    general_ws["R18"] = _icao_to_iata(leg.get("arrival_airport"))
 
     general_ws["O13"] = ""
     general_ws["S13"] = "4032161699"
@@ -169,6 +172,32 @@ def _tail_to_callsign(tail: Any) -> str:
     }
 
     return tail_map.get(tail_sanitized, "")
+
+
+@st.cache_data(show_spinner=False)
+def _airport_lookup() -> dict[str, str]:
+    lookup: dict[str, str] = {}
+    path = Path("Airport Deice info.csv")
+    if not path.exists():
+        return lookup
+
+    with path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            icao = (row.get("ICAO") or "").strip().upper()
+            iata = (row.get("IATA") or "").strip().upper()
+            if icao and iata:
+                lookup[icao] = iata
+    return lookup
+
+
+def _icao_to_iata(code: Any) -> str:
+    if code is None:
+        return ""
+
+    icao = str(code).strip().upper()
+    lookup = _airport_lookup()
+    return lookup.get(icao, icao)
 
 
 booking_identifier = st.text_input("Booking Identifier", placeholder="e.g. ASP-123456")
