@@ -575,6 +575,19 @@ _RUNWAY_LENGTH_CACHE: Optional[Dict[str, int]] = None
 _PRIORITY_CHECKIN_THRESHOLD_MINUTES = 90
 _PRIORITY_DUTY_REST_THRESHOLD_MINUTES = 9 * 60
 
+_PLACEHOLDER_TAILS = {
+    "ADD CJ2+ EAST",
+    "ADD CJ2+ WEST",
+    "ADD CJ3+ EAST",
+    "ADD CJ3+ WEST",
+    "ADD EMB EAST",
+    "ADD EMB WEST",
+    "ADD LINE",
+    "REMOVE LINE",
+    "REMOVE OCS",
+    "REMOVE OCS 2",
+}
+
 
 @dataclass
 class _DutyState:
@@ -1512,7 +1525,11 @@ def _build_hub_duty_start_report(
     threshold_minutes: int = _PRIORITY_CHECKIN_THRESHOLD_MINUTES,
     target_airports: Iterable[str] = ("CYYZ", "CYUL"),
 ) -> MorningReportResult:
-    sorted_rows = _sort_rows(rows)
+    filtered_rows = [
+        row for row in rows if not _is_placeholder_tail(_extract_tail(row))
+    ]
+
+    sorted_rows = _sort_rows(filtered_rows)
     duty_assignments = _calculate_duty_assignments(sorted_rows)
 
     credentials_available = bool(config.api_token or config.auth_header)
@@ -2509,6 +2526,13 @@ def _extract_booking_reference(row: Mapping[str, Any]) -> Optional[str]:
         if value:
             return value
     return None
+
+
+def _is_placeholder_tail(value: Any) -> bool:
+    normalized = _normalize_str(value)
+    if not normalized:
+        return False
+    return normalized.upper() in _PLACEHOLDER_TAILS
 
 
 def _extract_account_name(row: Mapping[str, Any]) -> Optional[str]:
