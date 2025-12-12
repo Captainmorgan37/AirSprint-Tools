@@ -93,12 +93,12 @@ def _build_workbook(leg: dict[str, Any]) -> BytesIO:
     dep_date, dep_time = _format_date_time(leg.get("dep_time"))
     arr_date, arr_time = _format_date_time(leg.get("arrival_time"))
 
-    general_ws["B13"] = leg.get("flightId") or leg.get("bookingReference") or ""
+    general_ws["B13"] = leg.get("aircraft_callsign") or leg.get("callsign") or _tail_to_callsign(
+        leg.get("tail") or leg.get("aircraftName")
+    )
     general_ws["E13"] = leg.get("tail") or leg.get("aircraftName") or ""
     general_ws["H13"] = leg.get("paxNumber") or ""
-
-    crew_members = leg.get("crewMembers")
-    general_ws["K13"] = len(crew_members) if isinstance(crew_members, list) else ""
+    general_ws["K13"] = 2
 
     general_ws["B18"] = dep_date
     general_ws["E18"] = dep_time
@@ -108,10 +108,27 @@ def _build_workbook(leg: dict[str, Any]) -> BytesIO:
     general_ws["O18"] = arr_time
     general_ws["R18"] = leg.get("arrival_airport") or ""
 
+    general_ws["O12"] = ""
+    general_ws["S12"] = "4032161699"
+    general_ws["V12"] = "dispatch@airsprint.com"
+
     buffer = BytesIO()
     workbook.save(buffer)
     buffer.seek(0)
     return buffer
+
+
+def _tail_to_callsign(tail: Any) -> str:
+    if tail is None:
+        return ""
+
+    tail_sanitized = str(tail).replace("-", "").upper()
+    tail_map = {
+        "CGASL": "ASP816",
+        "CFIAS": "ASP511",
+    }
+
+    return tail_map.get(tail_sanitized, "")
 
 
 booking_identifier = st.text_input("Booking Identifier", placeholder="e.g. ASP-123456")
