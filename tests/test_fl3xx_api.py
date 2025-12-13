@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import pathlib
 from datetime import datetime, timezone
 import sys
@@ -16,8 +17,10 @@ from fl3xx_api import (
     PreflightCrewCheckin,
     PreflightCrewMember,
     PreflightConflictAlert,
+    PassengerDetail,
     extract_conflicts_from_preflight,
     extract_crew_from_preflight,
+    extract_passengers_from_pax_details,
     extract_missing_qualifications_from_preflight,
     parse_postflight_payload,
     parse_preflight_payload,
@@ -185,6 +188,26 @@ def test_parse_preflight_payload_collects_checkins() -> None:
     assert second.checkin == 1791036000
     assert second.checkin_actual is None
     assert status.has_data is True
+
+
+def test_extract_passengers_from_pax_details_reads_tickets() -> None:
+    payload = json.loads(pathlib.Path("docs/pax details API pull.txt").read_text())
+
+    passengers = extract_passengers_from_pax_details(payload)
+
+    assert len(passengers) == 6
+
+    first = passengers[0]
+    assert isinstance(first, PassengerDetail)
+    assert first.last_name == "Aune"
+    assert first.first_name == "Jonathan"
+    assert first.middle_name == "Patrick Nelse"
+    assert first.gender == "M"
+    assert first.nationality_iso3 == "CAN"
+    assert first.birth_date == 164246400000
+    assert first.document_number == "P171050ED"
+    assert first.document_issue_country_iso3 == "CAN"
+    assert first.document_expiration == 2057356800000
 
 
 def test_parse_preflight_payload_collects_additional_datetime_fields() -> None:
