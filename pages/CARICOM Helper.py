@@ -2,15 +2,22 @@ from __future__ import annotations
 
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Dict, Iterable, Mapping
+from typing import Any, Dict, Iterable, Mapping, Sequence
 
 import csv
+from datetime import datetime, timezone
 
 import streamlit as st
 from openpyxl import load_workbook
 
 from Home import configure_page, password_gate, render_sidebar
-from fl3xx_api import compute_fetch_dates, fetch_flights
+from fl3xx_api import (
+    PreflightCrewMember,
+    compute_fetch_dates,
+    extract_crew_from_preflight,
+    fetch_flights,
+    fetch_preflight,
+)
 from flight_leg_utils import (
     FlightDataError,
     build_fl3xx_api_config,
@@ -89,7 +96,86 @@ def _format_date_time(value: Any) -> tuple[str, str]:
     return dt.strftime("%Y/%m/%d"), dt.strftime("%H:%M")
 
 
-def _build_workbook(leg: dict[str, Any]) -> BytesIO:
+def _format_epoch_date(value: Any) -> str:
+    try:
+        epoch = int(value)
+    except (TypeError, ValueError):
+        return ""
+
+    try:
+        dt = datetime.fromtimestamp(epoch / 1000, tz=timezone.utc)
+    except Exception:
+        return ""
+
+    return dt.strftime("%Y/%m/%d")
+
+
+def _format_gender(value: Any) -> str:
+    if value is None:
+        return ""
+    cleaned = str(value).strip().upper()
+    if cleaned.startswith("M"):
+        return "M"
+    if cleaned.startswith("F"):
+        return "F"
+    return cleaned
+
+
+def _crew_rows(ws) -> list[int]:
+    rows: list[int] = []
+    for row in ws.iter_rows(min_col=2, max_col=2, min_row=19):
+        cell = row[0]
+        if isinstance(cell.value, int):
+            rows.append(cell.row)
+    return rows
+
+
+def _populate_crew_sheet(
+    workbook, crew_roster: Sequence[PreflightCrewMember], dep_airport: str, arr_airport: str
+) -> None:
+    crew_ws = workbook["Crew List"]
+    dep_iata = _icao_to_iata(dep_airport)
+    arr_iata = _icao_to_iata(arr_airport)
+    target_rows = _crew_rows(crew_ws)
+
+    fields = (
+        ("last_name", 3),
+        ("first_name", 6),
+        ("middle_name", 9),
+        ("nationality_iso3", 11),
+        ("gender", 13),
+        ("birth_date", 14),
+        ("document_number", 16),
+        ("document_issue_country_iso3", 18),
+        ("document_expiration", 20),
+    )
+
+    for member, row in zip(crew_roster, target_rows):
+        for field, column in fields:
+            value = getattr(member, field)
+            if field in {"birth_date", "document_expiration"}:
+                value = _format_epoch_date(value)
+            elif field == "gender":
+                value = _format_gender(value)
+            crew_ws.cell(row=row, column=column).value = value or ""
+
+        crew_ws.cell(row=row, column=22).value = dep_iata
+        crew_ws.cell(row=row, column=23).value = arr_iata
+        crew_ws.cell(row=row, column=24).value = arr_iata
+
+    empty_columns = (3, 6, 9, 11, 13, 14, 16, 18, 20, 22, 23, 24)
+    for row in target_rows[len(crew_roster) :]:
+        for column in empty_columns:
+            crew_ws.cell(row=row, column=column).value = ""
+
+
+def _build_workbook(
+    leg: dict[str, Any],
+    crew_roster: Sequence[PreflightCrewMember],
+    dep_airport: str,
+    arr_airport: str,
+    crew_count: int,
+) -> BytesIO:
     workbook = load_workbook("docs/caricomformFlightsV6.xlsx")
     general_ws = workbook["General Information"]
 
@@ -101,19 +187,21 @@ def _build_workbook(leg: dict[str, Any]) -> BytesIO:
     )
     general_ws["E13"] = leg.get("tail") or leg.get("aircraftName") or ""
     general_ws["H13"] = leg.get("paxNumber") or ""
-    general_ws["K13"] = 2
+    general_ws["K13"] = len(crew_roster) or crew_count or ""
 
     general_ws["B18"] = dep_date
     general_ws["E18"] = dep_time
-    general_ws["H18"] = _icao_to_iata(leg.get("departure_airport"))
+    general_ws["H18"] = _icao_to_iata(dep_airport)
 
     general_ws["L18"] = arr_date
     general_ws["O18"] = arr_time
-    general_ws["R18"] = _icao_to_iata(leg.get("arrival_airport"))
+    general_ws["R18"] = _icao_to_iata(arr_airport)
 
     general_ws["O13"] = ""
     general_ws["S13"] = "4032161699"
     general_ws["V13"] = "dispatch@airsprint.com"
+
+    _populate_crew_sheet(workbook, crew_roster, dep_airport, arr_airport)
 
     buffer = BytesIO()
     workbook.save(buffer)
@@ -251,6 +339,22 @@ crew_members = selected_leg.get("crewMembers") if isinstance(selected_leg.get("c
 crew_count = len(crew_members)
 caricom_route = [code for code in (dep_airport, arr_airport) if code]
 
+try:
+    config = build_fl3xx_api_config(dict(api_settings))
+    flight_id = selected_leg.get("id") or selected_leg.get("flightId") or selected_leg.get("flight_id")
+    crew_roster: list[PreflightCrewMember] = []
+    if flight_id:
+        with st.spinner("Loading preflight crew roster…"):
+            preflight_payload = fetch_preflight(config, flight_id)
+        crew_roster = extract_crew_from_preflight(preflight_payload)
+        if crew_roster:
+            crew_count = len(crew_roster)
+    else:
+        st.warning("Flight ID missing on selected leg; crew roster will be left blank.")
+except Exception as exc:  # pragma: no cover - runtime fetch failures
+    crew_roster = []
+    st.warning(f"Unable to load crew roster from preflight: {exc}")
+
 st.subheader("Flight summary")
 st.json(
     {
@@ -266,11 +370,11 @@ st.json(
 )
 
 st.info(
-    "This initial version leaves crew and passenger rosters blank in the export. "
-    "We will fill these fields as supporting APIs become available."
+    "Crew details are now pulled from the preflight endpoint. Passenger roster fields "
+    "remain blank until the pax_details feed is connected."
 )
 
-workbook_bytes = _build_workbook(selected_leg)
+workbook_bytes = _build_workbook(selected_leg, crew_roster, dep_airport, arr_airport, crew_count)
 file_label = f"CARICOM_{booking_identifier or 'booking'}.xlsx"
 
 st.download_button(
