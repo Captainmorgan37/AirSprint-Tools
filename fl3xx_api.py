@@ -542,6 +542,23 @@ class PreflightChecklistStatus:
         return any(checkin.checkin is not None for checkin in self.crew_checkins)
 
 
+@dataclass(frozen=True)
+class PreflightCrewMember:
+    """Crew roster details pulled from a preflight payload."""
+
+    seat: Optional[str] = None
+    user_id: Optional[str] = None
+    first_name: Optional[str] = None
+    middle_name: Optional[str] = None
+    last_name: Optional[str] = None
+    gender: Optional[str] = None
+    nationality_iso3: Optional[str] = None
+    birth_date: Optional[int] = None
+    document_number: Optional[str] = None
+    document_issue_country_iso3: Optional[str] = None
+    document_expiration: Optional[int] = None
+
+
 def _extract_preflight_status_value(value: Any) -> Optional[str]:
     if isinstance(value, str):
         cleaned = value.strip()
@@ -622,6 +639,29 @@ def _normalise_datetime_candidate(value: Any) -> Optional[int]:
         return int(parsed.timestamp())
 
     return None
+
+
+def _clean_string(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        cleaned = value.strip()
+    else:
+        cleaned = str(value).strip()
+    return cleaned or None
+
+
+def _normalise_gender(value: Any) -> Optional[str]:
+    cleaned = _clean_string(value)
+    if not cleaned:
+        return None
+
+    upper = cleaned.upper()
+    if upper.startswith("M"):
+        return "M"
+    if upper.startswith("F"):
+        return "F"
+    return upper
 
 
 def extract_missing_qualifications_from_preflight(
@@ -855,6 +895,97 @@ def parse_preflight_payload(preflight_payload: Any) -> PreflightChecklistStatus:
     )
 
     return status
+
+
+def _extract_preflight_crew_member(
+    seat_key: Optional[str], entry: Mapping[str, Any]
+) -> Optional[PreflightCrewMember]:
+    user_block = entry.get("user")
+    if not isinstance(user_block, Mapping):
+        return None
+
+    seat: Optional[str]
+    if isinstance(seat_key, str):
+        normalised_key = seat_key.strip().lower()
+        if normalised_key == "commander":
+            seat = "PIC"
+        elif normalised_key == "firstofficer":
+            seat = "SIC"
+        else:
+            seat = seat_key.strip() or None
+    else:
+        seat = None
+
+    issue_country: Optional[Mapping[str, Any]] = None
+    id_card = entry.get("idCard")
+    if isinstance(id_card, Mapping):
+        issue_country = id_card.get("issueCountry") if isinstance(id_card.get("issueCountry"), Mapping) else None
+
+    return PreflightCrewMember(
+        seat=seat,
+        user_id=_clean_string(user_block.get("id")),
+        first_name=_clean_string(user_block.get("firstName")),
+        middle_name=_clean_string(user_block.get("middleName")),
+        last_name=_clean_string(user_block.get("lastName")),
+        gender=_normalise_gender(user_block.get("gender")),
+        nationality_iso3=(
+            _clean_string(issue_country.get("iso3")) if isinstance(issue_country, Mapping) else None
+        ),
+        birth_date=_normalise_optional_epoch(user_block.get("birthDate")),
+        document_number=_clean_string(id_card.get("number")) if isinstance(id_card, Mapping) else None,
+        document_issue_country_iso3=(
+            _clean_string(issue_country.get("iso3")) if isinstance(issue_country, Mapping) else None
+        ),
+        document_expiration=_normalise_optional_epoch(id_card.get("expirationDate"))
+        if isinstance(id_card, Mapping)
+        else None,
+    )
+
+
+def extract_crew_from_preflight(preflight_payload: Any) -> List[PreflightCrewMember]:
+    """Return any crew roster entries embedded in a preflight payload."""
+
+    results: List[PreflightCrewMember] = []
+
+    if not isinstance(preflight_payload, Mapping):
+        return results
+
+    crew_assign = preflight_payload.get("crewAssign")
+    if not isinstance(crew_assign, Mapping):
+        return results
+
+    preferred_order = (
+        "commander",
+        "firstOfficer",
+        "secondOfficer",
+        "trainingCaptain",
+        "flightAttendant",
+    )
+
+    processed: set[str] = set()
+
+    def _maybe_append(seat_key: str) -> None:
+        entry = crew_assign.get(seat_key)
+        if not isinstance(entry, Mapping):
+            return
+        member = _extract_preflight_crew_member(seat_key, entry)
+        if member is not None:
+            results.append(member)
+            processed.add(seat_key)
+
+    for key in preferred_order:
+        _maybe_append(key)
+
+    for seat_key, entry in crew_assign.items():
+        if not isinstance(seat_key, str) or seat_key in processed:
+            continue
+        if not isinstance(entry, Mapping):
+            continue
+        member = _extract_preflight_crew_member(seat_key, entry)
+        if member is not None:
+            results.append(member)
+
+    return results
 
 
 @dataclass
@@ -1448,8 +1579,10 @@ __all__ = [
     "PreflightConflictAlert",
     "PreflightCrewCheckin",
     "PreflightChecklistStatus",
+    "PreflightCrewMember",
     "parse_postflight_payload",
     "parse_preflight_payload",
+    "extract_crew_from_preflight",
     "extract_missing_qualifications_from_preflight",
     "extract_conflicts_from_preflight",
 ]
