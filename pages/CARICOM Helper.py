@@ -201,6 +201,7 @@ def _build_workbook(
     general_ws["S13"] = "4032161699"
     general_ws["V13"] = "dispatch@airsprint.com"
 
+    _populate_flight_details(workbook, leg, dep_airport, arr_airport)
     _populate_crew_sheet(workbook, crew_roster, dep_airport, arr_airport)
 
     buffer = BytesIO()
@@ -260,6 +261,30 @@ def _tail_to_callsign(tail: Any) -> str:
     }
 
     return tail_map.get(tail_sanitized, "")
+
+
+def _combine_date_time(date_str: str, time_str: str) -> str:
+    return " ".join(part for part in (date_str, time_str) if part)
+
+
+def _populate_flight_details(workbook, leg: Mapping[str, Any], dep_airport: str, arr_airport: str) -> None:
+    dep_date, dep_time = _format_date_time(leg.get("dep_time"))
+    arr_date, arr_time = _format_date_time(leg.get("arrival_time"))
+
+    dep_dt = _combine_date_time(dep_date, dep_time)
+    arr_dt = _combine_date_time(arr_date, arr_time)
+
+    flight_id = leg.get("id") or leg.get("flightId") or leg.get("flight_id") or ""
+    aircraft_name = leg.get("tail") or leg.get("aircraftName") or ""
+
+    for sheet_name in ("Crew List", "Passenger List"):
+        ws = workbook[sheet_name]
+        ws["D11"] = flight_id
+        ws["G11"] = aircraft_name
+        ws["L11"] = dep_dt
+        ws["O11"] = _icao_to_iata(dep_airport)
+        ws["R11"] = arr_dt
+        ws["U11"] = _icao_to_iata(arr_airport)
 
 
 @st.cache_data(show_spinner=False)
