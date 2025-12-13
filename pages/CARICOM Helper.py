@@ -234,9 +234,11 @@ def _build_workbook(
     dep_date, dep_time = _format_date_time(leg.get("dep_time"))
     arr_date, arr_time = _format_date_time(leg.get("arrival_time"))
 
-    general_ws["B13"] = leg.get("aircraft_callsign") or leg.get("callsign") or _tail_to_callsign(
+    flight_identifier = leg.get("aircraft_callsign") or leg.get("callsign") or _tail_to_callsign(
         leg.get("tail") or leg.get("aircraftName")
     )
+
+    general_ws["B13"] = flight_identifier
     general_ws["E13"] = leg.get("tail") or leg.get("aircraftName") or ""
     general_ws["H13"] = len(passenger_roster) or leg.get("paxNumber") or ""
     general_ws["K13"] = len(crew_roster) or crew_count or ""
@@ -249,11 +251,11 @@ def _build_workbook(
     general_ws["O18"] = arr_time
     general_ws["R18"] = _icao_to_iata(arr_airport)
 
-    general_ws["O13"] = ""
+    general_ws["O13"] = "AIRSPRINT"
     general_ws["S13"] = "4032161699"
     general_ws["V13"] = "dispatch@airsprint.com"
 
-    _populate_flight_details(workbook, leg, dep_airport, arr_airport)
+    _populate_flight_details(workbook, leg, dep_airport, arr_airport, flight_identifier)
     _populate_crew_sheet(workbook, crew_roster, dep_airport, arr_airport)
     _populate_passenger_sheet(workbook, passenger_roster, dep_airport, arr_airport)
 
@@ -320,14 +322,20 @@ def _combine_date_time(date_str: str, time_str: str) -> str:
     return " ".join(part for part in (date_str, time_str) if part)
 
 
-def _populate_flight_details(workbook, leg: Mapping[str, Any], dep_airport: str, arr_airport: str) -> None:
+def _populate_flight_details(
+    workbook,
+    leg: Mapping[str, Any],
+    dep_airport: str,
+    arr_airport: str,
+    flight_identifier: str,
+) -> None:
     dep_date, dep_time = _format_date_time(leg.get("dep_time"))
     arr_date, arr_time = _format_date_time(leg.get("arrival_time"))
 
     dep_dt = _combine_date_time(dep_date, dep_time)
     arr_dt = _combine_date_time(arr_date, arr_time)
 
-    flight_id = leg.get("id") or leg.get("flightId") or leg.get("flight_id") or ""
+    flight_id = flight_identifier or _tail_to_callsign(leg.get("tail") or leg.get("aircraftName"))
     aircraft_name = leg.get("tail") or leg.get("aircraftName") or ""
 
     for sheet_name in ("Crew List", "Passenger List"):
