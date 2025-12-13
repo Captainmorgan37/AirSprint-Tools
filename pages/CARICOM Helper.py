@@ -12,10 +12,13 @@ from openpyxl import load_workbook
 
 from Home import configure_page, password_gate, render_sidebar
 from fl3xx_api import (
+    PassengerDetail,
     PreflightCrewMember,
     compute_fetch_dates,
     extract_crew_from_preflight,
+    extract_passengers_from_pax_details,
     fetch_flights,
+    fetch_flight_pax_details,
     fetch_preflight,
 )
 from flight_leg_utils import (
@@ -169,9 +172,58 @@ def _populate_crew_sheet(
             crew_ws.cell(row=row, column=column).value = ""
 
 
+def _passenger_rows(ws) -> list[int]:
+    rows: list[int] = []
+    for row in ws.iter_rows(min_col=2, max_col=2, min_row=19):
+        cell = row[0]
+        if isinstance(cell.value, int):
+            rows.append(cell.row)
+    return rows
+
+
+def _populate_passenger_sheet(
+    workbook, passengers: Sequence[PassengerDetail], dep_airport: str, arr_airport: str
+) -> None:
+    pax_ws = workbook["Passenger List"]
+    dep_iata = _icao_to_iata(dep_airport)
+    arr_iata = _icao_to_iata(arr_airport)
+    target_rows = _passenger_rows(pax_ws)
+
+    fields = (
+        ("last_name", 3),
+        ("first_name", 6),
+        ("middle_name", 9),
+        ("nationality_iso3", 11),
+        ("gender", 13),
+        ("birth_date", 14),
+        ("document_number", 16),
+        ("document_issue_country_iso3", 18),
+        ("document_expiration", 20),
+    )
+
+    for passenger, row in zip(passengers, target_rows):
+        for field, column in fields:
+            value = getattr(passenger, field)
+            if field in {"birth_date", "document_expiration"}:
+                value = _format_epoch_date(value)
+            elif field == "gender":
+                value = _format_gender(value)
+            pax_ws.cell(row=row, column=column).value = value or ""
+
+        pax_ws.cell(row=row, column=22).value = dep_iata
+        pax_ws.cell(row=row, column=23).value = arr_iata
+        pax_ws.cell(row=row, column=24).value = arr_iata
+
+    empty_columns = (3, 6, 9, 11, 13, 14, 16, 18, 20, 22, 23, 24)
+    for row in target_rows[len(passengers) :]:
+        for column in empty_columns:
+            pax_ws.cell(row=row, column=column).value = ""
+
+
 def _build_workbook(
     leg: dict[str, Any],
     crew_roster: Sequence[PreflightCrewMember],
+    passenger_roster: Sequence[PassengerDetail],
     dep_airport: str,
     arr_airport: str,
     crew_count: int,
@@ -186,7 +238,7 @@ def _build_workbook(
         leg.get("tail") or leg.get("aircraftName")
     )
     general_ws["E13"] = leg.get("tail") or leg.get("aircraftName") or ""
-    general_ws["H13"] = leg.get("paxNumber") or ""
+    general_ws["H13"] = len(passenger_roster) or leg.get("paxNumber") or ""
     general_ws["K13"] = len(crew_roster) or crew_count or ""
 
     general_ws["B18"] = dep_date
@@ -203,6 +255,7 @@ def _build_workbook(
 
     _populate_flight_details(workbook, leg, dep_airport, arr_airport)
     _populate_crew_sheet(workbook, crew_roster, dep_airport, arr_airport)
+    _populate_passenger_sheet(workbook, passenger_roster, dep_airport, arr_airport)
 
     buffer = BytesIO()
     workbook.save(buffer)
@@ -362,6 +415,8 @@ dep_airport = selected_leg.get("departure_airport")
 arr_airport = selected_leg.get("arrival_airport")
 crew_members = selected_leg.get("crewMembers") if isinstance(selected_leg.get("crewMembers"), list) else []
 crew_count = len(crew_members)
+passenger_roster: list[PassengerDetail] = []
+passenger_count = selected_leg.get("paxNumber")
 caricom_route = [code for code in (dep_airport, arr_airport) if code]
 
 try:
@@ -374,10 +429,20 @@ try:
         crew_roster = extract_crew_from_preflight(preflight_payload)
         if crew_roster:
             crew_count = len(crew_roster)
+
+        try:
+            with st.spinner("Loading passenger roster…"):
+                pax_payload = fetch_flight_pax_details(config, flight_id)
+            passenger_roster = extract_passengers_from_pax_details(pax_payload)
+            if passenger_roster:
+                passenger_count = len(passenger_roster)
+        except Exception as pax_exc:  # pragma: no cover - runtime fetch failures
+            st.warning(f"Unable to load passenger roster from pax_details: {pax_exc}")
     else:
         st.warning("Flight ID missing on selected leg; crew roster will be left blank.")
 except Exception as exc:  # pragma: no cover - runtime fetch failures
     crew_roster = []
+    passenger_roster = []
     st.warning(f"Unable to load crew roster from preflight: {exc}")
 
 st.subheader("Flight summary")
@@ -387,19 +452,18 @@ st.json(
         "Tail": selected_leg.get("tail"),
         "Departure": dep_airport,
         "Arrival": arr_airport,
-        "Passenger Count": selected_leg.get("paxNumber"),
+        "Passenger Count": passenger_count,
         "Crew Count": crew_count,
         "Route Airports": caricom_route,
     },
     expanded=False,
 )
 
-st.info(
-    "Crew details are now pulled from the preflight endpoint. Passenger roster fields "
-    "remain blank until the pax_details feed is connected."
-)
+st.info("Crew and passenger details are pulled directly from FL3XX when available.")
 
-workbook_bytes = _build_workbook(selected_leg, crew_roster, dep_airport, arr_airport, crew_count)
+workbook_bytes = _build_workbook(
+    selected_leg, crew_roster, passenger_roster, dep_airport, arr_airport, crew_count
+)
 file_label = f"CARICOM_{booking_identifier or 'booking'}.xlsx"
 
 st.download_button(

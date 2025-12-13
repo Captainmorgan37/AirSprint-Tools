@@ -559,6 +559,21 @@ class PreflightCrewMember:
     document_expiration: Optional[int] = None
 
 
+@dataclass(frozen=True)
+class PassengerDetail:
+    """Passenger information pulled from the pax_details endpoint."""
+
+    first_name: Optional[str] = None
+    middle_name: Optional[str] = None
+    last_name: Optional[str] = None
+    nationality_iso3: Optional[str] = None
+    gender: Optional[str] = None
+    birth_date: Optional[int] = None
+    document_number: Optional[str] = None
+    document_issue_country_iso3: Optional[str] = None
+    document_expiration: Optional[int] = None
+
+
 def _extract_preflight_status_value(value: Any) -> Optional[str]:
     if isinstance(value, str):
         cleaned = value.strip()
@@ -662,6 +677,51 @@ def _normalise_gender(value: Any) -> Optional[str]:
     if upper.startswith("F"):
         return "F"
     return upper
+
+
+def _extract_passenger(ticket: Mapping[str, Any]) -> Optional[PassengerDetail]:
+    pax_user = ticket.get("paxUser")
+    if not isinstance(pax_user, Mapping):
+        return None
+
+    id_card = ticket.get("idCard") if isinstance(ticket.get("idCard"), Mapping) else None
+    if isinstance(id_card, Mapping):
+        issue_country = id_card.get("issueCountry") if isinstance(id_card.get("issueCountry"), Mapping) else None
+    else:
+        issue_country = None
+
+    return PassengerDetail(
+        first_name=_clean_string(pax_user.get("firstName")),
+        middle_name=_clean_string(pax_user.get("middleName")),
+        last_name=_clean_string(pax_user.get("lastName")),
+        nationality_iso3=_clean_string(issue_country.get("iso3")) if isinstance(issue_country, Mapping) else None,
+        gender=_normalise_gender(pax_user.get("gender") or ticket.get("paxType")),
+        birth_date=_normalise_optional_epoch(pax_user.get("birthDate")),
+        document_number=_clean_string(id_card.get("number")) if isinstance(id_card, Mapping) else None,
+        document_issue_country_iso3=_clean_string(issue_country.get("iso3")) if isinstance(issue_country, Mapping) else None,
+        document_expiration=_normalise_optional_epoch(id_card.get("expirationDate")) if isinstance(id_card, Mapping) else None,
+    )
+
+
+def extract_passengers_from_pax_details(pax_details_payload: Any) -> List[PassengerDetail]:
+    """Return any passenger records embedded in a pax_details payload."""
+
+    if not isinstance(pax_details_payload, Mapping):
+        return []
+
+    pax_block = pax_details_payload.get("pax")
+    ticket_candidates: Any
+    if isinstance(pax_block, Mapping):
+        ticket_candidates = pax_block.get("tickets")
+    else:
+        ticket_candidates = pax_details_payload.get("tickets")
+
+    if not isinstance(ticket_candidates, Iterable):
+        return []
+
+    tickets = [entry for entry in ticket_candidates if isinstance(entry, Mapping)]
+    passengers = [_extract_passenger(ticket) for ticket in tickets]
+    return [pax for pax in passengers if pax is not None]
 
 
 def extract_missing_qualifications_from_preflight(
@@ -1580,9 +1640,11 @@ __all__ = [
     "PreflightCrewCheckin",
     "PreflightChecklistStatus",
     "PreflightCrewMember",
+    "PassengerDetail",
     "parse_postflight_payload",
     "parse_preflight_payload",
     "extract_crew_from_preflight",
+    "extract_passengers_from_pax_details",
     "extract_missing_qualifications_from_preflight",
     "extract_conflicts_from_preflight",
 ]
