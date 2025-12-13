@@ -24,6 +24,15 @@ from fl3xx_api import (
 )
 
 
+def test_preflight_crew_member_is_exported() -> None:
+    import fl3xx_api
+
+    # The module must expose the crew dataclass so downstream modules can import
+    # it directly (e.g., CARICOM Helper type annotations).
+    assert hasattr(fl3xx_api, "PreflightCrewMember")
+    assert fl3xx_api.PreflightCrewMember.__name__ == "PreflightCrewMember"
+
+
 def test_parse_postflight_payload_reads_time_dtls2() -> None:
     payload = {
         "tailNumber": "C-GASK",
