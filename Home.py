@@ -116,6 +116,7 @@ def _sidebar_links() -> list[dict[str, Any]]:
                 {"path": "pages/Jeppesen ITP Required Flight Check.py", "label": "Jeppesen ITP Checker"},
                 {"path": "pages/Crew Confirmation Monitor.py", "label": "Crew Confirmation Monitor"},
                 {"path": "pages/Max ZFW Checker.py", "label": "Max ZFW Checker"},
+                {"path": "pages/CARICOM Helper.py", "label": "CARICOM Helper"},
                 {"path": "pages/_Customs Dashboard.py", "label": "Customs Dashboard"},
                 {"path": "pages/OCA Reports.py", "label": "OCA Reports"},
                 {"path": "pages/Operations Lead Morning Reports.py", "label": "OL Morning Reports"},
@@ -144,7 +145,6 @@ def _sidebar_links() -> list[dict[str, Any]]:
             "label": "In Progress",
             "expanded": False,
             "links": [
-                {"path": "pages/CARICOM Helper.py", "label": "CARICOM Helper"},
                 {"path": "pages/Hangar Recommendation.py", "label": "Hangar Recommendation"},
                 {"path": "pages/FTL Report Reader.py", "label": "FTL Report Reader"},
                 {"path": "pages/Dev_Feasibility.py", "label": "Feasibility Checker"},
