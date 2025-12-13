@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import pathlib
 from datetime import datetime, timezone
 import sys
@@ -14,8 +15,12 @@ from fl3xx_api import (
     MissingQualificationAlert,
     PreflightChecklistStatus,
     PreflightCrewCheckin,
+    PreflightCrewMember,
     PreflightConflictAlert,
+    PassengerDetail,
     extract_conflicts_from_preflight,
+    extract_crew_from_preflight,
+    extract_passengers_from_pax_details,
     extract_missing_qualifications_from_preflight,
     parse_postflight_payload,
     parse_preflight_payload,
@@ -185,6 +190,26 @@ def test_parse_preflight_payload_collects_checkins() -> None:
     assert status.has_data is True
 
 
+def test_extract_passengers_from_pax_details_reads_tickets() -> None:
+    payload = json.loads(pathlib.Path("docs/pax details API pull.txt").read_text())
+
+    passengers = extract_passengers_from_pax_details(payload)
+
+    assert len(passengers) == 6
+
+    first = passengers[0]
+    assert isinstance(first, PassengerDetail)
+    assert first.last_name == "Aune"
+    assert first.first_name == "Jonathan"
+    assert first.middle_name == "Patrick Nelse"
+    assert first.gender == "M"
+    assert first.nationality_iso3 == "CAN"
+    assert first.birth_date == 164246400000
+    assert first.document_number == "P171050ED"
+    assert first.document_issue_country_iso3 == "CAN"
+    assert first.document_expiration == 2057356800000
+
+
 def test_parse_preflight_payload_collects_additional_datetime_fields() -> None:
     payload = {
         "dutyTimeLim": {
@@ -208,6 +233,71 @@ def test_parse_preflight_payload_collects_additional_datetime_fields() -> None:
 
     expected_epoch = int(datetime(2024, 5, 2, 12, 15, tzinfo=timezone.utc).timestamp())
     assert checkin.extra_checkins == (expected_epoch,)
+
+
+def test_extract_crew_from_preflight_returns_roster() -> None:
+    payload = {
+        "crewAssign": {
+            "status": "OK",
+            "commander": {
+                "user": {
+                    "id": 395655,
+                    "firstName": "Steward",
+                    "middleName": "John",
+                    "lastName": "Van Male",
+                    "gender": "MALE",
+                    "birthDate": -69638400000,
+                },
+                "idCard": {
+                    "number": "AL678654",
+                    "issueCountry": {"iso3": "CAN"},
+                    "expirationDate": 1944950400000,
+                },
+            },
+            "firstOfficer": {
+                "user": {
+                    "id": "999888",
+                    "firstName": "Robert",
+                    "middleName": "Lewis Cameron",
+                    "lastName": "Foster",
+                    "gender": "male",
+                    "birthDate": 419817600000,
+                },
+                "idCard": {
+                    "number": "AB698200",
+                    "issueCountry": {"iso3": "CAN"},
+                    "expirationDate": 1822435200000,
+                },
+            },
+        }
+    }
+
+    crew = extract_crew_from_preflight(payload)
+
+    assert [member.seat for member in crew] == ["PIC", "SIC"]
+    assert crew[0] == PreflightCrewMember(
+        seat="PIC",
+        user_id="395655",
+        first_name="Steward",
+        middle_name="John",
+        last_name="Van Male",
+        gender="M",
+        nationality_iso3="CAN",
+        birth_date=-69638400000,
+        document_number="AL678654",
+        document_issue_country_iso3="CAN",
+        document_expiration=1944950400000,
+    )
+
+    fo = crew[1]
+    assert fo.gender == "M"
+    assert fo.document_number == "AB698200"
+    assert fo.birth_date == 419817600000
+
+
+def test_extract_crew_from_preflight_handles_missing_blocks() -> None:
+    assert extract_crew_from_preflight({}) == []
+    assert extract_crew_from_preflight({"crewAssign": {"status": "OK", "commander": "not-a-mapping"}}) == []
 
 
 def test_extract_missing_qualifications_from_preflight_returns_alerts() -> None:
