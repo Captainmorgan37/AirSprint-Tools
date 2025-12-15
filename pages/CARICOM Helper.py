@@ -6,6 +6,7 @@ from typing import Any, Dict, Iterable, Mapping, Sequence
 
 import csv
 from datetime import datetime, timezone
+from functools import lru_cache
 
 import streamlit as st
 from openpyxl import load_workbook
@@ -24,9 +25,11 @@ from fl3xx_api import (
 from flight_leg_utils import (
     FlightDataError,
     build_fl3xx_api_config,
+    load_airport_metadata_lookup,
     normalize_fl3xx_payload,
     safe_parse_dt,
 )
+from zoneinfo_compat import ZoneInfo
 
 configure_page(page_title="CARICOM Helper")
 password_gate()
@@ -61,6 +64,44 @@ CARICOM_COUNTRIES = {
     "Trinidad and Tobago",
 }
 
+CARICOM_REQUIREMENT_COUNTRIES = {
+    "antigua and barbuda",
+    "barbados",
+    "dominica",
+    "grenada",
+    "guyana",
+    "jamaica",
+    "saint kitts and nevis",
+    "saint lucia",
+    "saint vincent and the grenadines",
+    "trinidad and tobago",
+}
+
+CARICOM_COUNTRY_CODE_TO_NAME = {
+    # ISO2
+    "AG": "Antigua and Barbuda",
+    "BB": "Barbados",
+    "DM": "Dominica",
+    "GD": "Grenada",
+    "GY": "Guyana",
+    "JM": "Jamaica",
+    "KN": "Saint Kitts and Nevis",
+    "LC": "Saint Lucia",
+    "VC": "Saint Vincent and the Grenadines",
+    "TT": "Trinidad and Tobago",
+    # ISO3
+    "ATG": "Antigua and Barbuda",
+    "BRB": "Barbados",
+    "DMA": "Dominica",
+    "GRD": "Grenada",
+    "GUY": "Guyana",
+    "JAM": "Jamaica",
+    "KNA": "Saint Kitts and Nevis",
+    "LCA": "Saint Lucia",
+    "VCT": "Saint Vincent and the Grenadines",
+    "TTO": "Trinidad and Tobago",
+}
+
 
 @st.cache_data(ttl=300, show_spinner=False)
 def _fetch_upcoming_flights(settings: Dict[str, Any]) -> list[dict[str, Any]]:
@@ -70,9 +111,27 @@ def _fetch_upcoming_flights(settings: Dict[str, Any]) -> list[dict[str, Any]]:
     return flights
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def _fetch_caricom_requirement_flights(settings: Dict[str, Any]) -> list[dict[str, Any]]:
+    config = build_fl3xx_api_config(settings)
+    from_date, to_date = compute_fetch_dates(inclusive_days=3)
+    flights, _ = fetch_flights(config, from_date=from_date, to_date=to_date)
+    return flights
+
+
 def _normalise_legs(payload: Iterable[Any]) -> list[dict[str, Any]]:
     legs, _ = normalize_fl3xx_payload(list(payload))
     return legs
+
+
+def _caricom_applicable_legs(legs: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    applicable: list[dict[str, Any]] = []
+    for leg in legs:
+        dep_airport = leg.get("departure_airport")
+        arr_airport = leg.get("arrival_airport")
+        if _is_caricom_airport(dep_airport) or _is_caricom_airport(arr_airport):
+            applicable.append(dict(leg))
+    return applicable
 
 
 def _matches_booking(leg: Mapping[str, Any], booking_identifier: str) -> bool:
@@ -374,12 +433,103 @@ def _icao_to_iata(code: Any) -> str:
     return lookup.get(icao, icao)
 
 
+@lru_cache(maxsize=1)
+def _airport_metadata_lookup() -> dict[str, dict[str, Any]]:
+    lookup: dict[str, dict[str, Any]] = {}
+    for code, metadata in load_airport_metadata_lookup().items():
+        lookup[code.upper()] = metadata
+    return lookup
+
+
+def _canonical_country_name(name: str | None) -> str:
+    if not name:
+        return ""
+    cleaned = name.replace("St.", "Saint").replace("St ", "Saint ").strip()
+    return cleaned.lower()
+
+
+def _airport_country(code: Any) -> str:
+    if code is None:
+        return ""
+    airport_code = str(code).strip().upper()
+    metadata = _airport_metadata_lookup().get(airport_code)
+    if not metadata:
+        return ""
+    country = metadata.get("country")
+    if not country:
+        return ""
+
+    country_cleaned = str(country).strip().upper()
+    resolved = CARICOM_COUNTRY_CODE_TO_NAME.get(country_cleaned, country_cleaned)
+    return resolved
+
+
+def _airport_timezone(code: Any) -> str:
+    if code is None:
+        return ""
+    airport_code = str(code).strip().upper()
+    metadata = _airport_metadata_lookup().get(airport_code)
+    if not metadata:
+        return ""
+    tz = metadata.get("tz")
+    return str(tz).strip() if tz else ""
+
+
+def _is_caricom_airport(code: Any) -> bool:
+    country = _canonical_country_name(_airport_country(code))
+    if not country:
+        return False
+    return country in CARICOM_REQUIREMENT_COUNTRIES
+
+
+def _format_local_departure_date(dep_time: Any, dep_airport: Any) -> str:
+    if dep_time is None:
+        return ""
+    try:
+        dt = safe_parse_dt(str(dep_time))
+    except Exception:
+        return ""
+
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+
+    tz_name = _airport_timezone(dep_airport)
+    if tz_name:
+        try:
+            dt = dt.astimezone(ZoneInfo(tz_name))
+        except Exception:
+            pass
+
+    return dt.strftime("%Y-%m-%d")
+
+
+def _flight_type_label(leg: Mapping[str, Any] | None) -> str:
+    if not isinstance(leg, Mapping):
+        return ""
+
+    flight_type = leg.get("flightType") or leg.get("type")
+    if flight_type:
+        label = str(flight_type).strip()
+        if label:
+            return label
+
+    pax = leg.get("paxNumber")
+    try:
+        pax_count = int(pax)
+    except (TypeError, ValueError):
+        pax_count = None
+
+    if pax_count is not None:
+        return "PAX" if pax_count > 0 else "POS"
+
+    if leg.get("isPositioning") is True:
+        return "POS"
+
+    return ""
+
+
 booking_identifier = st.text_input("Booking Identifier", placeholder="e.g. ASP-123456")
 fetch_button = st.button("Fetch Flight & Prepare Workbook", type="primary")
-
-if not fetch_button:
-    st.info("Enter a booking identifier and click **Fetch** to begin.")
-    st.stop()
 
 try:
     api_settings = st.secrets.get("fl3xx_api")  # type: ignore[attr-defined]
@@ -390,98 +540,163 @@ if not api_settings:
     st.error(
         "FL3XX API credentials are missing. Add them under `fl3xx_api` in `.streamlit/secrets.toml`."
     )
-    st.stop()
-
-try:
-    with st.spinner("Fetching upcoming flights from FL3XX…"):
-        raw_flights = _fetch_upcoming_flights(dict(api_settings))
-        legs = _normalise_legs(raw_flights)
-except FlightDataError as exc:
-    st.error(str(exc))
-    st.stop()
-except Exception as exc:  # pragma: no cover - runtime fetch failures
-    st.error(f"Flight retrieval failed: {exc}")
-    st.stop()
-
-if not legs:
-    st.warning("No flights returned for the upcoming 72-hour window.")
-    st.stop()
-
-matched_legs = [leg for leg in legs if _matches_booking(leg, booking_identifier)]
-
-if not matched_legs:
-    st.warning("No matching booking was found in the next 72 hours.")
-    st.stop()
-
-sorted_legs = sorted(
-    matched_legs,
-    key=lambda leg: leg.get("dep_time") or "",
-)
-selected_leg = sorted_legs[0]
-
-dep_airport = selected_leg.get("departure_airport")
-arr_airport = selected_leg.get("arrival_airport")
-crew_members = selected_leg.get("crewMembers") if isinstance(selected_leg.get("crewMembers"), list) else []
-crew_count = len(crew_members)
-passenger_roster: list[PassengerDetail] = []
-passenger_count = selected_leg.get("paxNumber")
-caricom_route = [code for code in (dep_airport, arr_airport) if code]
-
-try:
-    config = build_fl3xx_api_config(dict(api_settings))
-    flight_id = selected_leg.get("id") or selected_leg.get("flightId") or selected_leg.get("flight_id")
-    crew_roster: list[PreflightCrewMember] = []
-    if flight_id:
-        with st.spinner("Loading preflight crew roster…"):
-            preflight_payload = fetch_preflight(config, flight_id)
-        crew_roster = extract_crew_from_preflight(preflight_payload)
-        if crew_roster:
-            crew_count = len(crew_roster)
-
+else:
+    if fetch_button:
         try:
-            with st.spinner("Loading passenger roster…"):
-                pax_payload = fetch_flight_pax_details(config, flight_id)
-            passenger_roster = extract_passengers_from_pax_details(pax_payload)
-            if passenger_roster:
-                passenger_count = len(passenger_roster)
-        except Exception as pax_exc:  # pragma: no cover - runtime fetch failures
-            st.warning(f"Unable to load passenger roster from pax_details: {pax_exc}")
+            with st.spinner("Fetching upcoming flights from FL3XX…"):
+                raw_flights = _fetch_upcoming_flights(dict(api_settings))
+                legs = _normalise_legs(raw_flights)
+        except FlightDataError as exc:
+            st.error(str(exc))
+        except Exception as exc:  # pragma: no cover - runtime fetch failures
+            st.error(f"Flight retrieval failed: {exc}")
+        else:
+            if not legs:
+                st.warning("No flights returned for the upcoming 72-hour window.")
+            else:
+                matched_legs = [leg for leg in legs if _matches_booking(leg, booking_identifier)]
+
+                if not matched_legs:
+                    st.warning("No matching booking was found in the next 72 hours.")
+                else:
+                    sorted_legs = sorted(
+                        matched_legs,
+                        key=lambda leg: leg.get("dep_time") or "",
+                    )
+                    selected_leg = sorted_legs[0]
+
+                    dep_airport = selected_leg.get("departure_airport")
+                    arr_airport = selected_leg.get("arrival_airport")
+                    crew_members = (
+                        selected_leg.get("crewMembers")
+                        if isinstance(selected_leg.get("crewMembers"), list)
+                        else []
+                    )
+                    crew_count = len(crew_members)
+                    passenger_roster: list[PassengerDetail] = []
+                    passenger_count = selected_leg.get("paxNumber")
+                    caricom_route = [code for code in (dep_airport, arr_airport) if code]
+
+                    try:
+                        config = build_fl3xx_api_config(dict(api_settings))
+                        flight_id = (
+                            selected_leg.get("id")
+                            or selected_leg.get("flightId")
+                            or selected_leg.get("flight_id")
+                        )
+                        crew_roster: list[PreflightCrewMember] = []
+                        if flight_id:
+                            with st.spinner("Loading preflight crew roster…"):
+                                preflight_payload = fetch_preflight(config, flight_id)
+                            crew_roster = extract_crew_from_preflight(preflight_payload)
+                            if crew_roster:
+                                crew_count = len(crew_roster)
+
+                            try:
+                                with st.spinner("Loading passenger roster…"):
+                                    pax_payload = fetch_flight_pax_details(config, flight_id)
+                                passenger_roster = extract_passengers_from_pax_details(pax_payload)
+                                if passenger_roster:
+                                    passenger_count = len(passenger_roster)
+                            except Exception as pax_exc:  # pragma: no cover - runtime fetch failures
+                                st.warning(
+                                    f"Unable to load passenger roster from pax_details: {pax_exc}"
+                                )
+                        else:
+                            st.warning("Flight ID missing on selected leg; crew roster will be left blank.")
+                    except Exception as exc:  # pragma: no cover - runtime fetch failures
+                        crew_roster = []
+                        passenger_roster = []
+                        st.warning(f"Unable to load crew roster from preflight: {exc}")
+
+                    st.subheader("Flight summary")
+                    st.json(
+                        {
+                            "Booking": booking_identifier,
+                            "Tail": selected_leg.get("tail"),
+                            "Departure": dep_airport,
+                            "Arrival": arr_airport,
+                            "Passenger Count": passenger_count,
+                            "Crew Count": crew_count,
+                            "Route Airports": caricom_route,
+                        },
+                        expanded=False,
+                    )
+
+                    st.info("Crew and passenger details are pulled directly from FL3XX when available.")
+
+                    workbook_bytes = _build_workbook(
+                        selected_leg,
+                        crew_roster,
+                        passenger_roster,
+                        dep_airport,
+                        arr_airport,
+                        crew_count,
+                    )
+                    file_label = f"CARICOM_{booking_identifier or 'booking'}.xlsx"
+
+                    st.download_button(
+                        "Download CARICOM Excel",
+                        data=workbook_bytes,
+                        file_name=file_label,
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    )
     else:
-        st.warning("Flight ID missing on selected leg; crew roster will be left blank.")
-except Exception as exc:  # pragma: no cover - runtime fetch failures
-    crew_roster = []
-    passenger_roster = []
-    st.warning(f"Unable to load crew roster from preflight: {exc}")
+        st.info("Enter a booking identifier and click **Fetch** to build a CARICOM workbook.")
 
-st.subheader("Flight summary")
-st.json(
-    {
-        "Booking": booking_identifier,
-        "Tail": selected_leg.get("tail"),
-        "Departure": dep_airport,
-        "Arrival": arr_airport,
-        "Passenger Count": passenger_count,
-        "Crew Count": crew_count,
-        "Route Airports": caricom_route,
-    },
-    expanded=False,
+st.divider()
+
+st.subheader("CARICOM requirement scanner")
+st.write(
+    "Check upcoming flights for routes that depart from or arrive at CARICOM airports "
+    "in the next three days."
 )
 
-st.info("Crew and passenger details are pulled directly from FL3XX when available.")
+scan_button = st.button("Scan upcoming routes for CARICOM requirements")
 
-workbook_bytes = _build_workbook(
-    selected_leg, crew_roster, passenger_roster, dep_airport, arr_airport, crew_count
-)
-file_label = f"CARICOM_{booking_identifier or 'booking'}.xlsx"
+if not api_settings:
+    st.info("Add FL3XX API credentials to enable CARICOM requirement scanning.")
+elif scan_button:
+    try:
+        with st.spinner("Scanning upcoming flights for CARICOM routing…"):
+            raw_flights = _fetch_caricom_requirement_flights(dict(api_settings))
+            legs = _normalise_legs(raw_flights)
+    except FlightDataError as exc:
+        st.error(str(exc))
+    except Exception as exc:  # pragma: no cover - runtime fetch failures
+        st.error(f"Flight retrieval failed: {exc}")
+    else:
+        caricom_legs = _caricom_applicable_legs(legs)
+        if not caricom_legs:
+            st.success("No CARICOM routes found in the next three days.")
+        else:
+            rows = []
+            for leg in sorted(caricom_legs, key=lambda item: item.get("dep_time") or ""):
+                dep_airport = leg.get("departure_airport")
+                arr_airport = leg.get("arrival_airport")
+                dep_icao = str(dep_airport or "").strip().upper()
+                arr_icao = str(arr_airport or "").strip().upper()
+                dep_label = _icao_to_iata(dep_airport) or (dep_airport or "")
+                arr_label = _icao_to_iata(arr_airport) or (arr_airport or "")
+                routing = f"{dep_label or '—'} ➜ {arr_label or '—'}"
+                rows.append(
+                    {
+                        "ICAO Routing": f"{dep_icao or '—'} ➜ {arr_icao or '—'}",
+                        "IATA Routing": routing,
+                        "Departure Date (Local)": _format_local_departure_date(
+                            leg.get("dep_time"), dep_airport
+                        ),
+                        "Tail": leg.get("tail") or leg.get("aircraftName"),
+                        "Flight Type": _flight_type_label(leg),
+                        "Booking Identifier": leg.get("bookingIdentifier")
+                        or leg.get("bookingReference")
+                        or leg.get("bookingCode")
+                        or leg.get("bookingId")
+                        or leg.get("flightId")
+                        or leg.get("flight_id")
+                        or leg.get("id"),
+                    }
+                )
 
-st.download_button(
-    "Download CARICOM Excel",
-    data=workbook_bytes,
-    file_name=file_label,
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-)
+            st.dataframe(rows, hide_index=True)
 
-st.caption(
-    "Flights are fetched for today through two days ahead. If CARICOM applicability needs validation, "
-    "use the routing summary above while we extend the automated coverage check."
-)
