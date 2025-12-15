@@ -240,6 +240,91 @@ def _passenger_rows(ws) -> list[int]:
     return rows
 
 
+def _value_present(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    return bool(value)
+
+
+def _person_label(person: Any, fallback: str) -> str:
+    first = getattr(person, "first_name", "") or ""
+    last = getattr(person, "last_name", "") or ""
+    full_name = f"{first} {last}".strip()
+    if full_name:
+        return full_name
+
+    seat = getattr(person, "seat", "") or ""
+    if seat:
+        return f"{fallback} ({seat})"
+
+    return fallback
+
+
+def _roster_missing_fields(
+    roster: Sequence[Any], required_fields: Sequence[str], fallback_label: str
+) -> list[str]:
+    missing: list[str] = []
+    for person in roster:
+        missing_fields = [
+            field.replace("_", " ").title()
+            for field in required_fields
+            if not _value_present(getattr(person, field, None))
+        ]
+        if missing_fields:
+            label = _person_label(person, fallback_label)
+            missing.append(f"{label}: {', '.join(missing_fields)}")
+    return missing
+
+
+def _assess_workbook_completeness(
+    crew_roster: Sequence[PreflightCrewMember],
+    passenger_roster: Sequence[PassengerDetail],
+    passenger_count: Any,
+) -> tuple[bool, list[str]]:
+    required_fields = (
+        "last_name",
+        "first_name",
+        "nationality_iso3",
+        "gender",
+        "birth_date",
+        "document_number",
+        "document_issue_country_iso3",
+        "document_expiration",
+    )
+
+    messages: list[str] = []
+
+    crew_missing = _roster_missing_fields(crew_roster, required_fields, "Crew member")
+    if not crew_roster:
+        messages.append("Crew list is empty.")
+    elif crew_missing:
+        messages.extend(crew_missing)
+
+    passenger_total = None
+    try:
+        passenger_total = int(passenger_count)
+    except (TypeError, ValueError):
+        passenger_total = None
+
+    has_passengers = (passenger_total or 0) > 0 or bool(passenger_roster)
+
+    if has_passengers:
+        passenger_missing = _roster_missing_fields(
+            passenger_roster, required_fields, "Passenger"
+        )
+        if passenger_total is not None and len(passenger_roster) < passenger_total:
+            missing_count = passenger_total - len(passenger_roster)
+            messages.append(
+                f"Missing details for {missing_count} passenger(s)."
+            )
+        if passenger_missing:
+            messages.extend(passenger_missing)
+
+    return not messages, messages
+
+
 def _populate_passenger_sheet(
     workbook, passengers: Sequence[PassengerDetail], dep_airport: str, arr_airport: str
 ) -> None:
@@ -633,7 +718,19 @@ else:
                         arr_airport,
                         crew_count,
                     )
+                    workbook_complete, missing_messages = _assess_workbook_completeness(
+                        crew_roster, passenger_roster, passenger_count
+                    )
                     file_label = f"CARICOM_{booking_identifier or 'booking'}.xlsx"
+
+                    if workbook_complete:
+                        st.success(
+                            "CARICOM workbook is complete. Please verify contents before uploading."
+                        )
+                    else:
+                        st.warning("Some information is still required prior to upload.")
+                        if missing_messages:
+                            st.write("\n".join(f"- {message}" for message in missing_messages))
 
                     st.download_button(
                         "Download CARICOM Excel",
