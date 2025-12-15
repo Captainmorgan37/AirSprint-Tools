@@ -77,6 +77,31 @@ CARICOM_REQUIREMENT_COUNTRIES = {
     "trinidad and tobago",
 }
 
+CARICOM_COUNTRY_CODE_TO_NAME = {
+    # ISO2
+    "AG": "Antigua and Barbuda",
+    "BB": "Barbados",
+    "DM": "Dominica",
+    "GD": "Grenada",
+    "GY": "Guyana",
+    "JM": "Jamaica",
+    "KN": "Saint Kitts and Nevis",
+    "LC": "Saint Lucia",
+    "VC": "Saint Vincent and the Grenadines",
+    "TT": "Trinidad and Tobago",
+    # ISO3
+    "ATG": "Antigua and Barbuda",
+    "BRB": "Barbados",
+    "DMA": "Dominica",
+    "GRD": "Grenada",
+    "GUY": "Guyana",
+    "JAM": "Jamaica",
+    "KNA": "Saint Kitts and Nevis",
+    "LCA": "Saint Lucia",
+    "VCT": "Saint Vincent and the Grenadines",
+    "TTO": "Trinidad and Tobago",
+}
+
 
 @st.cache_data(ttl=300, show_spinner=False)
 def _fetch_upcoming_flights(settings: Dict[str, Any]) -> list[dict[str, Any]]:
@@ -431,7 +456,12 @@ def _airport_country(code: Any) -> str:
     if not metadata:
         return ""
     country = metadata.get("country")
-    return str(country).strip() if country else ""
+    if not country:
+        return ""
+
+    country_cleaned = str(country).strip().upper()
+    resolved = CARICOM_COUNTRY_CODE_TO_NAME.get(country_cleaned, country_cleaned)
+    return resolved
 
 
 def _airport_timezone(code: Any) -> str:
