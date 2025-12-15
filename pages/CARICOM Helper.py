@@ -503,6 +503,31 @@ def _format_local_departure_date(dep_time: Any, dep_airport: Any) -> str:
     return dt.strftime("%Y-%m-%d")
 
 
+def _flight_type_label(leg: Mapping[str, Any] | None) -> str:
+    if not isinstance(leg, Mapping):
+        return ""
+
+    flight_type = leg.get("flightType") or leg.get("type")
+    if flight_type:
+        label = str(flight_type).strip()
+        if label:
+            return label
+
+    pax = leg.get("paxNumber")
+    try:
+        pax_count = int(pax)
+    except (TypeError, ValueError):
+        pax_count = None
+
+    if pax_count is not None:
+        return "PAX" if pax_count > 0 else "POS"
+
+    if leg.get("isPositioning") is True:
+        return "POS"
+
+    return ""
+
+
 booking_identifier = st.text_input("Booking Identifier", placeholder="e.g. ASP-123456")
 fetch_button = st.button("Fetch Flight & Prepare Workbook", type="primary")
 
@@ -649,16 +674,25 @@ elif scan_button:
             for leg in sorted(caricom_legs, key=lambda item: item.get("dep_time") or ""):
                 dep_airport = leg.get("departure_airport")
                 arr_airport = leg.get("arrival_airport")
+                dep_icao = str(dep_airport or "").strip().upper()
+                arr_icao = str(arr_airport or "").strip().upper()
                 dep_label = _icao_to_iata(dep_airport) or (dep_airport or "")
                 arr_label = _icao_to_iata(arr_airport) or (arr_airport or "")
                 routing = f"{dep_label or '—'} ➜ {arr_label or '—'}"
                 rows.append(
                     {
-                        "Routing": routing,
+                        "ICAO Routing": f"{dep_icao or '—'} ➜ {arr_icao or '—'}",
+                        "IATA Routing": routing,
                         "Departure Date (Local)": _format_local_departure_date(
                             leg.get("dep_time"), dep_airport
                         ),
-                        "Flight ID": leg.get("flightId")
+                        "Tail": leg.get("tail") or leg.get("aircraftName"),
+                        "Flight Type": _flight_type_label(leg),
+                        "Booking Identifier": leg.get("bookingIdentifier")
+                        or leg.get("bookingReference")
+                        or leg.get("bookingCode")
+                        or leg.get("bookingId")
+                        or leg.get("flightId")
                         or leg.get("flight_id")
                         or leg.get("id"),
                     }
