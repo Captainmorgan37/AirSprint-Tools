@@ -79,11 +79,19 @@ def test_handles_nested_workflow_structures():
         fetch_leg_details_fn=_stub_fetch(payload_map),
     )
 
-    assert result.metadata == {
-        "match_count": 1,
-        "inspected_legs": 1,
-        "details_fetched": 1,
-    }
+    metadata = result.metadata
+    assert metadata["match_count"] == 1
+    assert metadata["inspected_legs"] == 1
+    assert metadata["details_fetched"] == 1
+    assert metadata["missing_quote_ids"] == 0
+    assert metadata["missing_booking_references"] == 0
+    assert metadata["detail_fetch_failures"] == 0
+    assert metadata["workflow_summary"] == [
+        {"workflow": "Owner Upgrade Pending", "count": 1}
+    ]
+    assert metadata["upgrade_workflow_summary"] == [
+        {"workflow": "Owner Upgrade Pending", "count": 1}
+    ]
     assert len(result.rows) == 1
     entry = result.rows[0]
     assert entry["workflow"] == "Owner Upgrade Pending"
@@ -122,11 +130,19 @@ def test_highlights_planning_note_details():
     )
 
     assert isinstance(result, MorningReportResult)
-    assert result.metadata == {
-        "match_count": 1,
-        "inspected_legs": 1,
-        "details_fetched": 1,
-    }
+    metadata = result.metadata
+    assert metadata["match_count"] == 1
+    assert metadata["inspected_legs"] == 1
+    assert metadata["details_fetched"] == 1
+    assert metadata["missing_quote_ids"] == 0
+    assert metadata["missing_booking_references"] == 0
+    assert metadata["detail_fetch_failures"] == 0
+    assert metadata["workflow_summary"] == [
+        {"workflow": "Owner Upgrade Request", "count": 1}
+    ]
+    assert metadata["upgrade_workflow_summary"] == [
+        {"workflow": "Owner Upgrade Request", "count": 1}
+    ]
     assert len(result.rows) == 1
     entry = result.rows[0]
     assert entry["booking_reference"] == "BOOK-1"
@@ -181,11 +197,19 @@ def test_missing_quote_id_includes_warning_and_row():
         fetch_leg_details_fn=_stub_fetch({}),
     )
 
-    assert result.metadata == {
-        "match_count": 1,
-        "inspected_legs": 1,
-        "details_fetched": 0,
-    }
+    metadata = result.metadata
+    assert metadata["match_count"] == 1
+    assert metadata["inspected_legs"] == 1
+    assert metadata["details_fetched"] == 0
+    assert metadata["missing_quote_ids"] == 1
+    assert metadata["missing_booking_references"] == 0
+    assert metadata["detail_fetch_failures"] == 0
+    assert metadata["workflow_summary"] == [
+        {"workflow": "Upgrade Workflow", "count": 1}
+    ]
+    assert metadata["upgrade_workflow_summary"] == [
+        {"workflow": "Upgrade Workflow", "count": 1}
+    ]
     assert len(result.rows) == 1
     entry = result.rows[0]
     assert entry["booking_reference"] == "BOOK-2"
@@ -242,11 +266,17 @@ def test_non_upgrade_workflows_are_ignored():
         fetch_leg_details_fn=_stub_fetch({"Q3": {"bookingNote": "N/A"}}),
     )
 
-    assert result.metadata == {
-        "match_count": 0,
-        "inspected_legs": 0,
-        "details_fetched": 0,
-    }
+    metadata = result.metadata
+    assert metadata["match_count"] == 0
+    assert metadata["inspected_legs"] == 0
+    assert metadata["details_fetched"] == 0
+    assert metadata["missing_quote_ids"] == 0
+    assert metadata["missing_booking_references"] == 0
+    assert metadata["detail_fetch_failures"] == 0
+    assert metadata["workflow_summary"] == [
+        {"workflow": "Standard Workflow", "count": 1}
+    ]
+    assert metadata["upgrade_workflow_summary"] == []
     assert result.rows == []
 
 

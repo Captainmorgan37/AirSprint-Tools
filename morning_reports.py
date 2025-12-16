@@ -1853,14 +1853,24 @@ def _build_upgrade_flights_report(
 
     inspected = 0
     details_fetched = 0
+    missing_quote_ids = 0
+    missing_booking_references = 0
+    detail_fetch_failures = 0
+    workflow_counts: Dict[str, int] = {}
+    upgrade_workflow_counts: Dict[str, int] = {}
 
     try:
         for row in _sort_rows(rows):
             workflow = _extract_workflow(row)
+            workflow_label = workflow or "Unknown Workflow"
+            workflow_counts[workflow_label] = workflow_counts.get(workflow_label, 0) + 1
             if not workflow or "upgrade" not in workflow.lower():
                 continue
 
             inspected += 1
+            upgrade_workflow_counts[workflow] = (
+                upgrade_workflow_counts.get(workflow, 0) + 1
+            )
 
             formatted = _format_report_row(row, include_tail=True)
             dep_dt = _extract_departure_dt(row)
@@ -1892,6 +1902,7 @@ def _build_upgrade_flights_report(
                             config, quote_id, session=session
                         )
                     except Exception as exc:  # pragma: no cover - defensive path
+                        detail_fetch_failures += 1
                         warnings.append(
                             f"Failed to fetch leg details for quote {quote_id}: {exc}"
                         )
@@ -1915,12 +1926,16 @@ def _build_upgrade_flights_report(
                     planning_note = _extract_planning_note(detail)
 
             else:
+                missing_quote_ids += 1
                 warnings.append(
                     f"Missing quote identifier for upgrade workflow leg "
                     f"{_extract_leg_id(row) or 'unknown'}"
                 )
 
             identifier = booking_reference or quote_id or formatted.get("leg_id")
+
+            if booking_reference is None:
+                missing_booking_references += 1
 
             transition_label: Optional[str] = None
             if requested_type or assigned_type:
@@ -1966,10 +1981,24 @@ def _build_upgrade_flights_report(
             except AttributeError:  # pragma: no cover - defensive cleanup
                 pass
 
+    def _summarize(counter: Mapping[str, int]) -> List[Mapping[str, Any]]:
+        summary = [
+            {"workflow": label, "count": count}
+            for label, count in sorted(
+                counter.items(), key=lambda item: (-item[1], item[0])
+            )
+        ]
+        return summary[:10]
+
     metadata = {
         "match_count": len(matches),
         "inspected_legs": inspected,
         "details_fetched": details_fetched,
+        "missing_quote_ids": missing_quote_ids,
+        "missing_booking_references": missing_booking_references,
+        "detail_fetch_failures": detail_fetch_failures,
+        "workflow_summary": _summarize(workflow_counts),
+        "upgrade_workflow_summary": _summarize(upgrade_workflow_counts),
     }
 
     return MorningReportResult(
