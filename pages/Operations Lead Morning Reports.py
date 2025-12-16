@@ -191,10 +191,10 @@ def _render_report_output(report: MorningReportResult):
         if report.code == "16.1.6":
             st.dataframe(
                 _build_cj3_row_display(report.rows),
-                use_container_width=True,
+                width="stretch",
             )
         else:
-            st.dataframe(report.rows, use_container_width=True)
+            st.dataframe(report.rows, width="stretch")
     else:
         st.info("No matching legs found for this report.")
 
@@ -305,7 +305,7 @@ def main():
             "OCS Pax Flights, Owner Continuous Flight Validation, CJ3 Owners on CJ2, Priority Status, "
             "Upgrade Workflow Validation, and Upgraded Flights reports."
         ),
-        use_container_width=False,
+        width="content",
     ):
         if selected_to < selected_from:
             st.session_state["ol_reports_run"] = None

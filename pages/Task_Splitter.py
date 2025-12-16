@@ -1282,10 +1282,10 @@ selected_date = st.sidebar.date_input("Target date", value=_default_target_date(
 # ----------------------------
 fetch_col, reset_col = st.columns([4, 1])
 with fetch_col:
-    if st.button("🔄 Fetch & Assign", use_container_width=True):
+    if st.button("🔄 Fetch & Assign", width="stretch"):
         st.session_state["_run"] = True
 with reset_col:
-    if st.button("🧹 Clear cache", use_container_width=True):
+    if st.button("🧹 Clear cache", width="stretch"):
         fetch_next_day_legs.clear()
         st.session_state.pop("_run", None)
         st.session_state["_cache_cleared"] = True
@@ -1358,7 +1358,7 @@ if st.session_state.get("_run"):
             if df.empty:
                 st.write("No tails assigned.")
             else:
-                st.dataframe(df, use_container_width=True, hide_index=True)
+                st.dataframe(df, width="stretch", hide_index=True)
                 total_legs = int(df["Legs"].sum())
                 total_workload = round(float(df["Workload"].sum()), 2)
                 customs_legs = int(df["Customs Legs"].sum())
@@ -1391,7 +1391,7 @@ if st.session_state.get("_run"):
     # Summary
     st.subheader("Summary")
     summary_df = summarize(combined_df, label_order=labels)
-    st.dataframe(summary_df, use_container_width=True, hide_index=True)
+    st.dataframe(summary_df, width="stretch", hide_index=True)
 
     # Downloads
     doc_payload, per_shift_docs = build_shift_briefing_docs(
@@ -1402,7 +1402,7 @@ if st.session_state.get("_run"):
         data=doc_payload,
         file_name=f"daily_flight_sheet_{selected_date}.docx",
         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        use_container_width=True,
+        width="stretch",
         key="download-daily-flight-sheet",
     )
 
@@ -1420,7 +1420,7 @@ if st.session_state.get("_run"):
                     data=payload,
                     file_name=f"daily_flight_sheet_{selected_date}_{_label_slug(label)}.docx",
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    use_container_width=True,
+                    width="stretch",
                     key=f"download-shift-{idx}-{_label_slug(label)}",
                 )
     st.download_button(
@@ -1428,7 +1428,7 @@ if st.session_state.get("_run"):
         data=combined_df.to_csv(index=False).encode("utf-8"),
         file_name=f"tail_assignments_{selected_date}.csv",
         mime="text/csv",
-        use_container_width=True,
+        width="stretch",
         key="download-assignments-csv",
     )
 

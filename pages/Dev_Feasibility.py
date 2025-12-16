@@ -711,7 +711,7 @@ def st_flight_route_map(route_data: Mapping[str, Any], *, height: int = 430) -> 
         map_style="mapbox://styles/mapbox/dark-v10",
     )
 
-    st.pydeck_chart(deck, use_container_width=True, height=height)
+    st.pydeck_chart(deck, width="stretch", height=height)
 
 
 def _format_minutes(total_minutes: Optional[int]) -> str:
@@ -759,7 +759,7 @@ def _render_raw_operational_notes(notes: Sequence[Any] | Any) -> None:
         return [""]
 
     styled = dataframe.style.apply(_highlight_alert, axis=1)
-    st.dataframe(styled, use_container_width=True, hide_index=True)
+    st.dataframe(styled, width="stretch", hide_index=True)
 
 
 def _format_hours_entry(entry: Mapping[str, Any]) -> Optional[str]:

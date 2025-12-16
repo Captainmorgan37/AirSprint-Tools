@@ -36,7 +36,7 @@ def _render_fd_summary() -> None:
     if counts:
         st.subheader("By descriptor type")
         df = pd.DataFrame(counts, columns=["Type", "Count"])
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        st.dataframe(df, width="stretch", hide_index=True)
     else:
         st.info("No open descriptors detected from /proc/self/fd.")
 
@@ -46,7 +46,7 @@ def _render_fd_summary() -> None:
         targets_df = pd.DataFrame(
             usage.top_targets, columns=["Target", "Count"]
         )
-        st.dataframe(targets_df, use_container_width=True, hide_index=True)
+        st.dataframe(targets_df, width="stretch", hide_index=True)
     else:
         st.info("Descriptor targets could not be determined.")
 

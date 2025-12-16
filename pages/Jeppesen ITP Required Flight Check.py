@@ -182,7 +182,7 @@ with st.sidebar:
     )
     st.caption("The report scans inclusive dates. End date defaults to 45 days after today.")
 
-    generate_report = st.button("Generate report", use_container_width=True)
+    generate_report = st.button("Generate report", width="stretch")
 
 
 if not isinstance(start_date, date) or not isinstance(end_date, date):

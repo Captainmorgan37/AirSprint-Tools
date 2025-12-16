@@ -227,7 +227,7 @@ def _render_tail_section(tail: str, legs: List[Dict[str, Any]]) -> None:
         }
         for leg in legs
     ]
-    st.dataframe(pd.DataFrame(display_rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(display_rows), width="stretch", hide_index=True)
 
     line_data: List[Dict[str, Any]] = []
     point_data: List[Dict[str, Any]] = []

@@ -120,7 +120,7 @@ def _render_report_output(report: MorningReportResult) -> None:
 
     if report.rows:
         st.markdown("#### Matching legs")
-        st.dataframe(report.rows, use_container_width=True)
+        st.dataframe(report.rows, width="stretch")
     else:
         st.info("No matching legs found for this report.")
 
@@ -224,7 +224,7 @@ def main() -> None:
         help=(
             "Fetch FL3XX legs and execute the FBO Disconnect report for the selected date range."
         ),
-        use_container_width=False,
+        width="content",
     ):
         if selected_to < selected_from:
             st.session_state[_RUN_KEY] = None
