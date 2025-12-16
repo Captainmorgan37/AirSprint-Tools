@@ -233,7 +233,9 @@ def test_parse_preflight_payload_collects_additional_datetime_fields() -> None:
     checkin = status.crew_checkins[0]
     assert checkin.extra_checkins
 
-    expected_epoch = int(datetime(2024, 5, 2, 12, 15, tzinfo=timezone.utc).timestamp())
+    expected_epoch = int(
+        datetime(2024, 5, 2, 12, 15, tzinfo=timezone.utc).timestamp() * 1000
+    )
     assert checkin.extra_checkins == (expected_epoch,)
 
 
@@ -339,11 +341,15 @@ def test_backfill_missing_crew_passports_fetches_missing_data() -> None:
     assert calls == ["123"]
 
     expected_expiration = int(
-        datetime.fromisoformat("2032-09-07").replace(tzinfo=timezone.utc).timestamp()
+        datetime.fromisoformat("2032-09-07")
+        .replace(tzinfo=timezone.utc)
+        .timestamp()
+        * 1000
     )
 
     assert updated[0].document_number == "A8251256"
-    assert updated[0].document_issue_country_iso3 == "EC"
+    assert updated[0].nationality_iso3 == "ECU"
+    assert updated[0].document_issue_country_iso3 == "ECU"
     assert updated[0].document_expiration == expected_expiration
 
     assert updated[1].document_number == "ALREADY"

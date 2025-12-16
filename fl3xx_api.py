@@ -8,9 +8,19 @@ import hashlib
 import json
 from typing import Any, Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Tuple, Literal
 
+import importlib.util
+
 import pandas as pd
 import requests
 from zoneinfo_compat import ZoneInfo
+
+
+_pycountry_spec = importlib.util.find_spec("pycountry")
+if _pycountry_spec and _pycountry_spec.loader:
+    pycountry = importlib.util.module_from_spec(_pycountry_spec)
+    _pycountry_spec.loader.exec_module(pycountry)
+else:
+    pycountry = None
 
 
 DEFAULT_FL3XX_BASE_URL = "https://app.fl3xx.us/api/external/flight/flights"
@@ -676,7 +686,7 @@ def _normalise_datetime_candidate(value: Any) -> Optional[int]:
 
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=timezone.utc)
-        return int(parsed.timestamp())
+        return int(parsed.timestamp() * 1000)
 
     return None
 
@@ -709,13 +719,107 @@ def _normalise_country_iso3(value: Any) -> Optional[str]:
         for key in ("iso3", "code", "iso2"):
             candidate = _clean_string(value.get(key))
             if candidate:
-                return candidate.upper()
+                return _iso3_from_code(candidate)
         return None
 
     candidate = _clean_string(value)
     if candidate:
-        return candidate.upper()
+        return _iso3_from_code(candidate)
     return None
+
+
+ISO2_TO_ISO3_OVERRIDES: Dict[str, str] = {
+    "AE": "ARE",
+    "AG": "ATG",
+    "AR": "ARG",
+    "AT": "AUT",
+    "AU": "AUS",
+    "BB": "BRB",
+    "BE": "BEL",
+    "BR": "BRA",
+    "CA": "CAN",
+    "CH": "CHE",
+    "CL": "CHL",
+    "CN": "CHN",
+    "CO": "COL",
+    "CR": "CRI",
+    "CZ": "CZE",
+    "DE": "DEU",
+    "DK": "DNK",
+    "DM": "DMA",
+    "DO": "DOM",
+    "EC": "ECU",
+    "EG": "EGY",
+    "ES": "ESP",
+    "FI": "FIN",
+    "FR": "FRA",
+    "GB": "GBR",
+    "GD": "GRD",
+    "GR": "GRC",
+    "GY": "GUY",
+    "HK": "HKG",
+    "HR": "HRV",
+    "HU": "HUN",
+    "ID": "IDN",
+    "IE": "IRL",
+    "IL": "ISR",
+    "IN": "IND",
+    "IS": "ISL",
+    "IT": "ITA",
+    "JM": "JAM",
+    "JO": "JOR",
+    "JP": "JPN",
+    "KE": "KEN",
+    "KN": "KNA",
+    "KR": "KOR",
+    "KW": "KWT",
+    "LC": "LCA",
+    "LT": "LTU",
+    "LU": "LUX",
+    "LV": "LVA",
+    "MA": "MAR",
+    "MX": "MEX",
+    "MY": "MYS",
+    "NG": "NGA",
+    "NL": "NLD",
+    "NO": "NOR",
+    "NZ": "NZL",
+    "PE": "PER",
+    "PH": "PHL",
+    "PK": "PAK",
+    "PL": "POL",
+    "PT": "PRT",
+    "QA": "QAT",
+    "RO": "ROU",
+    "RU": "RUS",
+    "SA": "SAU",
+    "SE": "SWE",
+    "SG": "SGP",
+    "SI": "SVN",
+    "SK": "SVK",
+    "TH": "THA",
+    "TR": "TUR",
+    "TT": "TTO",
+    "TW": "TWN",
+    "US": "USA",
+    "UY": "URY",
+    "VC": "VCT",
+    "VE": "VEN",
+    "VN": "VNM",
+    "ZA": "ZAF",
+}
+
+
+def _iso3_from_code(code: str) -> str:
+    normalized = code.strip().upper()
+    if len(normalized) == 2:
+        if normalized in ISO2_TO_ISO3_OVERRIDES:
+            return ISO2_TO_ISO3_OVERRIDES[normalized]
+        if pycountry:
+            match = pycountry.countries.get(alpha_2=normalized)
+            if match:
+                return match.alpha_3
+    return normalized
 
 
 def _extract_passenger(ticket: Mapping[str, Any]) -> Optional[PassengerDetail]:
@@ -791,6 +895,8 @@ def _select_passport_card(crew_payload: Any) -> Optional[Mapping[str, Any]]:
 def _merge_member_with_passport_card(
     member: PreflightCrewMember, passport_card: Mapping[str, Any]
 ) -> PreflightCrewMember:
+    issue_country_iso3 = _normalise_country_iso3(passport_card.get("issueCountry"))
+
     return PreflightCrewMember(
         seat=member.seat,
         user_id=member.user_id,
@@ -798,12 +904,12 @@ def _merge_member_with_passport_card(
         middle_name=member.middle_name,
         last_name=member.last_name,
         gender=member.gender,
-        nationality_iso3=member.nationality_iso3,
+        nationality_iso3=member.nationality_iso3 or issue_country_iso3,
         birth_date=member.birth_date,
         document_number=member.document_number
         or _clean_string(passport_card.get("number")),
         document_issue_country_iso3=member.document_issue_country_iso3
-        or _normalise_country_iso3(passport_card.get("issueCountry")),
+        or issue_country_iso3,
         document_expiration=member.document_expiration
         or _normalise_datetime_candidate(passport_card.get("expirationDate")),
     )
