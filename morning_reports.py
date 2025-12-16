@@ -106,7 +106,7 @@ class MorningReportRun:
 def _format_upgraded_flights_block(report: MorningReportResult) -> str:
     return _render_preferred_block(
         report.rows,
-        header=f"UPGRADES: (based on the {report.title})",
+        header="UPGRADES",
         line_builder=_build_upgrade_line,
     )
 
@@ -114,7 +114,7 @@ def _format_upgraded_flights_block(report: MorningReportResult) -> str:
 def _format_cj3_on_cj2_block(report: MorningReportResult) -> str:
     block = _render_preferred_block(
         report.rows,
-        header=f"CJ3 CLIENTS ON CJ2: (based on the {report.title})",
+        header="CJ3 CLIENTS ON CJ2",
         line_builder=_build_cj3_line,
     )
 
@@ -147,7 +147,7 @@ def _format_cj3_on_cj2_block(report: MorningReportResult) -> str:
 def _format_priority_status_block(report: MorningReportResult) -> str:
     return _render_preferred_block(
         report.rows,
-        header=f"PRIORITY CLIENTS: (based on the {report.title})",
+        header="PRIORITY CLIENTS",
         line_builder=_build_priority_line,
     )
 
@@ -155,7 +155,7 @@ def _format_priority_status_block(report: MorningReportResult) -> str:
 def _format_hub_duty_start_block(report: MorningReportResult) -> str:
     return _render_preferred_block(
         report.rows,
-        header=f"CYYZ/CYUL DUTY STARTS: (based on the {report.title})",
+        header="CYYZ/CYUL DUTY STARTS",
         line_builder=_build_hub_duty_start_line,
     )
 
@@ -201,8 +201,17 @@ def _render_preferred_block(
     header: str,
     line_builder: Callable[[Mapping[str, Any]], str],
 ) -> str:
+    def _format_copyable_header(text: str) -> str:
+        normalized = _normalize_str(text) or ""
+        suffix = ":" if not normalized.endswith(":") else ""
+        return f"**__{normalized}{suffix}__**"
+
+    def _format_copyable_label(label: str) -> str:
+        normalized = _normalize_str(label) or ""
+        return f"**{normalized}**" if normalized else ""
+
     grouped_rows = _group_rows_by_display_date(rows)
-    lines: List[str] = [header]
+    lines: List[str] = [_format_copyable_header(header)]
 
     if not grouped_rows:
         lines.append("")
@@ -211,7 +220,8 @@ def _render_preferred_block(
 
     lines.append("")
     for label, group in grouped_rows:
-        lines.append(label)
+        formatted_label = _format_copyable_label(label)
+        lines.append(formatted_label or label)
         lines.append("")
         for row in group:
             lines.append(line_builder(row))
@@ -3409,4 +3419,3 @@ __all__ = [
     "MorningReportRun",
     "run_morning_reports",
 ]
-
