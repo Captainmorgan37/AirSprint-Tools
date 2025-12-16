@@ -15,6 +15,7 @@ from Home import configure_page, password_gate, render_sidebar
 from fl3xx_api import (
     PassengerDetail,
     PreflightCrewMember,
+    backfill_missing_crew_passports,
     compute_fetch_dates,
     extract_crew_from_preflight,
     extract_passengers_from_pax_details,
@@ -676,6 +677,21 @@ else:
                             crew_roster = extract_crew_from_preflight(preflight_payload)
                             if crew_roster:
                                 crew_count = len(crew_roster)
+
+                                missing_passports = [
+                                    member
+                                    for member in crew_roster
+                                    if not (
+                                        _value_present(member.document_number)
+                                        and _value_present(member.document_issue_country_iso3)
+                                        and _value_present(member.document_expiration)
+                                    )
+                                ]
+                                if missing_passports:
+                                    with st.spinner("Fetching crew passport details…"):
+                                        crew_roster = backfill_missing_crew_passports(
+                                            config, crew_roster
+                                        )
 
                             try:
                                 with st.spinner("Loading passenger roster…"):
