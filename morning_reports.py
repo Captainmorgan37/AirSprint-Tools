@@ -204,11 +204,11 @@ def _render_preferred_block(
     def _format_copyable_header(text: str) -> str:
         normalized = _normalize_str(text) or ""
         suffix = ":" if not normalized.endswith(":") else ""
-        return f"**__{normalized}{suffix}__**"
+        return f"{normalized}{suffix}"
 
     def _format_copyable_label(label: str) -> str:
         normalized = _normalize_str(label) or ""
-        return f"**{normalized}**" if normalized else ""
+        return normalized
 
     grouped_rows = _group_rows_by_display_date(rows)
     lines: List[str] = [_format_copyable_header(header)]
