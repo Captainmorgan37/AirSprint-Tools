@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 import hashlib
 import json
-from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Tuple, Literal
+from typing import Any, Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Tuple, Literal
 
 import pandas as pd
 import requests
@@ -236,6 +236,15 @@ def _build_notification_endpoint(base_url: str, flight_id: Any) -> str:
     return f"{base}/{flight_id}/notification"
 
 
+def _build_staff_crew_endpoint(base_url: str, crew_id: Any) -> str:
+    base = base_url.rstrip("/")
+    if base.lower().endswith("/flights"):
+        base = base[: -len("/flights")]
+    if base.lower().endswith("/flight"):
+        base = base[: -len("/flight")]
+    return f"{base}/staff/crew/{crew_id}"
+
+
 def _build_leg_endpoint(base_url: str, quote_id: Any) -> str:
     base = base_url.rstrip("/")
     if base.lower().endswith("/flights"):
@@ -458,8 +467,24 @@ def fetch_flight_pax_details(
                 detail_parts.append(f"response: {trimmed}")
         detail = " | ".join(detail_parts)
         raise RuntimeError(f"{detail} for {url}") from exc
-    except Exception as exc:
-        raise RuntimeError(f"pax_details GET failed for {url}: {exc}") from exc
+
+
+def fetch_crew_member(
+    config: Fl3xxApiConfig, crew_id: Any, *, session: Optional[requests.Session] = None
+) -> Any:
+    """Return the staff/crew payload for a specific crew member."""
+
+    http = session or requests.Session()
+    close_session = session is None
+    try:
+        response = http.get(
+            _build_staff_crew_endpoint(config.base_url, crew_id),
+            headers=config.build_headers(),
+            timeout=config.timeout,
+            verify=config.verify_ssl,
+        )
+        response.raise_for_status()
+        return response.json()
     finally:
         if close_session:
             try:
@@ -679,6 +704,20 @@ def _normalise_gender(value: Any) -> Optional[str]:
     return upper
 
 
+def _normalise_country_iso3(value: Any) -> Optional[str]:
+    if isinstance(value, Mapping):
+        for key in ("iso3", "code", "iso2"):
+            candidate = _clean_string(value.get(key))
+            if candidate:
+                return candidate.upper()
+        return None
+
+    candidate = _clean_string(value)
+    if candidate:
+        return candidate.upper()
+    return None
+
+
 def _extract_passenger(ticket: Mapping[str, Any]) -> Optional[PassengerDetail]:
     pax_user = ticket.get("paxUser")
     if not isinstance(pax_user, Mapping):
@@ -722,6 +761,104 @@ def extract_passengers_from_pax_details(pax_details_payload: Any) -> List[Passen
     tickets = [entry for entry in ticket_candidates if isinstance(entry, Mapping)]
     passengers = [_extract_passenger(ticket) for ticket in tickets]
     return [pax for pax in passengers if pax is not None]
+
+
+def _select_passport_card(crew_payload: Any) -> Optional[Mapping[str, Any]]:
+    if not isinstance(crew_payload, Mapping):
+        return None
+
+    id_cards = crew_payload.get("idCards")
+    if not isinstance(id_cards, Iterable):
+        return None
+
+    mappings = [card for card in id_cards if isinstance(card, Mapping)]
+
+    def _choose(cards: List[Mapping[str, Any]]) -> Optional[Mapping[str, Any]]:
+        for card in cards:
+            if card.get("main") is True:
+                return card
+        return cards[0] if cards else None
+
+    passport_cards = [
+        card
+        for card in mappings
+        if _clean_string(card.get("type")) and _clean_string(card.get("type")).upper() == "PASSPORT"
+    ]
+
+    return _choose(passport_cards) or _choose(mappings)
+
+
+def _merge_member_with_passport_card(
+    member: PreflightCrewMember, passport_card: Mapping[str, Any]
+) -> PreflightCrewMember:
+    return PreflightCrewMember(
+        seat=member.seat,
+        user_id=member.user_id,
+        first_name=member.first_name,
+        middle_name=member.middle_name,
+        last_name=member.last_name,
+        gender=member.gender,
+        nationality_iso3=member.nationality_iso3,
+        birth_date=member.birth_date,
+        document_number=member.document_number
+        or _clean_string(passport_card.get("number")),
+        document_issue_country_iso3=member.document_issue_country_iso3
+        or _normalise_country_iso3(passport_card.get("issueCountry")),
+        document_expiration=member.document_expiration
+        or _normalise_datetime_candidate(passport_card.get("expirationDate")),
+    )
+
+
+def _has_passport_details(member: PreflightCrewMember) -> bool:
+    return bool(
+        member.document_number
+        and member.document_issue_country_iso3
+        and member.document_expiration is not None
+    )
+
+
+def backfill_missing_crew_passports(
+    config: Fl3xxApiConfig,
+    crew_roster: Iterable[PreflightCrewMember],
+    *,
+    session: Optional[requests.Session] = None,
+    fetch_member_fn: Optional[
+        Callable[[Fl3xxApiConfig, Any, Optional[requests.Session]], Any]
+    ] = None,
+) -> List[PreflightCrewMember]:
+    """Populate missing passport details by querying the staff/crew endpoint."""
+
+    fetch_member = fetch_member_fn or fetch_crew_member
+
+    http = session or requests.Session()
+    close_session = session is None
+    updated: List[PreflightCrewMember] = []
+
+    try:
+        for member in crew_roster:
+            if _has_passport_details(member) or not member.user_id:
+                updated.append(member)
+                continue
+
+            try:
+                crew_payload = fetch_member(config, member.user_id, session=http)
+            except Exception:
+                updated.append(member)
+                continue
+
+            passport_card = _select_passport_card(crew_payload)
+            if passport_card:
+                updated.append(_merge_member_with_passport_card(member, passport_card))
+            else:
+                updated.append(member)
+    finally:
+        if close_session:
+            try:
+                http.close()
+            except AttributeError:
+                pass
+
+    return updated
 
 
 def extract_missing_qualifications_from_preflight(
@@ -1632,6 +1769,8 @@ __all__ = [
     "fetch_flight_planning_note",
     "fetch_flight_migration",
     "fetch_flight_notification",
+    "fetch_crew_member",
+    "backfill_missing_crew_passports",
     "enrich_flights_with_crew",
     "DutySnapshot",
     "DutySnapshotPilot",
