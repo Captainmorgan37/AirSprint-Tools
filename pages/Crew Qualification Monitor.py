@@ -212,7 +212,7 @@ with st.sidebar:
             value=(today_local, default_end),
             help="Flights departing within this inclusive local date range will be inspected.",
         )
-        submit_fetch = st.form_submit_button("Fetch flights", use_container_width=True)
+        submit_fetch = st.form_submit_button("Fetch flights", width="stretch")
 
     start_date, end_date = _normalise_date_range(date_selection, today_local, default_end)
     fetch_to_date = end_date + timedelta(days=1)
@@ -395,7 +395,7 @@ else:
         f"Detected {len(missing_rows)} missing qualification entry{'ies' if len(missing_rows) != 1 else ''} "
         f"across {len({row['Booking Identifier'] for row in missing_rows})} booking{'s' if len({row['Booking Identifier'] for row in missing_rows}) != 1 else ''}."
     )
-    st.dataframe(issues_df, use_container_width=True, hide_index=True)
+    st.dataframe(issues_df, width="stretch", hide_index=True)
 
 if conflict_rows:
     st.error(
@@ -403,6 +403,6 @@ if conflict_rows:
         f"across {len({row['Booking Identifier'] for row in conflict_rows})} booking{'s' if len({row['Booking Identifier'] for row in conflict_rows}) != 1 else ''}."
     )
     conflict_df = pd.DataFrame(conflict_rows)
-    st.dataframe(conflict_df, use_container_width=True, hide_index=True)
+    st.dataframe(conflict_df, width="stretch", hide_index=True)
 else:
     st.success("No preflight conflicts detected for the selected flights.")

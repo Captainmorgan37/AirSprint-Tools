@@ -97,7 +97,7 @@ with tab1:
         merged = df_fbo.merge(results_df, on=["ICAO", "IATA", "FAA"], how="left")
 
         st.success("✅ FBO lookup complete!")
-        st.dataframe(merged, use_container_width=True)
+        st.dataframe(merged, width="stretch")
 
         csv = merged.to_csv(index=False).encode("utf-8")
         st.download_button("💾 Download Updated CSV", csv, "Airports_with_Default_FBOs.csv", "text/csv")
@@ -189,7 +189,7 @@ with tab2:
         merged = df_deice.merge(results_df, on=["ICAO", "IATA", "FAA"], how="left")
 
         st.success("✅ Deice lookup complete!")
-        st.dataframe(merged, use_container_width=True)
+        st.dataframe(merged, width="stretch")
 
         csv = merged.to_csv(index=False).encode("utf-8")
         st.download_button("💾 Download Deice Info CSV", csv, "Airports_Deice_Info.csv", "text/csv")

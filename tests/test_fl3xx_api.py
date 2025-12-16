@@ -13,11 +13,13 @@ from fl3xx_api import (
     DutySnapshot,
     DutySnapshotPilot,
     MissingQualificationAlert,
+    Fl3xxApiConfig,
     PreflightChecklistStatus,
     PreflightCrewCheckin,
     PreflightCrewMember,
     PreflightConflictAlert,
     PassengerDetail,
+    backfill_missing_crew_passports,
     extract_conflicts_from_preflight,
     extract_crew_from_preflight,
     extract_passengers_from_pax_details,
@@ -231,7 +233,9 @@ def test_parse_preflight_payload_collects_additional_datetime_fields() -> None:
     checkin = status.crew_checkins[0]
     assert checkin.extra_checkins
 
-    expected_epoch = int(datetime(2024, 5, 2, 12, 15, tzinfo=timezone.utc).timestamp())
+    expected_epoch = int(
+        datetime(2024, 5, 2, 12, 15, tzinfo=timezone.utc).timestamp() * 1000
+    )
     assert checkin.extra_checkins == (expected_epoch,)
 
 
@@ -298,6 +302,59 @@ def test_extract_crew_from_preflight_returns_roster() -> None:
 def test_extract_crew_from_preflight_handles_missing_blocks() -> None:
     assert extract_crew_from_preflight({}) == []
     assert extract_crew_from_preflight({"crewAssign": {"status": "OK", "commander": "not-a-mapping"}}) == []
+
+
+def test_backfill_missing_crew_passports_fetches_missing_data() -> None:
+    roster = [
+        PreflightCrewMember(seat="PIC", user_id="123"),
+        PreflightCrewMember(
+            seat="SIC",
+            user_id="456",
+            document_number="ALREADY",
+            document_issue_country_iso3="CAN",
+            document_expiration=1704067200,
+        ),
+    ]
+
+    passport_payload = {
+        "idCards": [
+            {
+                "type": "PASSPORT",
+                "number": "A8251256",
+                "main": True,
+                "issueCountry": "EC",
+                "expirationDate": "2032-09-07",
+            }
+        ]
+    }
+
+    calls: list[str] = []
+
+    def fake_fetch(config, crew_id, session=None):  # type: ignore[override]
+        calls.append(str(crew_id))
+        return passport_payload
+
+    updated = backfill_missing_crew_passports(
+        Fl3xxApiConfig(), roster, fetch_member_fn=fake_fetch
+    )
+
+    assert calls == ["123"]
+
+    expected_expiration = int(
+        datetime.fromisoformat("2032-09-07")
+        .replace(tzinfo=timezone.utc)
+        .timestamp()
+        * 1000
+    )
+
+    assert updated[0].document_number == "A8251256"
+    assert updated[0].nationality_iso3 == "ECU"
+    assert updated[0].document_issue_country_iso3 == "ECU"
+    assert updated[0].document_expiration == expected_expiration
+
+    assert updated[1].document_number == "ALREADY"
+    assert updated[1].document_issue_country_iso3 == "CAN"
+    assert updated[1].document_expiration == 1704067200
 
 
 def test_extract_missing_qualifications_from_preflight_returns_alerts() -> None:

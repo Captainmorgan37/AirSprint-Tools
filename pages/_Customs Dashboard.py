@@ -1271,9 +1271,9 @@ def _render_customs_table(
             return [css] * len(row)
 
         styler = display_df.style.apply(_style_row, axis=1)
-        st.dataframe(styler, use_container_width=True)
+        st.dataframe(styler, width="stretch")
     else:
-        st.dataframe(display_df, use_container_width=True)
+        st.dataframe(display_df, width="stretch")
 
 
 pending_mask = result_df["Arrival Status"].astype(str).str.upper() != "OK"

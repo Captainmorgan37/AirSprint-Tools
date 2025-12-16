@@ -625,7 +625,7 @@ if st.session_state["baggage_list"]:
                               container["interior"]["width_max"],
                               container["interior"]["height"])
             fig = plot_cargo(cargo_dims, placements, container_choice, container["interior"])
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
             # Debug expander (optional)
             with st.expander("🔎 Debug data (raw placements)"):
