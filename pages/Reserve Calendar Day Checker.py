@@ -130,7 +130,7 @@ for date_result in result.dates:
     except AttributeError:
         pass
 
-    st.dataframe(styler, use_container_width=True)
+    st.dataframe(styler, width="stretch")
 
 if result.warnings:
     st.markdown("---")

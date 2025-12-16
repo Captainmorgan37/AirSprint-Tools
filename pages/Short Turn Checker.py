@@ -1081,7 +1081,7 @@ else:
 # ----------------------------
 if not legs_df.empty:
     with st.expander("Raw legs (normalized)", expanded=False):
-        st.dataframe(legs_df, use_container_width=True, hide_index=True)
+        st.dataframe(legs_df, width="stretch", hide_index=True)
 
     short_df = compute_short_turns(legs_df, threshold)
 
@@ -1215,7 +1215,7 @@ if not legs_df.empty:
             display_df = _format_turn_table(df)
             st.dataframe(
                 display_df,
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 column_config=col_config,
                 column_order=column_order if column_order else None,
@@ -1338,7 +1338,7 @@ if not legs_df.empty:
         extra_column_order = _column_order_for(extra_display_df)
         st.dataframe(
             _format_turn_table(extra_display_df),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             column_config=col_config,
             column_order=extra_column_order if extra_column_order else None,
@@ -1422,7 +1422,7 @@ if not legs_df.empty:
                 ].apply(_format_date)
             st.dataframe(
                 display_priority_warnings,
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 column_config=warning_col_config,
                 column_order=[
@@ -1455,7 +1455,7 @@ if not legs_df.empty:
         extra_column_order = _column_order_for(extra_display_df)
         st.dataframe(
             _format_turn_table(extra_display_df),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             column_config=col_config,
             column_order=extra_column_order if extra_column_order else None,

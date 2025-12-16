@@ -565,7 +565,7 @@ def show_table(df: pd.DataFrame, title: str, key: str):
     if df is None or df.empty:
         st.write("— no rows —")
         return
-    st.dataframe(df, use_container_width=True)
+    st.dataframe(df, width="stretch")
     st.download_button(
         f"Download {title} CSV",
         df.to_csv(index=False).encode("utf-8"),

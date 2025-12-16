@@ -1083,9 +1083,9 @@ def _render_results() -> None:
                 return [css] * len(row)
 
             styler = df_display.style.apply(_apply_row_highlight, axis=1)
-            st.dataframe(styler, use_container_width=True)
+            st.dataframe(styler, width="stretch")
         else:
-            st.dataframe(df_display, use_container_width=True)
+            st.dataframe(df_display, width="stretch")
 
         csv_bytes = (
             df.drop(columns=["_row_state"], errors="ignore").to_csv(index=False).encode("utf-8")
@@ -1136,7 +1136,7 @@ def _render_owner_services_tab(api_settings: Optional[Mapping[str, Any]]) -> Non
     if st.button(
         "Fetch Owner Services",
         help="Fetch FL3XX flights and owner services for the selected date range.",
-        use_container_width=False,
+        width="content",
     ):
         if selected_to < selected_from:
             st.session_state[_RESULTS_KEY] = None
@@ -1285,7 +1285,7 @@ def _render_sensitive_notes_table(rows: List[Mapping[str, Any]]) -> None:
         )
     )
 
-    st.dataframe(styler, use_container_width=True)
+    st.dataframe(styler, width="stretch")
 
 
 def _render_sensitive_keyword_manager() -> None:
@@ -1364,7 +1364,7 @@ def _render_sensitive_notes_tab(api_settings: Optional[Mapping[str, Any]]) -> No
     if st.button(
         "Fetch Sensitive Notes",
         help="Fetch FL3XX flights and inspect leg notes for the selected date range.",
-        use_container_width=False,
+        width="content",
     ):
         if selected_to < selected_from:
             st.session_state[_NOTES_RESULTS_KEY] = None

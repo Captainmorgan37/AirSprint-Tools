@@ -287,7 +287,7 @@ def _render_max_time_results(data: Mapping[str, Any], start_label: Optional[str]
         available_columns = [col for col in columns if col in df.columns]
         display_df = df[available_columns]
 
-        st.dataframe(display_df, use_container_width=True)
+        st.dataframe(display_df, width="stretch")
 
         csv_buffer = StringIO()
         export_columns = [
@@ -389,7 +389,7 @@ def _render_zfw_results(data: Mapping[str, Any], start_label: Optional[str], end
         available_columns = [col for col in columns if col in df.columns]
         display_df = df[available_columns]
 
-        st.dataframe(display_df, use_container_width=True)
+        st.dataframe(display_df, width="stretch")
 
         csv_buffer = StringIO()
         export_columns = [
@@ -496,7 +496,7 @@ def _render_high_pax_weight_results(
         available_columns = [col for col in columns if col in df.columns]
         display_df = df[available_columns]
 
-        st.dataframe(display_df, use_container_width=True)
+        st.dataframe(display_df, width="stretch")
 
         csv_buffer = StringIO()
         export_columns = [
@@ -647,7 +647,7 @@ def _render_runway_results(state: Mapping[str, Any]) -> None:
         display_columns = [col for col in columns if col in df.columns]
         display_df = df[display_columns]
 
-        st.dataframe(display_df, use_container_width=True)
+        st.dataframe(display_df, width="stretch")
 
         csv_buffer = StringIO()
         export_columns = [

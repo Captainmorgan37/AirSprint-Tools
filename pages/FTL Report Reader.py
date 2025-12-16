@@ -657,12 +657,12 @@ with tab_results:
                     st.success("✅ No pilots with ≥3 consecutive 12+ hr duty days detected.")
 
                 st.markdown("**≥ 3 consecutive 12+ hr duty days**")
-                st.dataframe(seq3_duty if duty_work is not None else pd.DataFrame(), use_container_width=True)
+                st.dataframe(seq3_duty if duty_work is not None else pd.DataFrame(), width="stretch")
                 if duty_work is not None:
                     to_csv_download(seq3_duty, "FTL_3x12hr_Consecutive_Duty_Summary.csv", key="dl_duty3")
 
                 with st.expander("≥ 2 consecutive 12+ hr duty days", expanded=False):
-                    st.dataframe(seq2_duty if duty_work is not None else pd.DataFrame(), use_container_width=True)
+                    st.dataframe(seq2_duty if duty_work is not None else pd.DataFrame(), width="stretch")
                     if duty_work is not None:
                         to_csv_download(seq2_duty, "FTL_2x12hr_Consecutive_Duty_Summary.csv", key="dl_duty2")
 
@@ -687,11 +687,11 @@ with tab_results:
                     st.info("Could not locate both 'Rest Before FDP (act)' and 'Rest After FDP (act)' columns in the FTL CSV.")
                 elif rest_pairs.empty:
                     st.success("✅ No pilots with consecutive minimum rest (< 11 h) periods detected.")
-                    st.dataframe(pd.DataFrame(), use_container_width=True)
+                    st.dataframe(pd.DataFrame(), width="stretch")
                 else:
                     pilots = sorted(rest_pairs["Pilot"].unique().tolist())
                     st.error(f"⚠️ Consecutive minimum rest triggered for {len(pilots)} pilot(s): {', '.join(pilots)}")
-                    st.dataframe(rest_pairs, use_container_width=True)
+                    st.dataframe(rest_pairs, width="stretch")
                     to_csv_download(rest_pairs, "FTL_consecutive_min_rest_summary.csv", key="dl_rest_consecutive")
 
 with tab_rest_duty:
@@ -737,11 +737,11 @@ with tab_rest_duty:
                 st.error(
                     f"⚠️ Minimum rest triggered for {summary['DaysWithMinRest'].sum()} day(s) across {len(summary)} pilot(s)."
                 )
-            st.dataframe(summary, use_container_width=True)
+            st.dataframe(summary, width="stretch")
             to_csv_download(summary, "FTL_min_rest_days_by_pilot.csv", key="dl_min_rest_summary")
 
             st.markdown("**Detailed minimum rest days (10.0–10.99 h)**")
-            st.dataframe(detail, use_container_width=True)
+            st.dataframe(detail, width="stretch")
             to_csv_download(detail, "FTL_min_rest_day_details.csv", key="dl_min_rest_details")
 
 with tab_policy:
@@ -860,15 +860,15 @@ with tab_policy:
 
             # Tables
             st.markdown("**Not Allowed (≥48 in 7d or ≥70 in 30d)**")
-            st.dataframe(not_allowed, use_container_width=True)
+            st.dataframe(not_allowed, width="stretch")
             to_csv_download(not_allowed, "DutyViolation_not_allowed_ge48_7d_or_ge70_30d.csv", key="dl_na")
 
             st.markdown("**Over 40 in 7d — EXCEPTION FAIL (Rest < 11 h)**")
-            st.dataframe(exception_fail, use_container_width=True)
+            st.dataframe(exception_fail, width="stretch")
             to_csv_download(exception_fail, "DutyViolation_over40_exception_FAIL_restlt11.csv", key="dl_fail")
 
             st.markdown("**Over 40 in 7d — EXCEPTION PASS (Rest ≥ 11 h)**")
-            st.dataframe(exception_pass, use_container_width=True)
+            st.dataframe(exception_pass, width="stretch")
             to_csv_download(exception_pass, "DutyViolation_over40_exception_PASS_rest_ge11.csv", key="dl_pass")
 
             # ---- Additional detailed duty violations ----
@@ -884,7 +884,7 @@ with tab_policy:
                 else:
                     st.success("✅ No Rest After FDP (act < min) violations found.")
                 st.markdown("**Rest After FDP (act) < Rest After FDP (min)**")
-                st.dataframe(v_after, use_container_width=True)
+                st.dataframe(v_after, width="stretch")
                 to_csv_download(v_after, "Violation_RestAfter_act_lt_min.csv", key="dl_rest_after")
             else:
                 st.info("Rest After FDP (min) column not found; skipping that check.")
@@ -898,7 +898,7 @@ with tab_policy:
                 else:
                     st.success("✅ No FDP act > max violations found.")
                 st.markdown("**Flight Duty Period (act) > Flight Duty Period (max)**")
-                st.dataframe(v_fdp, use_container_width=True)
+                st.dataframe(v_fdp, width="stretch")
                 to_csv_download(v_fdp, "Violation_FDP_act_gt_max.csv", key="dl_fdp")
             else:
                 st.info("FDP (act/max) columns not found; skipping that check.")
@@ -938,7 +938,7 @@ with tab_policy:
                 else:
                     st.success("✅ No consecutive short rest (Rest Before & Rest After FDP act < 11 h) found.")
                 st.markdown("**Rest Before & Rest After FDP (act) both < 11 h**")
-                st.dataframe(short_both_display, use_container_width=True)
+                st.dataframe(short_both_display, width="stretch")
                 to_csv_download(short_both_display, "Violation_RestBefore_and_After_act_lt11.csv", key="dl_rest_before_after")
             else:
                 st.info("Rest Before FDP (act) column not found; skipping consecutive short rest check.")
@@ -1099,7 +1099,7 @@ with tab_min_rest:
             total_days = summary["Days"].sum()
             st.error(f"⚠️ {total_days} long duty days across {len(summary)} pilots")
 
-        st.dataframe(summary, use_container_width=True)
+        st.dataframe(summary, width="stretch")
         to_csv_download(summary, "FTL_12hr_duty_summary.csv", key="dl_12hr_summary")
 
         # --------------------------------------
@@ -1107,7 +1107,7 @@ with tab_min_rest:
         # --------------------------------------
         st.subheader("Detail — Each 12+ hr Duty Day (deduplicated)")
 
-        st.dataframe(detail, use_container_width=True)
+        st.dataframe(detail, width="stretch")
         to_csv_download(detail, "FTL_12hr_duty_details.csv", key="dl_12hr_details")
 
 # ============================================================
@@ -1205,7 +1205,7 @@ with tab_ft_exceed:
         st.success(f"No pilots exceeded {threshold:.2f} hours of flight time.")
     else:
         st.error(f"⚠️ {len(exceed)} pilot(s) exceeded {threshold:.2f} hours.")
-        st.dataframe(exceed, use_container_width=True)
+        st.dataframe(exceed, width="stretch")
 
         to_csv_download(
             exceed,
@@ -1217,7 +1217,7 @@ with tab_ft_exceed:
     # Full summary
     # ---------------------------------------------------------
     st.subheader("All Pilot Flight Time Totals")
-    st.dataframe(summary_rows, use_container_width=True)
+    st.dataframe(summary_rows, width="stretch")
 
     to_csv_download(
         summary_rows,
@@ -1248,7 +1248,7 @@ with tab_debug:
     detail = df.iloc[:, 4:15].copy()   # Columns E through O
     detail["raw_name"] = df.iloc[:, 0] # Column A (Name)
 
-    st.dataframe(detail.head(50), use_container_width=True)
+    st.dataframe(detail.head(50), width="stretch")
 
     # ------------------------------------------------
     # Show rows where Column O contains flight time
@@ -1258,4 +1258,4 @@ with tab_debug:
     col_O = df.columns[14]  # Column O explicitly
 
     mask_ft = df[col_O].astype(str).str.strip() != ""
-    st.dataframe(df[mask_ft].iloc[:, :15], use_container_width=True)
+    st.dataframe(df[mask_ft].iloc[:, :15], width="stretch")

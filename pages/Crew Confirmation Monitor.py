@@ -109,7 +109,7 @@ if raw_df.empty:
         st.warning(
             "We requested data from FL3XX but some flights were skipped because required details were missing. Review the troubleshooting table below for next steps."
         )
-        st.dataframe(troubleshooting_df, use_container_width=True, hide_index=True)
+        st.dataframe(troubleshooting_df, width="stretch", hide_index=True)
         st.caption(
             "Troubleshooting tips show which flights were filtered out—for example missing report times or preflight data. Fix the issue in FL3XX and re-run the report."
         )
@@ -173,19 +173,19 @@ if not not_confirmed_df.empty:
         return [""] * len(row)
 
     styled_not_confirmed = not_confirmed_df.style.apply(_highlight_time_left, axis=1)
-    st.dataframe(styled_not_confirmed, use_container_width=True, hide_index=True)
+    st.dataframe(styled_not_confirmed, width="stretch", hide_index=True)
 else:
     st.success("All crews are confirmed.")
 
 st.subheader("Confirmed crews")
 if not confirmed_df.empty:
-    st.dataframe(confirmed_df, use_container_width=True, hide_index=True)
+    st.dataframe(confirmed_df, width="stretch", hide_index=True)
 else:
     st.info("No crews are currently marked as confirmed.")
 
 if not troubleshooting_df.empty:
     with st.expander("Troubleshooting details"):
-        st.dataframe(troubleshooting_df, use_container_width=True, hide_index=True)
+        st.dataframe(troubleshooting_df, width="stretch", hide_index=True)
         st.caption(
             "Entries in this table were skipped because required information was unavailable. Resolve the issue in FL3XX—such as adding crew check-ins or departure times—and rerun the report."
         )
@@ -195,7 +195,7 @@ with st.expander("Download data or inspect raw fields"):
     for column in ["_confirm_by_local", "_confirm_by_mt", "_report_local_dt", "_first_dep_local_dt"]:
         if column in download_df.columns:
             download_df[column] = download_df[column].apply(_format_datetime)
-    download_df["_generated_utc"] = datetime.utcnow().isoformat() + "Z"
+    download_df["_generated_utc"] = datetime.now(datetime.UTC).isoformat().replace("+00:00", "Z")
 
     csv_bytes = download_df.to_csv(index=False).encode("utf-8")
     st.download_button(
@@ -205,7 +205,7 @@ with st.expander("Download data or inspect raw fields"):
         mime="text/csv",
     )
 
-    st.dataframe(download_df, use_container_width=True)
+    st.dataframe(download_df, width="stretch")
 
 st.caption(
     "Need to refresh after making changes in FL3XX? Re-run the report to pull the latest check-in and clearance status."
