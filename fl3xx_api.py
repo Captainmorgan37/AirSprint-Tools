@@ -598,6 +598,7 @@ class PreflightCrewMember:
 class PassengerDetail:
     """Passenger information pulled from the pax_details endpoint."""
 
+    user_id: Optional[str] = None
     first_name: Optional[str] = None
     middle_name: Optional[str] = None
     last_name: Optional[str] = None
@@ -833,7 +834,17 @@ def _extract_passenger(ticket: Mapping[str, Any]) -> Optional[PassengerDetail]:
     else:
         issue_country = None
 
+    pax_user_id = pax_user.get("id")
+    pax_user_id_str: Optional[str]
+    if pax_user_id is None:
+        pax_user_id_str = None
+    elif isinstance(pax_user_id, str):
+        pax_user_id_str = pax_user_id.strip() or None
+    else:
+        pax_user_id_str = str(pax_user_id)
+
     return PassengerDetail(
+        user_id=pax_user_id_str,
         first_name=_clean_string(pax_user.get("firstName")),
         middle_name=_clean_string(pax_user.get("middleName")),
         last_name=_clean_string(pax_user.get("lastName")),
@@ -915,7 +926,29 @@ def _merge_member_with_passport_card(
     )
 
 
-def _has_passport_details(member: PreflightCrewMember) -> bool:
+def _merge_passenger_with_passport_card(
+    passenger: PassengerDetail, passport_card: Mapping[str, Any]
+) -> PassengerDetail:
+    issue_country_iso3 = _normalise_country_iso3(passport_card.get("issueCountry"))
+
+    return PassengerDetail(
+        user_id=passenger.user_id,
+        first_name=passenger.first_name,
+        middle_name=passenger.middle_name,
+        last_name=passenger.last_name,
+        gender=passenger.gender,
+        nationality_iso3=passenger.nationality_iso3 or issue_country_iso3,
+        birth_date=passenger.birth_date,
+        document_number=passenger.document_number
+        or _clean_string(passport_card.get("number")),
+        document_issue_country_iso3=passenger.document_issue_country_iso3
+        or issue_country_iso3,
+        document_expiration=passenger.document_expiration
+        or _normalise_datetime_candidate(passport_card.get("expirationDate")),
+    )
+
+
+def _has_passport_details(member: Any) -> bool:
     return bool(
         member.document_number
         and member.document_issue_country_iso3
@@ -957,6 +990,50 @@ def backfill_missing_crew_passports(
                 updated.append(_merge_member_with_passport_card(member, passport_card))
             else:
                 updated.append(member)
+    finally:
+        if close_session:
+            try:
+                http.close()
+            except AttributeError:
+                pass
+
+    return updated
+
+
+def backfill_missing_passenger_passports(
+    config: Fl3xxApiConfig,
+    passengers: Iterable[PassengerDetail],
+    *,
+    session: Optional[requests.Session] = None,
+    fetch_member_fn: Optional[
+        Callable[[Fl3xxApiConfig, Any, Optional[requests.Session]], Any]
+    ] = None,
+) -> List[PassengerDetail]:
+    """Populate missing passenger passport details using the staff/crew endpoint."""
+
+    fetch_member = fetch_member_fn or fetch_crew_member
+
+    http = session or requests.Session()
+    close_session = session is None
+    updated: List[PassengerDetail] = []
+
+    try:
+        for passenger in passengers:
+            if _has_passport_details(passenger) or not passenger.user_id:
+                updated.append(passenger)
+                continue
+
+            try:
+                passport_payload = fetch_member(config, passenger.user_id, session=http)
+            except Exception:
+                updated.append(passenger)
+                continue
+
+            passport_card = _select_passport_card(passport_payload)
+            if passport_card:
+                updated.append(_merge_passenger_with_passport_card(passenger, passport_card))
+            else:
+                updated.append(passenger)
     finally:
         if close_session:
             try:
@@ -1877,6 +1954,7 @@ __all__ = [
     "fetch_flight_notification",
     "fetch_crew_member",
     "backfill_missing_crew_passports",
+    "backfill_missing_passenger_passports",
     "enrich_flights_with_crew",
     "DutySnapshot",
     "DutySnapshotPilot",

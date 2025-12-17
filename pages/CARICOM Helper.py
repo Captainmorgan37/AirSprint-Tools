@@ -16,6 +16,7 @@ from fl3xx_api import (
     PassengerDetail,
     PreflightCrewMember,
     backfill_missing_crew_passports,
+    backfill_missing_passenger_passports,
     compute_fetch_dates,
     extract_crew_from_preflight,
     extract_passengers_from_pax_details,
@@ -698,6 +699,20 @@ else:
                                     pax_payload = fetch_flight_pax_details(config, flight_id)
                                 passenger_roster = extract_passengers_from_pax_details(pax_payload)
                                 if passenger_roster:
+                                    missing_passports = [
+                                        pax
+                                        for pax in passenger_roster
+                                        if not (
+                                            _value_present(pax.document_number)
+                                            and _value_present(pax.document_issue_country_iso3)
+                                            and _value_present(pax.document_expiration)
+                                        )
+                                    ]
+                                    if missing_passports:
+                                        with st.spinner("Fetching passenger passport details…"):
+                                            passenger_roster = backfill_missing_passenger_passports(
+                                                config, passenger_roster
+                                            )
                                     passenger_count = len(passenger_roster)
                             except Exception as pax_exc:  # pragma: no cover - runtime fetch failures
                                 st.warning(
@@ -812,4 +827,3 @@ elif scan_button:
                 )
 
             st.dataframe(rows, hide_index=True)
-
