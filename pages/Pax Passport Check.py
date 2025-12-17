@@ -13,6 +13,7 @@ from fl3xx_api import (
     extract_passengers_from_pax_details,
     fetch_flights,
     fetch_flight_pax_details,
+    backfill_missing_passenger_passports,
 )
 from flight_leg_utils import (
     FlightDataError,
@@ -65,6 +66,14 @@ def _format_passenger_name(pax: PassengerDetail) -> str:
         if isinstance(part, str) and part.strip()
     ]
     return " ".join(parts) if parts else "Unknown"
+
+
+def _needs_passport_backfill(pax: PassengerDetail) -> bool:
+    return not (
+        pax.document_number
+        and pax.document_issue_country_iso3
+        and pax.document_expiration is not None
+    )
 
 
 def _passport_expiry_info(expiration_ms: Optional[int]) -> Tuple[Optional[date], Optional[str]]:
@@ -138,7 +147,12 @@ def _load_passengers(
     _ = settings_digest
     config = build_fl3xx_api_config(settings)
     pax_payload = fetch_flight_pax_details(config, flight_id)
-    return extract_passengers_from_pax_details(pax_payload)
+    passengers = extract_passengers_from_pax_details(pax_payload)
+
+    if any(_needs_passport_backfill(pax) for pax in passengers):
+        passengers = backfill_missing_passenger_passports(config, passengers)
+
+    return passengers
 
 
 def _extract_dep_time(leg: Mapping[str, Any]) -> Optional[datetime]:

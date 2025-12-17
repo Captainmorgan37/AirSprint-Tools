@@ -20,6 +20,7 @@ from fl3xx_api import (
     PreflightConflictAlert,
     PassengerDetail,
     backfill_missing_crew_passports,
+    backfill_missing_passenger_passports,
     extract_conflicts_from_preflight,
     extract_crew_from_preflight,
     extract_passengers_from_pax_details,
@@ -205,6 +206,7 @@ def test_extract_passengers_from_pax_details_reads_tickets() -> None:
     assert first.first_name == "Jonathan"
     assert first.middle_name == "Patrick Nelse"
     assert first.gender == "M"
+    assert first.user_id == "568400"
     assert first.nationality_iso3 == "CAN"
     assert first.birth_date == 164246400000
     assert first.document_number == "P171050ED"
@@ -354,6 +356,57 @@ def test_backfill_missing_crew_passports_fetches_missing_data() -> None:
 
     assert updated[1].document_number == "ALREADY"
     assert updated[1].document_issue_country_iso3 == "CAN"
+    assert updated[1].document_expiration == 1704067200
+
+
+def test_backfill_missing_passenger_passports_fetches_missing_data() -> None:
+    passengers = [
+        PassengerDetail(user_id="321"),
+        PassengerDetail(
+            user_id="654",
+            document_number="ONFILE",
+            document_issue_country_iso3="USA",
+            document_expiration=1704067200,
+        ),
+    ]
+
+    passport_payload = {
+        "idCards": [
+            {
+                "type": "PASSPORT",
+                "number": "Q1234567",
+                "issueCountry": {"code": "ca"},
+                "expirationDate": "2030-12-31",
+            }
+        ]
+    }
+
+    calls: list[str] = []
+
+    def fake_fetch(config, pax_id, session=None):  # type: ignore[override]
+        calls.append(str(pax_id))
+        return passport_payload
+
+    updated = backfill_missing_passenger_passports(
+        Fl3xxApiConfig(), passengers, fetch_member_fn=fake_fetch
+    )
+
+    assert calls == ["321"]
+
+    expected_expiration = int(
+        datetime.fromisoformat("2030-12-31")
+        .replace(tzinfo=timezone.utc)
+        .timestamp()
+        * 1000
+    )
+
+    assert updated[0].document_number == "Q1234567"
+    assert updated[0].document_issue_country_iso3 == "CAN"
+    assert updated[0].document_expiration == expected_expiration
+    assert updated[0].nationality_iso3 == "CAN"
+
+    assert updated[1].document_number == "ONFILE"
+    assert updated[1].document_issue_country_iso3 == "USA"
     assert updated[1].document_expiration == 1704067200
 
 
