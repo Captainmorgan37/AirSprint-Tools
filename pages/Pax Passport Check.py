@@ -36,11 +36,12 @@ st.write(
     Scan upcoming customs legs for passengers whose passport expiration dates look risky.
     The tool batches flight searches into 3-day windows, then pulls passenger passport
     details for each pax leg that crosses an international border. Any passports expiring
-    **before 20 Jul 2026** or **after 1 Jan 2036** are flagged for review.
+    before your selected cutoff (default **20 Jul 2026**) or **after 1 Jan 2036** are
+    flagged for review.
     """
 )
 
-EXPIRY_SOON_CUTOFF = date(2026, 7, 20)
+DEFAULT_EXPIRY_SOON_CUTOFF = date(2026, 7, 20)
 EXPIRY_FAR_CUTOFF = date(2036, 1, 1)
 CHUNK_DAYS = 3
 
@@ -76,7 +77,16 @@ def _needs_passport_backfill(pax: PassengerDetail) -> bool:
     )
 
 
-def _passport_expiry_info(expiration_ms: Optional[int]) -> Tuple[Optional[date], Optional[str]]:
+def _format_display_date(value: date) -> str:
+    return value.strftime("%d %b %Y")
+
+
+def _passport_expiry_info(
+    expiration_ms: Optional[int],
+    *,
+    expiry_soon_cutoff: date,
+    expiry_far_cutoff: date = EXPIRY_FAR_CUTOFF,
+) -> Tuple[Optional[date], Optional[str]]:
     if expiration_ms is None:
         return None, "Missing passport expiration"
 
@@ -85,9 +95,9 @@ def _passport_expiry_info(expiration_ms: Optional[int]) -> Tuple[Optional[date],
     except Exception:
         return None, "Unreadable passport expiration"
 
-    if expiry_date < EXPIRY_SOON_CUTOFF:
-        return expiry_date, "Expiring before 20 Jul 2026"
-    if expiry_date > EXPIRY_FAR_CUTOFF:
+    if expiry_date < expiry_soon_cutoff:
+        return expiry_date, f"Expiring before {_format_display_date(expiry_soon_cutoff)}"
+    if expiry_date > expiry_far_cutoff:
         return expiry_date, "Expires after 1 Jan 2036"
     return expiry_date, None
 
@@ -180,6 +190,7 @@ def _collect_flagged_passports(
     settings_digest: str,
     settings: Dict[str, Any],
     airport_lookup: Mapping[str, Mapping[str, Optional[Any]]],
+    expiry_soon_cutoff: date,
 ) -> Tuple[List[Dict[str, Any]], List[str]]:
     flagged: list[dict[str, Any]] = []
     errors: list[str] = []
@@ -203,7 +214,10 @@ def _collect_flagged_passports(
         dep_time_label = dep_dt.isoformat().replace("+00:00", "Z") if dep_dt else "Unknown"
 
         for pax in passengers:
-            expiry_date, flag_reason = _passport_expiry_info(pax.document_expiration)
+            expiry_date, flag_reason = _passport_expiry_info(
+                pax.document_expiration,
+                expiry_soon_cutoff=expiry_soon_cutoff,
+            )
             if flag_reason is None:
                 continue
 
@@ -236,6 +250,11 @@ end_default = start_default + timedelta(days=7)
 
 with st.form("passport_scan"):
     date_range = st.date_input("Date range", value=(start_default, end_default))
+    expiry_soon_cutoff = st.date_input(
+        "Flag passports expiring before",
+        value=DEFAULT_EXPIRY_SOON_CUTOFF,
+        help="Passengers whose passports expire before this date will be flagged.",
+    )
     submitted = st.form_submit_button("Run passport scan")
 
 if not submitted:
@@ -248,6 +267,10 @@ elif isinstance(date_range, date):
     start_date, end_date = date_range, date_range + timedelta(days=7)
 else:
     st.error("Please choose a valid start and end date.")
+    st.stop()
+
+if not isinstance(expiry_soon_cutoff, date):
+    st.error("Please choose a valid passport expiry cutoff date.")
     st.stop()
 
 if start_date > end_date:
@@ -277,6 +300,7 @@ with st.spinner("Evaluating passport expirations…"):
         settings_digest=settings_digest,
         settings=dict(api_settings),
         airport_lookup=airport_lookup,
+        expiry_soon_cutoff=expiry_soon_cutoff,
     )
 
 summary_cols = st.columns(3)
@@ -290,11 +314,15 @@ if fetch_errors:
     st.warning("\n".join(fetch_errors))
 
 if not flagged_passports:
-    st.success("No passports matched the alert thresholds in the selected window.")
+    st.success(
+        f"No passports expiring before {_format_display_date(expiry_soon_cutoff)} or after 1 Jan 2036 "
+        "matched the alert thresholds in the selected window."
+    )
 else:
     st.subheader("Flagged passengers")
     st.dataframe(flagged_passports, use_container_width=True, hide_index=True)
 
 st.caption(
-    f"Flights were retrieved in {CHUNK_DAYS}-day chunks to cover the full date range without API limits."
+    f"Flights were retrieved in {CHUNK_DAYS}-day chunks to cover the full date range without API limits. "
+    f"Passports expiring before {_format_display_date(expiry_soon_cutoff)} or after 1 Jan 2036 are flagged."
 )
