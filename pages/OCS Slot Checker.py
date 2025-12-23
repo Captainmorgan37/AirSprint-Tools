@@ -641,15 +641,9 @@ def _format_fl3xx_slot_note(sched_dt: Any, airport: str, tail: str | None = None
                 local_dt = dt_obj.replace(tzinfo=timezone.utc)
         else:
             local_dt = dt_obj.replace(tzinfo=timezone.utc)
+        utc_dt = local_dt.astimezone(timezone.utc)
     else:
-        local_dt = dt_obj
-        if tz_name:
-            try:
-                local_dt = local_dt.astimezone(ZoneInfo(tz_name))
-            except Exception:
-                local_dt = local_dt.astimezone(timezone.utc)
-
-    utc_dt = local_dt.astimezone(timezone.utc)
+        utc_dt = dt_obj.astimezone(timezone.utc)
     start = utc_dt - timedelta(minutes=window_minutes)
     end = utc_dt + timedelta(minutes=window_minutes)
     window_text = f"{start:%H%M}z-{end:%H%M}z"

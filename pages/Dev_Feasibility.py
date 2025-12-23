@@ -1658,7 +1658,7 @@ def _render_full_quote_result(result: FullFeasibilityResult) -> None:
     route_map_payload = _build_route_map_payload(legs)
 
     st.markdown("---")
-    summary_col, map_col = st.columns([1.6, 1])
+    summary_col, map_col = st.columns([1.9, 1])
 
     with summary_col:
         if workflow_label:
