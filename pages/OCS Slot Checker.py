@@ -610,6 +610,46 @@ def _format_slot_json_time(sched_dt: Any, airport: str) -> tuple[Optional[str], 
     return local_dt.strftime("%d%b").upper(), local_dt.strftime("%H%M")
 
 
+def _format_fl3xx_slot_note(sched_dt: Any, airport: str, tail: str | None = None) -> str:
+    window_minutes = WINDOWS_MIN.get(airport, 30)
+    label_prefix = f"{tail} - " if tail else ""
+    placeholder = f"{label_prefix}Valid xxxxz-xxxxz"
+
+    if sched_dt is None:
+        return placeholder
+
+    try:
+        parsed_dt = pd.to_datetime(sched_dt)
+    except Exception:
+        return placeholder
+
+    if isinstance(parsed_dt, pd.Timestamp):
+        if pd.isna(parsed_dt):
+            return placeholder
+        dt_obj = parsed_dt.to_pydatetime()
+    elif isinstance(parsed_dt, datetime):
+        dt_obj = parsed_dt
+    else:
+        return placeholder
+
+    tz_name = AIRPORT_TZ_LOOKUP.get(str(airport).upper())
+    if dt_obj.tzinfo is None:
+        if tz_name:
+            try:
+                local_dt = dt_obj.replace(tzinfo=ZoneInfo(tz_name))
+            except Exception:
+                local_dt = dt_obj.replace(tzinfo=timezone.utc)
+        else:
+            local_dt = dt_obj.replace(tzinfo=timezone.utc)
+        utc_dt = local_dt.astimezone(timezone.utc)
+    else:
+        utc_dt = dt_obj.astimezone(timezone.utc)
+    start = utc_dt - timedelta(minutes=window_minutes)
+    end = utc_dt + timedelta(minutes=window_minutes)
+    window_text = f"{start:%H%M}z-{end:%H%M}z"
+    return f"{label_prefix}Valid {window_text}"
+
+
 def _build_missing_slot_copy_payloads(df: pd.DataFrame) -> dict[int, dict[str, object]]:
     payloads: dict[int, dict[str, object]] = {}
     if df is None or df.empty:
@@ -635,6 +675,7 @@ def _build_missing_slot_copy_payloads(df: pd.DataFrame) -> dict[int, dict[str, o
             "label": f"{tail} {operation.title()} {airport}",
             "json": {"operation": operation, "airport": airport},
             "reason": reason,
+            "note": _format_fl3xx_slot_note(sched_dt, airport, tail or None),
         }
 
         if tail:
@@ -666,6 +707,7 @@ def _render_slot_copy_controls(container, payloads: Sequence[Mapping[str, object
     widget_suffix = st.session_state.get("slot_copy_counter", 0) + 1
     st.session_state["slot_copy_counter"] = widget_suffix
     button_id = f"slot-copy-btn-{widget_suffix}"
+    note_button_id = f"slot-copy-note-btn-{widget_suffix}"
     text_id = f"slot-copy-text-{widget_suffix}"
     status_id = f"slot-copy-status-{widget_suffix}"
 
@@ -676,6 +718,8 @@ def _render_slot_copy_controls(container, payloads: Sequence[Mapping[str, object
     json_text = json.dumps(payload_json, indent=2)
     escaped_json = escape(json_text)
     safe_json_for_js = json.dumps(json_text)
+    note_text = str(selected_payload.get("note") or "Valid xxxxz-xxxxz")
+    safe_note_for_js = json.dumps(note_text)
 
     with container:
         components.html(
@@ -718,6 +762,8 @@ def _render_slot_copy_controls(container, payloads: Sequence[Mapping[str, object
                 .slot-copy-button .slot-copy-copy {{ color: #60a5fa; }}
                 .slot-copy-button .slot-copy-slot {{ color: #e2e8f0; }}
                 .slot-copy-button .slot-copy-json {{ color: #f472b6; }}
+                .slot-copy-button--note .slot-copy-fl3xx {{ color: #facc15; }}
+                .slot-copy-button--note .slot-copy-note {{ color: #e2e8f0; }}
                 .slot-copy-status {{
                     font-size: 0.82rem;
                     font-weight: 700;
@@ -754,12 +800,19 @@ def _render_slot_copy_controls(container, payloads: Sequence[Mapping[str, object
                     <span class="slot-copy-slot">Slot</span>
                     <span class="slot-copy-json">JSON</span>
                 </button>
+                <button id="{note_button_id}" class="slot-copy-button slot-copy-button--note" type="button">
+                    <span class="slot-copy-icon">📝</span>
+                    <span class="slot-copy-copy">Copy</span>
+                    <span class="slot-copy-fl3xx">Fl3xx</span>
+                    <span class="slot-copy-note">Note</span>
+                </button>
                 <span id="{status_id}" class="slot-copy-status"></span>
                 <textarea id="{text_id}" style="position:absolute; left:-1000px; top:-1000px; height:1px; width:1px;">{escaped_json}</textarea>
             </div>
             <script>
                 (function() {{
                     const button = document.getElementById("{button_id}");
+                    const noteButton = document.getElementById("{note_button_id}");
                     const textArea = document.getElementById("{text_id}");
                     const status = document.getElementById("{status_id}");
                     if (!button || !textArea) return;
@@ -790,8 +843,7 @@ def _render_slot_copy_controls(container, payloads: Sequence[Mapping[str, object
                         }}
                     }};
 
-                    const copyPayload = () => {{
-                        const value = {safe_json_for_js};
+                    const copyPayload = (value) => {{
                         if (navigator.clipboard && window.isSecureContext) {{
                             navigator.clipboard.writeText(value).then(
                                 () => setStatus("Copied ✓"),
@@ -802,11 +854,14 @@ def _render_slot_copy_controls(container, payloads: Sequence[Mapping[str, object
                         fallbackCopy(value);
                     }};
 
-                    button.addEventListener("click", copyPayload);
+                    button.addEventListener("click", () => copyPayload({safe_json_for_js}));
+                    if (noteButton) {{
+                        noteButton.addEventListener("click", () => copyPayload({safe_note_for_js}));
+                    }}
                 }})();
             </script>
             """,
-            height=82,
+            height=92,
         )
 
 
@@ -856,12 +911,16 @@ def show_missing_table(df: pd.DataFrame, title: str, key: str):
         payload = payloads.get(idx)
         if payload and isinstance(payload.get("json"), Mapping):
             button_id = f"slot-copy-btn-{idx}"
+            note_button_id = f"slot-copy-note-btn-{idx}"
             status_id = f"slot-copy-status-{idx}"
             json_text = json.dumps(payload["json"], indent=2)
             json_attr = escape(json_text, quote=True)
+            note_text = str(payload.get("note") or "Valid xxxxz-xxxxz")
+            note_attr = escape(note_text, quote=True)
             copy_cell = (
                 f"<td class='slot-copy-cell'>"
-                f"  <button class='slot-copy-button' id='{button_id}' data-json=\"{json_attr}\" data-status='{status_id}'>📄 Copy JSON</button>"
+                f"  <button class='slot-copy-button' id='{button_id}' data-copy-value=\"{json_attr}\" data-status='{status_id}'>📄 Copy JSON</button>"
+                f"  <button class='slot-copy-button slot-copy-button--note' id='{note_button_id}' data-copy-value=\"{note_attr}\" data-status='{status_id}'>📝 Copy Fl3xx Note</button>"
                 f"  <span id='{status_id}' class='slot-copy-status'></span>"
                 f"</td>"
             )
@@ -926,12 +985,20 @@ def show_missing_table(df: pd.DataFrame, title: str, key: str):
                 cursor: pointer;
                 transition: transform 120ms ease, box-shadow 120ms ease, background 120ms ease, border-color 120ms ease;
                 white-space: nowrap;
+                margin-right: 0.35rem;
+                margin-bottom: 0.2rem;
             }}
             .slot-copy-button:hover {{
                 transform: translateY(-1px);
                 box-shadow: 0 10px 20px rgba(0, 0, 0, 0.4);
                 background: linear-gradient(135deg, #111827, #0f172a);
                 border-color: #475569;
+            }}
+            .slot-copy-button--note {{
+                border-color: #334155;
+            }}
+            .slot-copy-button--note:hover {{
+                border-color: #facc15;
             }}
             .slot-copy-status {{
                 margin-left: 0.45rem;
@@ -982,8 +1049,8 @@ def show_missing_table(df: pd.DataFrame, title: str, key: str):
                     }}
                 }};
 
-                const copyJson = (btn) => {{
-                    const payload = btn.getAttribute('data-json');
+                const copyPayload = (btn) => {{
+                    const payload = btn.getAttribute('data-copy-value');
                     const statusId = btn.getAttribute('data-status');
                     const statusEl = statusId ? document.getElementById(statusId) : null;
                     if (!payload) return;
@@ -998,7 +1065,7 @@ def show_missing_table(df: pd.DataFrame, title: str, key: str):
                     fallbackCopy(payload, statusEl);
                 }};
 
-                buttons.forEach((btn) => btn.addEventListener('click', () => copyJson(btn)));
+                buttons.forEach((btn) => btn.addEventListener('click', () => copyPayload(btn)));
             }})();
         </script>
         """,

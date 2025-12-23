@@ -5,7 +5,7 @@ import json
 import math
 import re
 import os
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, cast
 
 import pytz
@@ -84,6 +84,8 @@ SECTION_LABELS = {
 }
 KEY_ISSUE_SECTIONS = {"customs", "day_ops", "deice", "overflight"}
 SLOT_COPY_AIRPORTS = {"CYYZ", "CYUL", "CYYC", "CYVR"}
+SLOT_VALIDITY_WINDOWS = {"CYYC": 30, "CYYZ": 30, "CYVR": 30, "CYUL": 15}
+AIRPORT_TZ_LOOKUP = load_airport_tz_lookup()
 RESERVE_CALENDAR_DATES = set(TARGET_DATES)
 _LEG_STYLES_INJECTED = False
 _SLOT_COPY_STYLES_INJECTED = False
@@ -1290,6 +1292,56 @@ def _format_slot_json_time(planned_time_local: Optional[str]) -> tuple[Optional[
     return formatted_date, time_label
 
 
+def _format_fl3xx_slot_note(
+    planned_time_local: Optional[str],
+    airport: str,
+    tail: Optional[str] = None,
+) -> str:
+    window_minutes = SLOT_VALIDITY_WINDOWS.get(airport, 30)
+    label_prefix = f"{tail} - " if tail else ""
+    placeholder = f"{label_prefix}Valid xxxxz-xxxxz"
+
+    if not planned_time_local:
+        return placeholder
+
+    try:
+        parsed_dt = pd.to_datetime(str(planned_time_local))
+    except Exception:
+        return placeholder
+
+    if isinstance(parsed_dt, pd.Timestamp):
+        if pd.isna(parsed_dt):
+            return placeholder
+        dt_obj = parsed_dt.to_pydatetime()
+    elif isinstance(parsed_dt, datetime):
+        dt_obj = parsed_dt
+    else:
+        return placeholder
+
+    tz_name = AIRPORT_TZ_LOOKUP.get(airport)
+    if dt_obj.tzinfo is None:
+        if tz_name:
+            try:
+                local_dt = pytz.timezone(tz_name).localize(dt_obj)
+            except Exception:
+                local_dt = dt_obj.replace(tzinfo=pytz.UTC)
+        else:
+            local_dt = dt_obj.replace(tzinfo=pytz.UTC)
+    else:
+        local_dt = dt_obj
+        if tz_name:
+            try:
+                local_dt = local_dt.astimezone(pytz.timezone(tz_name))
+            except Exception:
+                local_dt = local_dt.astimezone(pytz.UTC)
+
+    utc_dt = local_dt.astimezone(pytz.UTC)
+    start = utc_dt - timedelta(minutes=window_minutes)
+    end = utc_dt + timedelta(minutes=window_minutes)
+    window_text = f"{start:%H%M}z-{end:%H%M}z"
+    return f"{label_prefix}Valid {window_text}"
+
+
 def _collect_slot_copy_payloads(result: Mapping[str, Any]) -> list[dict[str, object]]:
     payloads: list[dict[str, object]] = []
     legs = result.get("legs") if isinstance(result, Mapping) else None
@@ -1334,6 +1386,8 @@ def _collect_slot_copy_payloads(result: Mapping[str, Any]) -> list[dict[str, obj
                     "operation": operation,
                     "airport": icao,
                 },
+                "note": _format_fl3xx_slot_note(planned_time_local, icao),
+                "planned_time_local": planned_time_local,
                 "issue_prefix": issue_prefix,
             }
 
@@ -1371,6 +1425,7 @@ def _render_slot_copy_controls(container, payloads: Sequence[Mapping[str, object
     widget_suffix = st.session_state.get("slot_copy_counter", 0) + 1
     st.session_state["slot_copy_counter"] = widget_suffix
     button_id = f"slot-copy-btn-{widget_suffix}"
+    note_button_id = f"slot-copy-note-btn-{widget_suffix}"
     text_id = f"slot-copy-text-{widget_suffix}"
     status_id = f"slot-copy-status-{widget_suffix}"
 
@@ -1389,6 +1444,14 @@ def _render_slot_copy_controls(container, payloads: Sequence[Mapping[str, object
     json_text = json.dumps(payload_json, indent=2)
     escaped_json = html.escape(json_text)
     safe_json_for_js = json.dumps(json_text)
+    note_text = str(
+        selected_payload.get("note")
+        or _format_fl3xx_slot_note(
+            str(selected_payload.get("planned_time_local") or ""),
+            str(payload_json.get("airport", "")).upper(),
+        )
+    )
+    safe_note_for_js = json.dumps(note_text)
 
     with container:
         components.html(
@@ -1430,6 +1493,8 @@ def _render_slot_copy_controls(container, payloads: Sequence[Mapping[str, object
                 .slot-copy-button .slot-copy-copy {{ color: #60a5fa; }}
                 .slot-copy-button .slot-copy-slot {{ color: #e2e8f0; }}
                 .slot-copy-button .slot-copy-json {{ color: #f472b6; }}
+                .slot-copy-button--note .slot-copy-fl3xx {{ color: #facc15; }}
+                .slot-copy-button--note .slot-copy-note {{ color: #e2e8f0; }}
                 .slot-copy-status {{
                     font-size: 0.82rem;
                     font-weight: 700;
@@ -1466,6 +1531,12 @@ def _render_slot_copy_controls(container, payloads: Sequence[Mapping[str, object
                     <span class="slot-copy-slot">Slot</span>
                     <span class="slot-copy-json">JSON</span>
                 </button>
+                <button id="{note_button_id}" class="slot-copy-button slot-copy-button--note" type="button">
+                    <span class="slot-copy-icon">📝</span>
+                    <span class="slot-copy-copy">Copy</span>
+                    <span class="slot-copy-fl3xx">Fl3xx</span>
+                    <span class="slot-copy-note">Note</span>
+                </button>
                 <span id="{status_id}" class="slot-copy-status"></span>
                 <textarea id="{text_id}" style="position:absolute; left:-1000px; top:-1000px; height:1px; width:1px;">
                     {escaped_json}
@@ -1474,6 +1545,7 @@ def _render_slot_copy_controls(container, payloads: Sequence[Mapping[str, object
             <script>
                 (function() {{
                     const button = document.getElementById("{button_id}");
+                    const noteButton = document.getElementById("{note_button_id}");
                     const textArea = document.getElementById("{text_id}");
                     const status = document.getElementById("{status_id}");
                     if (!button || !textArea) return;
@@ -1504,8 +1576,7 @@ def _render_slot_copy_controls(container, payloads: Sequence[Mapping[str, object
                         }}
                     }};
 
-                    const copyPayload = () => {{
-                        const value = {safe_json_for_js};
+                    const copyPayload = (value) => {{
                         if (navigator.clipboard && window.isSecureContext) {{
                             navigator.clipboard.writeText(value).then(
                                 () => setStatus("Copied ✓"),
@@ -1517,11 +1588,14 @@ def _render_slot_copy_controls(container, payloads: Sequence[Mapping[str, object
                     }};
 
                     button.dataset.label = button.innerText;
-                    button.addEventListener("click", copyPayload);
+                    button.addEventListener("click", () => copyPayload({safe_json_for_js}));
+                    if (noteButton) {{
+                        noteButton.addEventListener("click", () => copyPayload({safe_note_for_js}));
+                    }}
                 }})();
             </script>
             """,
-            height=82,
+            height=92,
         )
 
 
@@ -1584,7 +1658,7 @@ def _render_full_quote_result(result: FullFeasibilityResult) -> None:
     route_map_payload = _build_route_map_payload(legs)
 
     st.markdown("---")
-    summary_col, map_col = st.columns([1.6, 1])
+    summary_col, map_col = st.columns([1.9, 1])
 
     with summary_col:
         if workflow_label:
