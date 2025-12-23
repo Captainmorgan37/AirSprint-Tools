@@ -938,6 +938,9 @@ def show_missing_table(df: pd.DataFrame, title: str, key: str):
             .slot-table-wrapper {{
                 width: 100%;
                 overflow-x: auto;
+                overflow-y: auto;
+                height: 100%;
+                max-height: 720px;
             }}
             table.slot-table {{
                 width: 100%;
