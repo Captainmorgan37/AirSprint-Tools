@@ -632,24 +632,10 @@ def _format_fl3xx_slot_note(sched_dt: Any, airport: str, tail: str | None = None
     else:
         return placeholder
 
-    tz_name = AIRPORT_TZ_LOOKUP.get(str(airport).upper())
     if dt_obj.tzinfo is None:
-        if tz_name:
-            try:
-                local_dt = dt_obj.replace(tzinfo=ZoneInfo(tz_name))
-            except Exception:
-                local_dt = dt_obj.replace(tzinfo=timezone.utc)
-        else:
-            local_dt = dt_obj.replace(tzinfo=timezone.utc)
+        utc_dt = dt_obj.replace(tzinfo=timezone.utc)
     else:
-        local_dt = dt_obj
-        if tz_name:
-            try:
-                local_dt = local_dt.astimezone(ZoneInfo(tz_name))
-            except Exception:
-                local_dt = local_dt.astimezone(timezone.utc)
-
-    utc_dt = local_dt.astimezone(timezone.utc)
+        utc_dt = dt_obj.astimezone(timezone.utc)
     start = utc_dt - timedelta(minutes=window_minutes)
     end = utc_dt + timedelta(minutes=window_minutes)
     window_text = f"{start:%H%M}z-{end:%H%M}z"
@@ -944,6 +930,9 @@ def show_missing_table(df: pd.DataFrame, title: str, key: str):
             .slot-table-wrapper {{
                 width: 100%;
                 overflow-x: auto;
+                overflow-y: auto;
+                height: 100%;
+                max-height: 720px;
             }}
             table.slot-table {{
                 width: 100%;

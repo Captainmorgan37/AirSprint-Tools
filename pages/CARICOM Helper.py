@@ -53,6 +53,7 @@ CARICOM_COUNTRIES = {
     "Bahamas",
     "Barbados",
     "Belize",
+    "Cayman Islands",
     "Dominica",
     "Grenada",
     "Guyana",
@@ -69,6 +70,7 @@ CARICOM_COUNTRIES = {
 CARICOM_REQUIREMENT_COUNTRIES = {
     "antigua and barbuda",
     "barbados",
+    "cayman islands",
     "dominica",
     "grenada",
     "guyana",
@@ -83,6 +85,7 @@ CARICOM_COUNTRY_CODE_TO_NAME = {
     # ISO2
     "AG": "Antigua and Barbuda",
     "BB": "Barbados",
+    "KY": "Cayman Islands",
     "DM": "Dominica",
     "GD": "Grenada",
     "GY": "Guyana",
@@ -94,6 +97,7 @@ CARICOM_COUNTRY_CODE_TO_NAME = {
     # ISO3
     "ATG": "Antigua and Barbuda",
     "BRB": "Barbados",
+    "CYM": "Cayman Islands",
     "DMA": "Dominica",
     "GRD": "Grenada",
     "GUY": "Guyana",
