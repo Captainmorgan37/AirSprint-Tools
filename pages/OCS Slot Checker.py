@@ -930,7 +930,7 @@ def show_missing_table(df: pd.DataFrame, title: str, key: str):
         row_html = "<tr>" + "".join(cells) + copy_cell + "</tr>"
         rows_html.append(row_html)
 
-    table_height = max(220, min(120 + 36 * len(rows_html), 860))
+    table_height = max(220, min(120 + 36 * len(rows_html), 520))
 
     components.html(
         f"""
@@ -938,6 +938,8 @@ def show_missing_table(df: pd.DataFrame, title: str, key: str):
             .slot-table-wrapper {{
                 width: 100%;
                 overflow-x: auto;
+                overflow-y: auto;
+                height: 100%;
             }}
             table.slot-table {{
                 width: 100%;
