@@ -697,7 +697,7 @@ def assign_preference_weighted(
                 penalty += distance * distance * scale
                 later_penalty = later_distance * scale
                 if is_easterly:
-                    later_penalty *= 2.0
+                    later_penalty *= 1.25
                 if force_easterly_first and pkg.tail in forced_early:
                     later_penalty *= 0.5
                 penalty += int(round(later_penalty))
@@ -858,7 +858,7 @@ def assign_preference_weighted(
                     pkg.tail, tz_targets[pref_idx]
                 )
                 if target_idx > pref_idx and _is_easterly_offset(pkg_offset):
-                    preference_penalty += pref_distance * 0.75
+                    preference_penalty += pref_distance * 0.25
                 elif target_idx < pref_idx and _is_westerly_offset(pkg_offset):
                     preference_penalty *= 0.75
                 if force_easterly_first and over_idx == 0:
@@ -1433,4 +1433,3 @@ if st.session_state.get("_run"):
     )
 
     st.success("Done. Adjust inputs and re-run as needed.")
-
