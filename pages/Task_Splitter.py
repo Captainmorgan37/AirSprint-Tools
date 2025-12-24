@@ -775,8 +775,58 @@ def assign_preference_weighted(
         return assignment
 
     optimized_assignment = _assign_via_search()
+    def _ensure_non_empty_shifts(
+        assignment: Dict[str, List[TailPackage]],
+    ) -> Dict[str, List[TailPackage]]:
+        if len(packages_sorted) < len(labels):
+            return assignment
+
+        empty_indices = [
+            idx for idx, label in enumerate(labels) if not assignment.get(label)
+        ]
+        if not empty_indices:
+            return assignment
+
+        for empty_idx in empty_indices:
+            best_donor_idx: Optional[int] = None
+            best_pkg: Optional[TailPackage] = None
+            best_score: Optional[Tuple[float, float, float]] = None
+
+            for donor_idx, label in enumerate(labels):
+                bucket = assignment.get(label, [])
+                if len(bucket) <= 1:
+                    continue
+                for pkg in bucket:
+                    pref_idx = preferred_index.get(pkg.tail, donor_idx)
+                    pref_distance = abs(empty_idx - pref_idx)
+                    tz_penalty = abs(
+                        pkg_offsets.get(pkg.tail, tz_targets[empty_idx])
+                        - tz_targets[empty_idx]
+                    )
+                    score = (pref_distance, tz_penalty, _workload(pkg))
+                    if best_score is None or score < best_score:
+                        best_score = score
+                        best_pkg = pkg
+                        best_donor_idx = donor_idx
+
+            if best_pkg is None or best_donor_idx is None:
+                continue
+
+            assignment[labels[best_donor_idx]].remove(best_pkg)
+            assignment[labels[empty_idx]].append(best_pkg)
+            assignment[labels[empty_idx]] = sorted(
+                assignment[labels[empty_idx]],
+                key=lambda p: (p.first_local_dt, p.tail),
+            )
+            assignment[labels[best_donor_idx]] = sorted(
+                assignment[labels[best_donor_idx]],
+                key=lambda p: (p.first_local_dt, p.tail),
+            )
+
+        return assignment
+
     if optimized_assignment is not None:
-        return optimized_assignment
+        return _ensure_non_empty_shifts(optimized_assignment)
 
     def _totals_delta(idx: int) -> float:
         label = labels[idx]
@@ -904,7 +954,7 @@ def assign_preference_weighted(
             buckets_by_index[idx], key=lambda p: (p.first_local_dt, p.tail)
         )
         result[label] = pkgs
-    return result
+    return _ensure_non_empty_shifts(result)
 
 
 def buckets_to_df(
