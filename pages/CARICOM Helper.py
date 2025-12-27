@@ -463,6 +463,7 @@ def _tail_to_callsign(tail: Any) -> str:
         "CFSRY": "ASP565",
         "CGFSJ": "ASP501",
         "CGIAS": "ASP531",
+        "CFSVP": "ASP716",
     }
 
     return tail_map.get(tail_sanitized, "")
