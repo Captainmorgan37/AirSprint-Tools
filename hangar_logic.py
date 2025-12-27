@@ -55,6 +55,7 @@ CJ_TAILS = {
     "CFSRY",
     "CGFSJ",
     "CGIAS",
+    "CFSVP",
 }
 """Tail numbers (without hyphen) that correspond to CJ aircraft."""
 
