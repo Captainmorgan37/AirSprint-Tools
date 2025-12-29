@@ -5,6 +5,7 @@ from flight_leg_utils import FlightDataError, build_fl3xx_api_config
 from reserve_calendar_checker import (
     TARGET_DATES,
     run_reserve_day_check,
+    select_reserve_dates_in_range,
     select_upcoming_reserve_dates,
 )
 from Home import configure_page, password_gate, render_sidebar
@@ -27,26 +28,52 @@ if not TARGET_DATES:
     st.error("No reserve calendar dates are configured.")
     st.stop()
 
-limit_max = min(10, len(TARGET_DATES))
-default_limit = min(4, limit_max)
-limit = st.slider(
-    "Number of upcoming reserve days to check",
-    min_value=1,
-    max_value=limit_max,
-    value=default_limit,
-    help="The checker evaluates the next set of configured reserve days in chronological order.",
+date_mode = st.radio(
+    "Reserve day selection",
+    options=("Upcoming count", "Date range"),
+    horizontal=True,
+    help="Choose whether to check the next set of reserve days or all reserve days within a date range.",
 )
 
-upcoming_dates = select_upcoming_reserve_dates(limit=limit)
+if date_mode == "Upcoming count":
+    limit_max = min(10, len(TARGET_DATES))
+    default_limit = min(4, limit_max)
+    limit = st.slider(
+        "Number of upcoming reserve days to check",
+        min_value=1,
+        max_value=limit_max,
+        value=default_limit,
+        help="The checker evaluates the next set of configured reserve days in chronological order.",
+    )
+    upcoming_dates = select_upcoming_reserve_dates(limit=limit)
+else:
+    min_date = min(TARGET_DATES)
+    max_date = max(TARGET_DATES)
+    start_date = st.date_input(
+        "Start date",
+        value=min_date,
+        min_value=min_date,
+        max_value=max_date,
+    )
+    end_date = st.date_input(
+        "End date",
+        value=max_date,
+        min_value=min_date,
+        max_value=max_date,
+    )
+    upcoming_dates = select_reserve_dates_in_range(start_date, end_date)
 
 if not upcoming_dates:
-    st.warning(
-        "All configured reserve dates are in the past. Update the schedule to continue monitoring."
-    )
+    if date_mode == "Upcoming count":
+        st.warning(
+            "All configured reserve dates are in the past. Update the schedule to continue monitoring."
+        )
+    else:
+        st.warning("No reserve days are configured within the selected date range.")
     st.stop()
 
 st.markdown(
-    "**Upcoming reserve days:** "
+    "**Selected reserve days:** "
     + ", ".join(date_obj.strftime("%Y-%m-%d") for date_obj in upcoming_dates)
 )
 
@@ -57,7 +84,7 @@ st.caption(
 run_check = st.button("Run Reserve Day Check", type="primary")
 
 if not run_check:
-    st.info("Select how many reserve days you want to inspect, then press the button above.")
+    st.info("Select the reserve days you want to inspect, then press the button above.")
     st.stop()
 
 try:
