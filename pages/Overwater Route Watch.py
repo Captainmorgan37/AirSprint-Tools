@@ -26,8 +26,7 @@ _MAPBOX_TOKEN = st.secrets.get("mapbox_token")  # type: ignore[attr-defined]
 if isinstance(_MAPBOX_TOKEN, str) and _MAPBOX_TOKEN.strip():
     os.environ["MAPBOX_API_KEY"] = _MAPBOX_TOKEN.strip()
 
-TARGET_TAILS: Tuple[str, ...] = ("C-FSJR", "C-GASE")
-TAIL_KEYS = {"".join(tail.upper().split("-")) for tail in TARGET_TAILS}
+AUTO_TAILS: Tuple[str, ...] = ("C-GASE",)
 LAND_BUFFER_NM = 200
 SAMPLES_PER_LEG = 18
 
@@ -38,7 +37,7 @@ render_sidebar()
 
 st.title("🌊 Overwater Route Watch")
 st.caption(
-    "Automatically pulls the next five days of legs for focus tails and highlights any legs that stray more than"
+    "Automatically pulls the next five days of legs for C-GASE and highlights any legs that stray more than"
     f" {LAND_BUFFER_NM} NM from land (based on proximity to known airports)."
 )
 
@@ -61,6 +60,29 @@ def _normalize_tail(value: Any) -> str:
     if value is None:
         return ""
     return "".join(str(value).upper().split("-"))
+
+
+def _format_tail_display(value: str) -> str:
+    normalized = _normalize_tail(value)
+    if not normalized:
+        return ""
+    if "-" in value:
+        return value.upper()
+    if len(normalized) > 1:
+        return f"{normalized[0]}-{normalized[1:]}"
+    return normalized
+
+
+@st.cache_data(ttl=3600)
+def _known_tail_keys() -> set[str]:
+    try:
+        tail_df = pd.read_csv("tails.csv")
+    except FileNotFoundError:
+        return set()
+    if tail_df.empty:
+        return set()
+    column = "Tail" if "Tail" in tail_df.columns else tail_df.columns[0]
+    return {_normalize_tail(value) for value in tail_df[column].dropna()}
 
 
 def _resolve_airport_code(row: pd.Series, columns: Iterable[str]) -> Optional[str]:
@@ -165,17 +187,19 @@ def _fetch_tail_legs(from_date: date, to_date: date) -> Tuple[pd.DataFrame, Dict
     return df, metadata
 
 
-def _prepare_tail_data(df: pd.DataFrame) -> Dict[str, List[Dict[str, Any]]]:
+def _prepare_tail_data(df: pd.DataFrame, target_tails: Iterable[str]) -> Dict[str, List[Dict[str, Any]]]:
     if df.empty or "tail" not in df.columns:
         return {}
 
     airport_lookup = load_airport_metadata_lookup()
     airport_coords = _airport_coordinates()
 
-    grouped: Dict[str, List[Dict[str, Any]]] = {tail: [] for tail in TARGET_TAILS}
+    target_keys = {_normalize_tail(tail) for tail in target_tails}
+    grouped: Dict[str, List[Dict[str, Any]]] = {tail: [] for tail in target_keys}
     for _, row in df.iterrows():
         tail_value = row.get("tail")
-        if _normalize_tail(tail_value) not in TAIL_KEYS:
+        normalized_tail = _normalize_tail(tail_value)
+        if normalized_tail not in target_keys:
             continue
 
         dep_code = _resolve_airport_code(row, DEPARTURE_AIRPORT_COLUMNS)
@@ -199,7 +223,7 @@ def _prepare_tail_data(df: pd.DataFrame) -> Dict[str, List[Dict[str, Any]]]:
             "dep_coords": dep_coords,
             "arr_coords": arr_coords,
         }
-        grouped.setdefault(str(tail_value), []).append(leg_info)
+        grouped.setdefault(normalized_tail, []).append(leg_info)
 
     for legs in grouped.values():
         legs.sort(key=lambda leg: leg.get("departure", ""))
@@ -292,8 +316,34 @@ now_mt = datetime.now(tz=MOUNTAIN_TIME_ZONE)
 start_date = now_mt.date()
 end_date = start_date + timedelta(days=5)
 
+known_tail_keys = _known_tail_keys()
+auto_tail_keys = [_normalize_tail(tail) for tail in AUTO_TAILS]
+
+lookup_input = st.text_input(
+    "Aircraft lookup",
+    value=st.session_state.get("tail_lookup_value", ""),
+    placeholder="Type a tail (ex: C-GASE)",
+)
+fetch_lookup = st.button("Fetch tail")
+if fetch_lookup:
+    normalized_lookup = _normalize_tail(lookup_input)
+    if not normalized_lookup:
+        st.warning("Enter a tail number to fetch.")
+    elif known_tail_keys and normalized_lookup not in known_tail_keys:
+        st.error("That tail is not in the fleet list. Double-check the entry and try again.")
+    else:
+        st.session_state["selected_tail"] = normalized_lookup
+        st.session_state["tail_lookup_value"] = lookup_input.strip().upper()
+        st.success(f"Loaded {_format_tail_display(normalized_lookup)}.")
+
+selected_tail = st.session_state.get("selected_tail")
+target_tail_keys = list(auto_tail_keys)
+if selected_tail and selected_tail not in target_tail_keys:
+    target_tail_keys.append(selected_tail)
+
+tail_label_list = ", ".join(_format_tail_display(tail) for tail in target_tail_keys)
 st.markdown(
-    f"Checking routes for {', '.join(TARGET_TAILS)} from **{start_date}** through **{end_date - timedelta(days=1)}**."
+    f"Checking routes for {tail_label_list} from **{start_date}** through **{end_date - timedelta(days=1)}**."
 )
 
 try:
@@ -305,6 +355,6 @@ except FlightDataError as exc:  # pragma: no cover - user feedback path
 with st.expander("Raw fetch metadata"):
     st.json(fetch_metadata)
 
-leg_sets = _prepare_tail_data(legs_df)
-for tail in TARGET_TAILS:
-    _render_tail_section(tail, leg_sets.get(tail, []))
+leg_sets = _prepare_tail_data(legs_df, target_tail_keys)
+for tail_key in target_tail_keys:
+    _render_tail_section(_format_tail_display(tail_key), leg_sets.get(tail_key, []))
