@@ -125,6 +125,14 @@ def select_upcoming_reserve_dates(
     return upcoming[:limit]
 
 
+def select_reserve_dates_in_range(start: date, end: date) -> List[date]:
+    """Return reserve dates within an inclusive date range."""
+
+    if start > end:
+        start, end = end, start
+    return [target for target in TARGET_DATES if start <= target <= end]
+
+
 def _extract_flight_identifier(row: Mapping[str, Any]) -> Optional[str]:
     for key in (
         "flightId",
@@ -439,5 +447,6 @@ __all__ = [
     "TARGET_DATES",
     "evaluate_flights_for_date",
     "run_reserve_day_check",
+    "select_reserve_dates_in_range",
     "select_upcoming_reserve_dates",
 ]
