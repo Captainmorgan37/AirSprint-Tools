@@ -1319,31 +1319,6 @@ if not legs_df.empty:
             mime="text/csv",
         )
 
-    extra_turn_df = compute_short_turns(
-        legs_df,
-        threshold_min=EXTRA_TURN_THRESHOLD_MIN,
-        priority_threshold_min=EXTRA_TURN_THRESHOLD_MIN,
-    )
-    extra_turn_df = extra_turn_df[
-        extra_turn_df["station"].apply(_is_extra_turn_airport)
-    ]
-
-    st.subheader("Extra Turn Time Airports")
-    if extra_turn_df.empty:
-        st.info(
-            "No turns under 60 minutes were found for the listed US airports or for airports outside of the US/Canada."
-        )
-    else:
-        extra_display_df = _prepare_turn_display_df(extra_turn_df)
-        extra_column_order = _column_order_for(extra_display_df)
-        st.dataframe(
-            _format_turn_table(extra_display_df),
-            width="stretch",
-            hide_index=True,
-            column_config=col_config,
-            column_order=extra_column_order if extra_column_order else None,
-        )
-
     if source == "FL3XX API":
         priority_warnings, priority_errors, evaluated_total = compute_priority_checkin_warnings(
             legs_df, token
