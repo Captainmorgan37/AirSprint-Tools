@@ -276,13 +276,14 @@ settings_digest = _settings_digest(api_settings)
 start_default = date.today()
 end_default = start_default + timedelta(days=7)
 
+expiry_mode = st.radio(
+    "Passport expiry rule",
+    (EXPIRY_MODE_DATE, EXPIRY_MODE_DAYS),
+    help="Choose whether to flag based on a fixed cutoff date or days from the flight.",
+)
+
 with st.form("passport_scan"):
     date_range = st.date_input("Date range", value=(start_default, end_default))
-    expiry_mode = st.radio(
-        "Passport expiry rule",
-        (EXPIRY_MODE_DATE, EXPIRY_MODE_DAYS),
-        help="Choose whether to flag based on a fixed cutoff date or days from the flight.",
-    )
     expiry_soon_cutoff: Optional[date] = None
     expiry_window_days: Optional[int] = None
     if expiry_mode == EXPIRY_MODE_DATE:
