@@ -6,6 +6,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import streamlit as st
+from dateutil.relativedelta import relativedelta
 
 from Home import configure_page, password_gate, render_sidebar
 from fl3xx_api import (
@@ -46,6 +47,9 @@ EXPIRY_FAR_CUTOFF = date(2036, 1, 1)
 CHUNK_DAYS = 3
 EXPIRY_MODE_DATE = "Date cutoff"
 EXPIRY_MODE_DAYS = "Days before expiry from flight"
+DATE_RANGE_KEY = "passport_check_date_range"
+DATE_PRESET_KEY = "passport_check_date_preset"
+CUSTOM_DATE_PRESET = "Custom range"
 
 
 def _settings_digest(settings: Mapping[str, Any]) -> str:
@@ -81,6 +85,17 @@ def _needs_passport_backfill(pax: PassengerDetail) -> bool:
 
 def _format_display_date(value: date) -> str:
     return value.strftime("%d %b %Y")
+
+
+def _future_date_presets(start: date) -> Dict[str, Tuple[date, date]]:
+    return {
+        "Next week": (start, start + timedelta(days=7)),
+        "Next month": (start, start + relativedelta(months=1)),
+        "Next 2 months": (start, start + relativedelta(months=2)),
+        "Next 6 months": (start, start + relativedelta(months=6)),
+        "Next year": (start, start + relativedelta(years=1)),
+        "Next 2 years": (start, start + relativedelta(years=2)),
+    }
 
 
 def _passport_expiry_info(
@@ -275,6 +290,7 @@ settings_digest = _settings_digest(api_settings)
 
 start_default = date.today()
 end_default = start_default + timedelta(days=7)
+future_presets = _future_date_presets(start_default)
 
 expiry_mode = st.radio(
     "Passport expiry rule",
@@ -283,7 +299,23 @@ expiry_mode = st.radio(
 )
 
 with st.form("passport_scan"):
-    date_range = st.date_input("Date range", value=(start_default, end_default))
+    preset_labels = [CUSTOM_DATE_PRESET, *future_presets.keys()]
+    selected_preset = st.selectbox(
+        "Choose a date range",
+        preset_labels,
+        index=1,
+        key=DATE_PRESET_KEY,
+    )
+    if selected_preset != CUSTOM_DATE_PRESET:
+        st.session_state[DATE_RANGE_KEY] = future_presets[selected_preset]
+    elif DATE_RANGE_KEY not in st.session_state:
+        st.session_state[DATE_RANGE_KEY] = (start_default, end_default)
+
+    date_range = st.date_input(
+        "Date range",
+        key=DATE_RANGE_KEY,
+        min_value=start_default,
+    )
     expiry_soon_cutoff: Optional[date] = None
     expiry_window_days: Optional[int] = None
     if expiry_mode == EXPIRY_MODE_DATE:
