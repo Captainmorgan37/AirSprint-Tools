@@ -251,6 +251,11 @@ def _normalize_quote_leg(
     if comment:
         flight.setdefault("quoteComment", comment)
 
+    if not flight.get("planningNotes"):
+        quote_note = extract_planning_note_text(quote)
+        if quote_note:
+            flight["planningNotes"] = quote_note
+
     _apply_aircraft_metadata(flight, quote)
     _apply_airport_code(flight, leg, "departure")
     _apply_airport_code(flight, leg, "arrival")
