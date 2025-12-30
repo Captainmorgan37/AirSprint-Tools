@@ -63,15 +63,7 @@ def _build_leg_contexts(
 ) -> List[LegContext]:
     quote_id = quote.get("id") or quote.get("quoteId") or quote.get("quoteNumber")
     options = build_quote_leg_options(quote, quote_id=str(quote_id) if quote_id is not None else None)
-    quote_planning_note = extract_planning_note_text(
-        {
-            "planningNotes": quote.get("planningNotes"),
-            "planningNote": quote.get("planningNote"),
-            "notes": quote.get("notes"),
-            "note": quote.get("note"),
-            "text": quote.get("text"),
-        }
-    )
+    quote_planning_note = extract_planning_note_text(quote)
     aircraft = quote.get("aircraftObj")
     quote_aircraft_type = _coerce_str(aircraft.get("type") or aircraft.get("model")) if isinstance(aircraft, Mapping) else ""
     quote_aircraft_category = _coerce_str(aircraft.get("category")) if isinstance(aircraft, Mapping) else ""
