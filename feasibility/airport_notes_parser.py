@@ -183,7 +183,15 @@ def note_text(note: Mapping[str, object]) -> str:
     if isinstance(value, str) and value.strip():
         return value.strip()
 
-    for key in ("title", "body", "category", "type"):
+    parts: list[str] = []
+    for key in ("title", "body"):
+        v = note.get(key)
+        if isinstance(v, str) and v.strip():
+            parts.append(v.strip())
+    if parts:
+        return "\n".join(parts)
+
+    for key in ("category", "type"):
         v = note.get(key)
         if isinstance(v, str) and v.strip():
             return v.strip()
@@ -971,4 +979,3 @@ def summarize_operational_notes(
         summary = "Operational notes require review"
 
     return CategoryResult(status=status, summary=summary, issues=issues)
-
