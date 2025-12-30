@@ -146,6 +146,7 @@ def _build_day_context(
         "workflow": workflow,
         "workflow_custom_name": workflow_custom,
         "legs": list(legs),
+        "planning_notes": extract_planning_note_text(quote),
         "sales_contact": sales_contact,
         "createdDate": quote.get("createdDate"),
     }
@@ -443,7 +444,15 @@ def _infer_expected_workflow(day: DayContext) -> tuple[Optional[str], Optional[s
             inferred.append((expected, owner_aircraft, requested or ""))
 
     if not inferred:
-        return None, None
+        day_note = day.get("planning_notes")
+        if day_note:
+            owner_aircraft = _extract_owner_aircraft_from_note(day_note)
+            requested = extract_requested_aircraft_from_note(day_note)
+            expected = _classify_expected_workflow(owner_aircraft, requested or "")
+            if expected:
+                inferred.append((expected, owner_aircraft, requested or ""))
+        if not inferred:
+            return None, None
 
     buckets = {bucket for bucket, _, _ in inferred}
     if len(buckets) > 1:
