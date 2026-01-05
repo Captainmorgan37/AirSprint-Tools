@@ -206,6 +206,7 @@ def compute_clearance_table(
     target_date: date,
     *,
     now: Optional[datetime] = None,
+    positioning_threshold_minutes: int = 120,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Build a table of crew duty clearance status for the provided duty date."""
 
@@ -322,6 +323,11 @@ def compute_clearance_table(
                 )
                 continue
 
+            minutes_before_departure = int(
+                (first_leg_dep_local - report_local).total_seconds() / 60.0
+            )
+            is_positioning = minutes_before_departure > positioning_threshold_minutes
+
             confirm_by_local = _compute_confirm_by(
                 report_local,
                 first_leg_dep_local,
@@ -355,6 +361,8 @@ def compute_clearance_table(
                     "_report_local_dt": report_local,
                     "_first_dep_local_dt": first_leg_dep_local,
                     "_has_early_flight": has_early_flight,
+                    "_minutes_before_departure": minutes_before_departure,
+                    "_is_positioning": is_positioning,
                     "_departure_airport": _extract_departure_airport(leg_info),
                     "_duty_timezone": duty_tz.key if hasattr(duty_tz, "key") else str(duty_tz),
                 }
