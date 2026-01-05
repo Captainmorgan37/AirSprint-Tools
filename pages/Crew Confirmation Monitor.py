@@ -96,7 +96,10 @@ except FlightDataError as exc:
 
 with st.spinner("Fetching duty clearance data from FL3XX…"):
     try:
-display_df, raw_df, troubleshooting_df = compute_clearance_table(config, target_date)
+        display_df, raw_df, troubleshooting_df = compute_clearance_table(
+            config,
+            target_date,
+        )
     except Exception as exc:
         st.error(f"Unable to load duty clearance data: {exc}")
         st.stop()
