@@ -96,7 +96,7 @@ except FlightDataError as exc:
 
 with st.spinner("Fetching duty clearance data from FL3XX…"):
     try:
-        display_df, raw_df, troubleshooting_df = compute_clearance_table(config, target_date)
+display_df, raw_df, troubleshooting_df = compute_clearance_table(config, target_date)
     except Exception as exc:
         st.error(f"Unable to load duty clearance data: {exc}")
         st.stop()
@@ -115,9 +115,23 @@ if raw_df.empty:
         )
     st.stop()
 
-not_confirmed = int((raw_df["Status"] == "⚠️ Not Confirmed").sum())
-unknown = int((raw_df["Status"] == "⏳ UNKNOWN").sum())
-total_crews = int(len(raw_df))
+presentation_df = raw_df.copy()
+
+if "_confirm_by_mt" in presentation_df.columns:
+    presentation_df["Clear by (MT)"] = presentation_df["_confirm_by_mt"].apply(
+        lambda value: value.strftime("%Y-%m-%d %H:%M %Z") if isinstance(value, datetime) else ""
+    )
+
+positioning_mask = presentation_df.get("_is_positioning", False)
+if not isinstance(positioning_mask, pd.Series):
+    positioning_mask = pd.Series([False] * len(presentation_df), index=presentation_df.index)
+
+flight_df = presentation_df.loc[~positioning_mask].reset_index(drop=True)
+positioning_df = presentation_df.loc[positioning_mask].reset_index(drop=True)
+
+not_confirmed = int((flight_df["Status"] == "⚠️ Not Confirmed").sum())
+unknown = int((flight_df["Status"] == "⏳ UNKNOWN").sum())
+total_crews = int(len(flight_df))
 
 metrics_row = st.columns(3)
 metrics_row[0].metric("Crews monitored", total_crews)
@@ -127,13 +141,6 @@ metrics_row[2].metric("Status unknown", unknown)
 st.caption(
     "Confirm-by deadlines are computed per crew using their local duty timezone. Time left updates each time the report is run."
 )
-
-presentation_df = raw_df.copy()
-
-if "_confirm_by_mt" in presentation_df.columns:
-    presentation_df["Clear by (MT)"] = presentation_df["_confirm_by_mt"].apply(
-        lambda value: value.strftime("%Y-%m-%d %H:%M %Z") if isinstance(value, datetime) else ""
-    )
 
 not_confirmed_columns = [
     "Tail",
@@ -154,13 +161,21 @@ confirmed_columns = [
     "Status",
 ]
 
-not_confirmed_mask = presentation_df["Status"] != "✅ Confirmed"
-not_confirmed_df = presentation_df.loc[not_confirmed_mask, not_confirmed_columns].reset_index(drop=True)
-confirmed_df = presentation_df.loc[~not_confirmed_mask, confirmed_columns].reset_index(drop=True)
+if not positioning_df.empty:
+    positioning_df["Report lead (min)"] = positioning_df.get("_minutes_before_departure")
+
+not_confirmed_mask = flight_df["Status"] != "✅ Confirmed"
+not_confirmed_df = flight_df.loc[not_confirmed_mask, not_confirmed_columns].reset_index(drop=True)
+confirmed_df = flight_df.loc[~not_confirmed_mask, confirmed_columns].reset_index(drop=True)
+
+if not positioning_df.empty:
+    st.info(
+        "Positioning confirmations are separated below when the report time is more than 120 minutes before first departure."
+    )
 
 st.subheader("Crews requiring confirmation")
 if not not_confirmed_df.empty:
-    minutes_left_series = presentation_df.loc[not_confirmed_mask, "_minutes_left"].reset_index(drop=True)
+    minutes_left_series = flight_df.loc[not_confirmed_mask, "_minutes_left"].reset_index(drop=True)
 
     def _highlight_time_left(row: pd.Series) -> list[str]:
         minutes_left = minutes_left_series.iloc[row.name]
@@ -182,6 +197,18 @@ if not confirmed_df.empty:
     st.dataframe(confirmed_df, width="stretch", hide_index=True)
 else:
     st.info("No crews are currently marked as confirmed.")
+
+if not positioning_df.empty:
+    st.subheader("Positioning confirmations")
+    positioning_columns = [
+        "Tail",
+        "Crew",
+        "Report (local)",
+        "First ETD (local)",
+        "Report lead (min)",
+        "Status",
+    ]
+    st.dataframe(positioning_df[positioning_columns], width="stretch", hide_index=True)
 
 if not troubleshooting_df.empty:
     with st.expander("Troubleshooting details"):
