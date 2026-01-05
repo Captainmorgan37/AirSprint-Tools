@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from collections.abc import Mapping
 from typing import Any, Dict, Optional
 
@@ -195,7 +195,7 @@ with st.expander("Download data or inspect raw fields"):
     for column in ["_confirm_by_local", "_confirm_by_mt", "_report_local_dt", "_first_dep_local_dt"]:
         if column in download_df.columns:
             download_df[column] = download_df[column].apply(_format_datetime)
-    download_df["_generated_utc"] = datetime.now(datetime.UTC).isoformat().replace("+00:00", "Z")
+    download_df["_generated_utc"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
     csv_bytes = download_df.to_csv(index=False).encode("utf-8")
     st.download_button(
