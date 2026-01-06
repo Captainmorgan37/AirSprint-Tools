@@ -152,7 +152,10 @@ def collect_delay_code_records(
             record = DelayCodeRecord(
                 flight_id=_coerce_int(flight.get("flightId")),
                 quote_id=_coerce_int(flight.get("quoteId")),
-                booking_reference=_coerce_str(flight.get("bookingReference")),
+                booking_reference=_coerce_str(
+                    flight.get("bookingIdentifier")
+                    or flight.get("bookingReference")
+                ),
                 flight_reference=_coerce_str(flight.get("flightNumberCompany") or flight.get("flightNumber")),
                 tail_number=_coerce_str(
                     flight.get("registrationNumber")
