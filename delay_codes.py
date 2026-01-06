@@ -235,7 +235,7 @@ def _delay_meets_threshold(delay_minutes: Optional[int], threshold: int) -> bool
 
 
 def _extract_delay_reasons(payload: Any) -> Dict[str, List[str]]:
-    if not isinstance(payload, Mapping):
+    if payload is None:
         return {
             "off_block": [],
             "takeoff": [],
@@ -251,25 +251,36 @@ def _extract_delay_reasons(payload: Any) -> Dict[str, List[str]]:
     }
 
 
-def _extract_reason_values(payload: Mapping[str, Any], keys: Iterable[str]) -> List[str]:
+def _iter_mapping_candidates(payload: Any) -> Iterable[Mapping[str, Any]]:
+    if isinstance(payload, Mapping):
+        yield payload
+        for value in payload.values():
+            yield from _iter_mapping_candidates(value)
+    elif isinstance(payload, Iterable) and not isinstance(payload, (str, bytes, bytearray)):
+        for item in payload:
+            yield from _iter_mapping_candidates(item)
+
+
+def _extract_reason_values(payload: Any, keys: Iterable[str]) -> List[str]:
     reasons: List[str] = []
-    for key in keys:
-        value = payload.get(key)
-        if value is None:
-            continue
-        if isinstance(value, str):
-            cleaned = value.strip()
-            if cleaned:
-                reasons.append(cleaned)
-            continue
-        if isinstance(value, Iterable) and not isinstance(value, (bytes, bytearray)):
-            for entry in value:
-                if isinstance(entry, str):
-                    cleaned = entry.strip()
-                    if cleaned:
-                        reasons.append(cleaned)
-                elif entry is not None:
-                    reasons.append(str(entry))
+    for candidate in _iter_mapping_candidates(payload):
+        for key in keys:
+            value = candidate.get(key)
+            if value is None:
+                continue
+            if isinstance(value, str):
+                cleaned = value.strip()
+                if cleaned:
+                    reasons.append(cleaned)
+                continue
+            if isinstance(value, Iterable) and not isinstance(value, (bytes, bytearray)):
+                for entry in value:
+                    if isinstance(entry, str):
+                        cleaned = entry.strip()
+                        if cleaned:
+                            reasons.append(cleaned)
+                    elif entry is not None:
+                        reasons.append(str(entry))
     return _dedupe_keep_order(reasons)
 
 
