@@ -112,7 +112,8 @@ if submitted:
             else:
                 table = pd.DataFrame([record.as_dict() for record in records])
                 styles = _build_row_styles(records, int(delay_threshold), len(table.columns))
-                styled_table = table.style.apply(lambda _: styles, axis=None)
+                styles_df = pd.DataFrame(styles, index=table.index, columns=table.columns)
+                styled_table = table.style.apply(lambda _: styles_df, axis=None)
                 st.dataframe(styled_table, use_container_width=True)
                 st.download_button(
                     "Download CSV",
