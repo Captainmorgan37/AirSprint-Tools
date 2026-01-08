@@ -17,6 +17,7 @@ class DelayCodeRecord:
     flight_id: Optional[int]
     quote_id: Optional[int]
     booking_reference: Optional[str]
+    account_name: Optional[str]
     flight_reference: Optional[str]
     tail_number: Optional[str]
     airport_from: Optional[str]
@@ -38,14 +39,12 @@ class DelayCodeRecord:
 
     def as_dict(self) -> Dict[str, Any]:
         return {
-            "Flight ID": self.flight_id,
-            "Quote ID": self.quote_id,
             "Booking Reference": self.booking_reference,
-            "Flight Reference": self.flight_reference,
+            "Account": self.account_name,
             "Tail": self.tail_number,
             "From": self.airport_from,
             "To": self.airport_to,
-            "Block-off delay (min)": _format_delay(self.off_block_delay_min),
+            "Takeoff delay (min)": _format_delay(self.off_block_delay_min),
             "Block-on delay (min)": _format_delay(self.on_block_delay_min),
             "Off-block reasons": _format_reasons(self.off_block_reasons),
             "Takeoff reasons": _format_reasons(self.takeoff_reasons),
@@ -156,6 +155,17 @@ def collect_delay_code_records(
                     flight.get("bookingIdentifier")
                     or flight.get("bookingReference")
                 ),
+                account_name=_coerce_str(
+                    flight.get("accountName")
+                    or flight.get("account")
+                    or flight.get("account_name")
+                    or flight.get("owner")
+                    or flight.get("ownerName")
+                    or flight.get("customer")
+                    or flight.get("customerName")
+                    or flight.get("client")
+                    or flight.get("clientName")
+                ),
                 flight_reference=_coerce_str(flight.get("flightNumberCompany") or flight.get("flightNumber")),
                 tail_number=_coerce_str(
                     flight.get("registrationNumber")
@@ -235,7 +245,7 @@ def _delay_meets_threshold(delay_minutes: Optional[int], threshold: int) -> bool
 
 
 def _extract_delay_reasons(payload: Any) -> Dict[str, List[str]]:
-    if not isinstance(payload, Mapping):
+    if payload is None:
         return {
             "off_block": [],
             "takeoff": [],
@@ -251,25 +261,36 @@ def _extract_delay_reasons(payload: Any) -> Dict[str, List[str]]:
     }
 
 
-def _extract_reason_values(payload: Mapping[str, Any], keys: Iterable[str]) -> List[str]:
+def _iter_mapping_candidates(payload: Any) -> Iterable[Mapping[str, Any]]:
+    if isinstance(payload, Mapping):
+        yield payload
+        for value in payload.values():
+            yield from _iter_mapping_candidates(value)
+    elif isinstance(payload, Iterable) and not isinstance(payload, (str, bytes, bytearray)):
+        for item in payload:
+            yield from _iter_mapping_candidates(item)
+
+
+def _extract_reason_values(payload: Any, keys: Iterable[str]) -> List[str]:
     reasons: List[str] = []
-    for key in keys:
-        value = payload.get(key)
-        if value is None:
-            continue
-        if isinstance(value, str):
-            cleaned = value.strip()
-            if cleaned:
-                reasons.append(cleaned)
-            continue
-        if isinstance(value, Iterable) and not isinstance(value, (bytes, bytearray)):
-            for entry in value:
-                if isinstance(entry, str):
-                    cleaned = entry.strip()
-                    if cleaned:
-                        reasons.append(cleaned)
-                elif entry is not None:
-                    reasons.append(str(entry))
+    for candidate in _iter_mapping_candidates(payload):
+        for key in keys:
+            value = candidate.get(key)
+            if value is None:
+                continue
+            if isinstance(value, str):
+                cleaned = value.strip()
+                if cleaned:
+                    reasons.append(cleaned)
+                continue
+            if isinstance(value, Iterable) and not isinstance(value, (bytes, bytearray)):
+                for entry in value:
+                    if isinstance(entry, str):
+                        cleaned = entry.strip()
+                        if cleaned:
+                            reasons.append(cleaned)
+                    elif entry is not None:
+                        reasons.append(str(entry))
     return _dedupe_keep_order(reasons)
 
 
