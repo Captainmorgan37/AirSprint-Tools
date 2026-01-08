@@ -123,6 +123,7 @@ def _sidebar_links() -> list[dict[str, Any]]:
                 {"path": "pages/Flight Following Reports.py", "label": "Flight Following Reports"},
                 {"path": "pages/FBO Disconnect Report.py", "label": "FBO Disconnect Report"},
                 {"path": "pages/Overwater Route Watch.py", "label": "Overwater Route Watch"},
+                {"path": "pages/Delay Codes.py", "label": "Delay Codes"},
             ],
         },
         {
@@ -149,7 +150,6 @@ def _sidebar_links() -> list[dict[str, Any]]:
                 {"path": "pages/Hangar Recommendation.py", "label": "Hangar Recommendation"},
                 {"path": "pages/FTL Report Reader.py", "label": "FTL Report Reader"},
                 {"path": "pages/Dev_Feasibility.py", "label": "Feasibility Checker"},
-                {"path": "pages/Delay Codes.py", "label": "Delay Codes"},
             ],
         },
         {
