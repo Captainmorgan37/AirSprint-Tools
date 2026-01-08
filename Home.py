@@ -148,6 +148,7 @@ def _sidebar_links() -> list[dict[str, Any]]:
             "expanded": False,
             "links": [
                 {"path": "pages/Hangar Recommendation.py", "label": "Hangar Recommendation"},
+                {"path": "pages/Syndicate Audit.py", "label": "Syndicate Audit"},
                 {"path": "pages/FTL Report Reader.py", "label": "FTL Report Reader"},
                 {"path": "pages/Dev_Feasibility.py", "label": "Feasibility Checker"},
             ],
