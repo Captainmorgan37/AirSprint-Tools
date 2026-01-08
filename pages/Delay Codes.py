@@ -53,7 +53,9 @@ def _build_row_styles(records: Sequence[Any], delay_threshold: int, columns: int
         if not color:
             styles.append(["" for _ in range(columns)])
         else:
-            styles.append([f"background-color: {color}" for _ in range(columns)])
+            styles.append(
+                [f"background-color: {color}; color: #111;" for _ in range(columns)]
+            )
     return styles
 
 
