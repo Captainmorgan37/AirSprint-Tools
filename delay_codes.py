@@ -38,8 +38,6 @@ class DelayCodeRecord:
 
     def as_dict(self) -> Dict[str, Any]:
         return {
-            "Flight ID": self.flight_id,
-            "Quote ID": self.quote_id,
             "Booking Reference": self.booking_reference,
             "Flight Reference": self.flight_reference,
             "Tail": self.tail_number,
