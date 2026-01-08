@@ -38,14 +38,11 @@ class DelayCodeRecord:
 
     def as_dict(self) -> Dict[str, Any]:
         return {
-            "Flight ID": self.flight_id,
-            "Quote ID": self.quote_id,
             "Booking Reference": self.booking_reference,
-            "Flight Reference": self.flight_reference,
             "Tail": self.tail_number,
             "From": self.airport_from,
             "To": self.airport_to,
-            "Block-off delay (min)": _format_delay(self.off_block_delay_min),
+            "Takeoff delay (min)": _format_delay(self.off_block_delay_min),
             "Block-on delay (min)": _format_delay(self.on_block_delay_min),
             "Off-block reasons": _format_reasons(self.off_block_reasons),
             "Takeoff reasons": _format_reasons(self.takeoff_reasons),
