@@ -40,10 +40,10 @@ def _row_background_color(record: Any, delay_threshold: int) -> str:
     if delay_columns == 0:
         return ""
     if delays_with_reasons == 0:
-        return "#fdecea"
+        return "#f4b6b6"
     if delays_with_reasons == delay_columns:
-        return "#e8f5e9"
-    return "#fff8e1"
+        return "#b7e1b5"
+    return "#f6e7a1"
 
 
 def _build_row_styles(records: Sequence[Any], delay_threshold: int, columns: int) -> list[list[str]]:
