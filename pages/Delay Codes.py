@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Any, Dict, Mapping
+from typing import Any, Dict, Mapping, Sequence
 
 import pandas as pd
 import streamlit as st
@@ -13,6 +13,50 @@ from Home import configure_page, get_secret, password_gate, render_sidebar
 
 def _default_target_date() -> date:
     return date.today()
+
+
+def _row_background_color(record: Any, delay_threshold: int) -> str:
+    delays_with_reasons = 0
+    delay_columns = 0
+
+    off_block_delayed = (
+        record.off_block_delay_min is not None
+        and record.off_block_delay_min >= delay_threshold
+    )
+    if off_block_delayed:
+        delay_columns += 1
+        if record.off_block_reasons or record.takeoff_reasons:
+            delays_with_reasons += 1
+
+    on_block_delayed = (
+        record.on_block_delay_min is not None
+        and record.on_block_delay_min >= delay_threshold
+    )
+    if on_block_delayed:
+        delay_columns += 1
+        if record.landing_reasons or record.on_block_reasons:
+            delays_with_reasons += 1
+
+    if delay_columns == 0:
+        return ""
+    if delays_with_reasons == 0:
+        return "#f4b6b6"
+    if delays_with_reasons == delay_columns:
+        return "#b7e1b5"
+    return "#f6e7a1"
+
+
+def _build_row_styles(records: Sequence[Any], delay_threshold: int, columns: int) -> list[list[str]]:
+    styles: list[list[str]] = []
+    for record in records:
+        color = _row_background_color(record, delay_threshold)
+        if not color:
+            styles.append(["" for _ in range(columns)])
+        else:
+            styles.append(
+                [f"background-color: {color}; color: #111;" for _ in range(columns)]
+            )
+    return styles
 
 
 def _render_metadata(metadata: Dict[str, Any], diagnostics: Dict[str, Any]) -> None:
@@ -69,7 +113,10 @@ if submitted:
                 _render_metadata(metadata, diagnostics)
             else:
                 table = pd.DataFrame([record.as_dict() for record in records])
-                st.dataframe(table, use_container_width=True)
+                styles = _build_row_styles(records, int(delay_threshold), len(table.columns))
+                styles_df = pd.DataFrame(styles, index=table.index, columns=table.columns)
+                styled_table = table.style.apply(lambda _: styles_df, axis=None)
+                st.dataframe(styled_table, use_container_width=True)
                 st.download_button(
                     "Download CSV",
                     data=table.to_csv(index=False),
