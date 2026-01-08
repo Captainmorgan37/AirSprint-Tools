@@ -17,6 +17,7 @@ class DelayCodeRecord:
     flight_id: Optional[int]
     quote_id: Optional[int]
     booking_reference: Optional[str]
+    account_name: Optional[str]
     flight_reference: Optional[str]
     tail_number: Optional[str]
     airport_from: Optional[str]
@@ -39,6 +40,7 @@ class DelayCodeRecord:
     def as_dict(self) -> Dict[str, Any]:
         return {
             "Booking Reference": self.booking_reference,
+            "Account": self.account_name,
             "Tail": self.tail_number,
             "From": self.airport_from,
             "To": self.airport_to,
@@ -152,6 +154,17 @@ def collect_delay_code_records(
                 booking_reference=_coerce_str(
                     flight.get("bookingIdentifier")
                     or flight.get("bookingReference")
+                ),
+                account_name=_coerce_str(
+                    flight.get("accountName")
+                    or flight.get("account")
+                    or flight.get("account_name")
+                    or flight.get("owner")
+                    or flight.get("ownerName")
+                    or flight.get("customer")
+                    or flight.get("customerName")
+                    or flight.get("client")
+                    or flight.get("clientName")
                 ),
                 flight_reference=_coerce_str(flight.get("flightNumberCompany") or flight.get("flightNumber")),
                 tail_number=_coerce_str(
