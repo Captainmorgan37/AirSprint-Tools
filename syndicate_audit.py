@@ -35,6 +35,8 @@ class SyndicateAuditEntry:
     partner_present: bool
     partner_match: Optional[str]
     booking_reference: str
+    aircraft_type: str
+    workflow: str
     tail: str
     route: str
     note_type: str
@@ -110,6 +112,7 @@ def _extract_syndicate_match(notes: str) -> Optional[SyndicateMatch]:
         if not name:
             continue
         name = name.split("[", 1)[0].strip()
+        name = name.split("(", 1)[0].strip()
         if not name or _is_na_name(name):
             continue
         label = match.group("label").strip().title()
@@ -156,6 +159,45 @@ def _extract_booking_reference(row: Mapping[str, Any]) -> Optional[str]:
             row.get("bookingReference"),
             row.get("bookingCode"),
             row.get("bookingId"),
+        )
+    )
+
+
+def _extract_workflow_label(row: Mapping[str, Any]) -> Optional[str]:
+    for key in (
+        "workflowCustomName",
+        "workflow_custom_name",
+        "workflowCustomLabel",
+        "workflow_custom_label",
+        "workflowLabel",
+        "workflow_label",
+        "workflowName",
+        "workflow_name",
+        "workflow",
+    ):
+        value = row.get(key)
+        if isinstance(value, Mapping):
+            nested = _first_nonempty(
+                value.get(nested_key)
+                for nested_key in ("customName", "customLabel", "label", "name", "title")
+            )
+            if nested:
+                return nested
+        text = _coerce_to_str(value)
+        if text:
+            return text
+    return None
+
+
+def _extract_aircraft_type(row: Mapping[str, Any]) -> Optional[str]:
+    return _first_nonempty(
+        (
+            row.get("assignedAircraftType"),
+            row.get("aircraftType"),
+            row.get("aircraft_type"),
+            row.get("aircraftCategory"),
+            row.get("aircraft_category"),
+            row.get("aircraft"),
         )
     )
 
@@ -316,12 +358,16 @@ def run_syndicate_audit(
             partner_match = account_display.get(partner_normalized) if partner_present else None
 
             booking_reference = _extract_booking_reference(row) or flight_id
+            aircraft_type = _extract_aircraft_type(row) or ""
+            workflow = _extract_workflow_label(row) or ""
             entry = SyndicateAuditEntry(
                 owner_account=account_display.get(normalized_account, normalized_account),
                 partner_account=match.partner_name,
                 partner_present=partner_present,
                 partner_match=partner_match,
                 booking_reference=booking_reference,
+                aircraft_type=aircraft_type,
+                workflow=workflow,
                 tail=_extract_tail(row),
                 route=_format_route(row),
                 note_type=match.note_type,

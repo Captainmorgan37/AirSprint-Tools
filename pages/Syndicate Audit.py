@@ -76,6 +76,8 @@ for entry in result.entries:
             "Partner Flying": "Yes" if entry.partner_present else "No",
             "Partner Account": entry.partner_match or "—",
             "Flight": entry.booking_reference,
+            "Aircraft": entry.aircraft_type or "—",
+            "Workflow": entry.workflow or "—",
             "Tail": entry.tail,
             "Route": entry.route,
             "Note Type": entry.note_type,
