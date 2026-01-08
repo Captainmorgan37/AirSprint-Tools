@@ -26,6 +26,7 @@ from .duty_module import evaluate_generic_duty_day
 from .models import DayContext, FeasibilityRequest, FullFeasibilityResult
 from .planning_notes import (
     airport_code_matches,
+    extract_planning_note_text,
     extract_requested_aircraft_from_note,
     parse_route_entries_from_note,
 )
@@ -62,6 +63,7 @@ def _build_leg_contexts(
 ) -> List[LegContext]:
     quote_id = quote.get("id") or quote.get("quoteId") or quote.get("quoteNumber")
     options = build_quote_leg_options(quote, quote_id=str(quote_id) if quote_id is not None else None)
+    quote_planning_note = extract_planning_note_text(quote)
     aircraft = quote.get("aircraftObj")
     quote_aircraft_type = _coerce_str(aircraft.get("type") or aircraft.get("model")) if isinstance(aircraft, Mapping) else ""
     quote_aircraft_category = _coerce_str(aircraft.get("category")) if isinstance(aircraft, Mapping) else ""
@@ -89,6 +91,8 @@ def _build_leg_contexts(
                 context["aircraft_type"] = quote_aircraft_type
             if not context.get("aircraft_category") and quote_aircraft_category:
                 context["aircraft_category"] = quote_aircraft_category
+            if not context.get("planning_notes") and quote_planning_note:
+                context["planning_notes"] = quote_planning_note
             legs.append(context)
     legs.sort(key=lambda leg: leg.get("departure_date_utc") or "")
     return legs
@@ -142,6 +146,7 @@ def _build_day_context(
         "workflow": workflow,
         "workflow_custom_name": workflow_custom,
         "legs": list(legs),
+        "planning_notes": extract_planning_note_text(quote),
         "sales_contact": sales_contact,
         "createdDate": quote.get("createdDate"),
     }
@@ -439,7 +444,15 @@ def _infer_expected_workflow(day: DayContext) -> tuple[Optional[str], Optional[s
             inferred.append((expected, owner_aircraft, requested or ""))
 
     if not inferred:
-        return None, None
+        day_note = day.get("planning_notes")
+        if day_note:
+            owner_aircraft = _extract_owner_aircraft_from_note(day_note)
+            requested = extract_requested_aircraft_from_note(day_note)
+            expected = _classify_expected_workflow(owner_aircraft, requested or "")
+            if expected:
+                inferred.append((expected, owner_aircraft, requested or ""))
+        if not inferred:
+            return None, None
 
     buckets = {bucket for bucket, _, _ in inferred}
     if len(buckets) > 1:
