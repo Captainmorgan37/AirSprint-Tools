@@ -400,7 +400,7 @@ def run_syndicate_audit(
                     route=_format_route(row),
                     note_type=match.note_type,
                     note_line=match.note_line,
-                    syndicate_tail_type=match.tail_type or "",
+                    syndicate_tail_type=match.tail_type or match.note_line,
                 )
                 entries.append(entry)
     finally:
