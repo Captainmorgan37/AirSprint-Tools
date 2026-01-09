@@ -6,7 +6,7 @@ import streamlit as st
 from fl3xx_api import MOUNTAIN_TIME_ZONE
 from flight_leg_utils import FlightDataError, build_fl3xx_api_config
 from Home import configure_page, password_gate, render_sidebar
-from syndicate_audit import run_syndicate_audit
+from syndicate_audit import run_syndicate_audit, run_syndicate_quote_audit
 
 configure_page(page_title="Syndicate Audit")
 password_gate()
@@ -21,17 +21,6 @@ st.write(
     flying on that same date.
     """
 )
-
-selected_date = st.date_input(
-    "Audit date (Mountain Time)",
-    value=pd.Timestamp.now(tz=MOUNTAIN_TIME_ZONE).date(),
-)
-
-run_check = st.button("Run Syndicate Audit", type="primary")
-
-if not run_check:
-    st.info("Choose a date and run the audit to review syndicate bookings.")
-    st.stop()
 
 try:
     api_settings = st.secrets.get("fl3xx_api")  # type: ignore[attr-defined]
@@ -50,46 +39,6 @@ except FlightDataError as exc:
     st.error(str(exc))
     st.stop()
 
-with st.spinner("Fetching flights and syndicate booking notes..."):
-    result = run_syndicate_audit(config, target_date=selected_date)
-
-summary = result.diagnostics
-
-metrics = st.columns(4)
-metrics[0].metric("Flights fetched", summary.get("total_flights", 0))
-metrics[1].metric("PAX flights", summary.get("pax_flights", 0))
-metrics[2].metric("Unique accounts", summary.get("unique_accounts", 0))
-metrics[3].metric("Syndicate matches", summary.get("syndicate_matches", 0))
-
-if result.warnings:
-    for warning in result.warnings:
-        st.warning(warning)
-
-if not result.entries:
-    st.success("No syndicate or partner notes were detected for the selected day.")
-    st.stop()
-
-rows = []
-for entry in result.entries:
-    rows.append(
-        {
-            "Owner Account": entry.owner_account,
-            "Syndicate Partner": entry.partner_account,
-            "Partner Flying": "Yes" if entry.partner_present else "No",
-            "Partner Account": entry.partner_match or "—",
-            "Flight": entry.booking_reference,
-            "Aircraft": entry.aircraft_type or "—",
-            "Workflow": entry.workflow or "—",
-            "Tail": entry.tail,
-            "Route": entry.route,
-            "Note Type": entry.note_type,
-            "Booking Notes Line": entry.note_line,
-            "Syndicate Tail Type": entry.syndicate_tail_type or "—",
-        }
-    )
-
-df = pd.DataFrame(rows)
-
 
 def _normalize_account(value: str) -> str:
     cleaned = re.sub(r"[^a-z0-9]+", " ", value.lower())
@@ -103,41 +52,174 @@ def _pair_key(row: pd.Series) -> str:
     return "||".join(sorted([owner, partner]))
 
 
-df["_pair_key"] = df.apply(_pair_key, axis=1)
-df["_as_available"] = df["Workflow"].str.contains("as available", case=False, na=False)
-conflict_mask = df["Partner Flying"] == "Yes"
+tabs = st.tabs(["Daily audit", "Quote audit"])
 
-conflicts = df[conflict_mask]
-cleared = df[~conflict_mask]
-
-if not conflicts.empty:
-    conflicts = conflicts.sort_values(
-        by=["_pair_key", "_as_available", "Owner Account", "Partner Account"],
-        ascending=[True, False, True, True],
+with tabs[0]:
+    selected_date = st.date_input(
+        "Audit date (Mountain Time)",
+        value=pd.Timestamp.now(tz=MOUNTAIN_TIME_ZONE).date(),
     )
 
-st.subheader("⚠️ Syndicate partners flying the same day")
-if conflicts.empty:
-    st.success("No syndicate partners were booked on the same day as their owner.")
-else:
-    conflict_pairs = conflicts.groupby("_pair_key")["_as_available"]
-    any_available = conflict_pairs.transform("any")
-    has_pair = conflict_pairs.transform("size") > 1
-    highlight_yellow = (~any_available) & has_pair
+    run_check = st.button("Run Syndicate Audit", type="primary")
 
-    def _highlight_rows(row: pd.Series) -> list[str]:
-        if conflicts.loc[row.name, "_as_available"]:
-            return ["background-color: #0f5132; color: #d1e7dd;"] * len(row)
-        if highlight_yellow.loc[row.name]:
-            return ["background-color: #664d03; color: #fff3cd;"] * len(row)
-        return [""] * len(row)
+    if not run_check:
+        st.info("Choose a date and run the audit to review syndicate bookings.")
+    else:
+        with st.spinner("Fetching flights and syndicate booking notes..."):
+            result = run_syndicate_audit(config, target_date=selected_date)
 
-    display_conflicts = conflicts.drop(columns=["_pair_key", "_as_available"])
-    styled_conflicts = display_conflicts.style.apply(_highlight_rows, axis=1)
-    st.dataframe(styled_conflicts, width="stretch")
+        summary = result.diagnostics
 
-st.subheader("✅ Syndicate partners not on the schedule")
-if cleared.empty:
-    st.info("All syndicate partners are also flying on the selected day.")
-else:
-    st.dataframe(cleared.drop(columns=["_pair_key", "_as_available"]), width="stretch")
+        metrics = st.columns(4)
+        metrics[0].metric("Flights fetched", summary.get("total_flights", 0))
+        metrics[1].metric("PAX flights", summary.get("pax_flights", 0))
+        metrics[2].metric("Unique accounts", summary.get("unique_accounts", 0))
+        metrics[3].metric("Syndicate matches", summary.get("syndicate_matches", 0))
+
+        if result.warnings:
+            for warning in result.warnings:
+                st.warning(warning)
+
+        if not result.entries:
+            st.success("No syndicate or partner notes were detected for the selected day.")
+        else:
+            rows = []
+            for entry in result.entries:
+                rows.append(
+                    {
+                        "Owner Account": entry.owner_account,
+                        "Syndicate Partner": entry.partner_account,
+                        "Partner Flying": "Yes" if entry.partner_present else "No",
+                        "Partner Account": entry.partner_match or "—",
+                        "Flight": entry.booking_reference,
+                        "Aircraft": entry.aircraft_type or "—",
+                        "Workflow": entry.workflow or "—",
+                        "Tail": entry.tail,
+                        "Route": entry.route,
+                        "Note Type": entry.note_type,
+                        "Booking Notes Line": entry.note_line,
+                        "Syndicate Tail Type": entry.syndicate_tail_type or "—",
+                    }
+                )
+
+            df = pd.DataFrame(rows)
+
+            df["_pair_key"] = df.apply(_pair_key, axis=1)
+            df["_as_available"] = df["Workflow"].str.contains("as available", case=False, na=False)
+            conflict_mask = df["Partner Flying"] == "Yes"
+
+            conflicts = df[conflict_mask]
+            cleared = df[~conflict_mask]
+
+            if not conflicts.empty:
+                conflicts = conflicts.sort_values(
+                    by=["_pair_key", "_as_available", "Owner Account", "Partner Account"],
+                    ascending=[True, False, True, True],
+                )
+
+            st.subheader("⚠️ Syndicate partners flying the same day")
+            if conflicts.empty:
+                st.success("No syndicate partners were booked on the same day as their owner.")
+            else:
+                conflict_pairs = conflicts.groupby("_pair_key")["_as_available"]
+                any_available = conflict_pairs.transform("any")
+                has_pair = conflict_pairs.transform("size") > 1
+                highlight_yellow = (~any_available) & has_pair
+
+                def _highlight_rows(row: pd.Series) -> list[str]:
+                    if conflicts.loc[row.name, "_as_available"]:
+                        return ["background-color: #0f5132; color: #d1e7dd;"] * len(row)
+                    if highlight_yellow.loc[row.name]:
+                        return ["background-color: #664d03; color: #fff3cd;"] * len(row)
+                    return [""] * len(row)
+
+                display_conflicts = conflicts.drop(columns=["_pair_key", "_as_available"])
+                styled_conflicts = display_conflicts.style.apply(_highlight_rows, axis=1)
+                st.dataframe(styled_conflicts, width="stretch")
+
+            st.subheader("✅ Syndicate partners not on the schedule")
+            if cleared.empty:
+                st.info("All syndicate partners are also flying on the selected day.")
+            else:
+                st.dataframe(cleared.drop(columns=["_pair_key", "_as_available"]), width="stretch")
+
+with tabs[1]:
+    st.write(
+        """
+        Enter a quote ID to locate the associated flight, inspect the preflight syndicate
+        notes, and verify whether the syndicate account is also flying on that date.
+        """
+    )
+    quote_id = st.text_input("Quote ID")
+    run_quote = st.button("Fetch Syndicate Quote", type="primary")
+
+    if not run_quote:
+        st.info("Enter a quote ID and fetch the syndicate audit for that quote.")
+    elif not quote_id.strip():
+        st.error("Please enter a quote ID to continue.")
+    else:
+        with st.spinner("Fetching syndicate details for the quote..."):
+            quote_result = run_syndicate_quote_audit(config, quote_id=quote_id.strip())
+
+        if quote_result.warnings:
+            for warning in quote_result.warnings:
+                st.warning(warning)
+
+        metrics = st.columns(4)
+        metrics[0].metric("Flight ID", quote_result.flight_id or "—")
+        metrics[1].metric("Flight Date", quote_result.flight_date.isoformat() if quote_result.flight_date else "—")
+        metrics[2].metric("Owner Account", quote_result.owner_account or "—")
+        metrics[3].metric("Syndicate Matches", len(quote_result.matches))
+
+        if not quote_result.matches:
+            st.info("No syndicate or partner notes were found for this quote.")
+        else:
+            match_rows = []
+            for match in quote_result.matches:
+                match_rows.append(
+                    {
+                        "Syndicate Partner": match.partner_account,
+                        "Partner Flying": "Yes" if match.partner_present else "No",
+                        "Partner Account": match.partner_match or "—",
+                        "Note Type": match.note_type,
+                        "Booking Notes Line": match.note_line,
+                        "Syndicate Tail Type": match.syndicate_tail_type or "—",
+                    }
+                )
+
+            st.subheader("Syndicate notes")
+            st.dataframe(pd.DataFrame(match_rows), width="stretch")
+
+            partner_flights = quote_result.partner_flights
+            if partner_flights:
+                st.subheader("Syndicate partner flights for the day")
+                flight_rows = []
+                for flight in partner_flights:
+                    flight_rows.append(
+                        {
+                            "Account": flight.account,
+                            "Flight": flight.booking_reference,
+                            "Flight ID": flight.flight_id,
+                            "Aircraft": flight.aircraft_type or "—",
+                            "Workflow": flight.workflow or "—",
+                            "Tail": flight.tail,
+                            "Route": flight.route,
+                            "Departure (MT)": flight.dep_time.strftime("%Y-%m-%d %H:%M")
+                            if flight.dep_time
+                            else "—",
+                        }
+                    )
+                st.dataframe(pd.DataFrame(flight_rows), width="stretch")
+            else:
+                partners = [
+                    match.partner_match or match.partner_account
+                    for match in quote_result.matches
+                    if not match.partner_present
+                ]
+                if partners and quote_result.flight_date:
+                    partner_list = ", ".join(partners)
+                    st.info(
+                        f"{partner_list} syndicate account not showing any bookings on {quote_result.flight_date}."
+                    )
+                else:
+                    st.info("No syndicate partner flights were found for the selected date.")
