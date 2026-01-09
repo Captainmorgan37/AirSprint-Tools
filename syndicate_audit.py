@@ -438,6 +438,7 @@ def _extract_leg_flight_id(payload: Any) -> Optional[str]:
             flight_value = _coerce_to_str(candidate.get(key))
             if flight_value:
                 return flight_value
+    for candidate in _iter_mapping_candidates(payload):
         flight_id = _extract_flight_identifier(candidate)
         if flight_id:
             return flight_id
