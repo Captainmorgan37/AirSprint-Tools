@@ -26,6 +26,7 @@ class SyndicateMatch:
     note_type: str
     partner_name: str
     note_line: str
+    tail_type: Optional[str]
 
 
 @dataclass
@@ -41,6 +42,7 @@ class SyndicateAuditEntry:
     route: str
     note_type: str
     note_line: str
+    syndicate_tail_type: str
 
 
 @dataclass
@@ -110,11 +112,15 @@ def _split_partner_names(value: str) -> List[str]:
 
 def _extract_syndicate_matches(notes: str) -> List[SyndicateMatch]:
     matches: List[SyndicateMatch] = []
+    last_tail_type: Optional[str] = None
     for raw_line in notes.splitlines():
         line = raw_line.strip()
         if not line:
             continue
+        if line == "-":
+            continue
         if "syndicate" not in line.lower() and "partner" not in line.lower():
+            last_tail_type = line
             continue
         match = re.search(r"(?P<label>syndicate|partner)\s*[:\-–]\s*(?P<name>.+)", line, flags=re.IGNORECASE)
         if not match:
@@ -130,7 +136,14 @@ def _extract_syndicate_matches(notes: str) -> List[SyndicateMatch]:
         for name in _split_partner_names(raw_name):
             if not name or _is_na_name(name):
                 continue
-            matches.append(SyndicateMatch(note_type=label, partner_name=name, note_line=line))
+            matches.append(
+                SyndicateMatch(
+                    note_type=label,
+                    partner_name=name,
+                    note_line=line,
+                    tail_type=last_tail_type,
+                )
+            )
     return matches
 
 
@@ -387,6 +400,7 @@ def run_syndicate_audit(
                     route=_format_route(row),
                     note_type=match.note_type,
                     note_line=match.note_line,
+                    syndicate_tail_type=match.tail_type or "",
                 )
                 entries.append(entry)
     finally:

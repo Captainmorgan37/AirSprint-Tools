@@ -82,6 +82,7 @@ for entry in result.entries:
             "Route": entry.route,
             "Note Type": entry.note_type,
             "Booking Notes Line": entry.note_line,
+            "Syndicate Tail Type": entry.syndicate_tail_type or "—",
         }
     )
 
