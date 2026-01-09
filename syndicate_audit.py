@@ -197,6 +197,7 @@ def _extract_syndicate_matches(notes: str) -> List[SyndicateMatch]:
         if "syndicate" not in line.lower() and "partner" not in line.lower():
             last_tail_type = line
             continue
+        line_tail_type = _extract_tail_type_label(line)
         match = re.search(
             r"(?P<label>syndicates?|partners?)\s*[:\-–]\s*(?P<name>.+)",
             line,
@@ -222,7 +223,7 @@ def _extract_syndicate_matches(notes: str) -> List[SyndicateMatch]:
                     note_type=label,
                     partner_name=name,
                     note_line=line,
-                    tail_type=last_tail_type,
+                    tail_type=line_tail_type or last_tail_type,
                 )
             )
     return matches
@@ -311,8 +312,8 @@ def _extract_aircraft_type(row: Mapping[str, Any]) -> Optional[str]:
 
 
 _TAIL_TYPE_PATTERNS = [
-    r"\bCJ2\+?\b",
-    r"\bCJ3\+?\b",
+    r"\bCJ2(?:\+|＋)?(?=\b|[^A-Za-z0-9])",
+    r"\bCJ3(?:\+|＋)?(?=\b|[^A-Za-z0-9])",
     r"\bP500\b",
     r"\bPraetor\s*500\b",
     r"\bL450\b",
@@ -326,7 +327,8 @@ _TAIL_TYPE_REGEX = re.compile("|".join(_TAIL_TYPE_PATTERNS), re.IGNORECASE)
 def _extract_tail_type_label(value: Optional[str]) -> str:
     if not value:
         return ""
-    match = _TAIL_TYPE_REGEX.search(value)
+    normalized_value = value.replace("＋", "+")
+    match = _TAIL_TYPE_REGEX.search(normalized_value)
     if not match:
         return ""
     label = match.group(0).strip()
