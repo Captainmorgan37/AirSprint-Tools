@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+import difflib
 import re
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
@@ -93,6 +94,40 @@ def _extract_booking_notes(payload: Any) -> Optional[str]:
 def _normalize_name(value: str) -> str:
     cleaned = re.sub(r"[^a-z0-9]+", " ", value.lower())
     return " ".join(cleaned.split())
+
+
+def _find_fuzzy_account_match(
+    partner_normalized: str, account_display: Mapping[str, str]
+) -> Optional[str]:
+    if not partner_normalized:
+        return None
+    if partner_normalized in account_display:
+        return partner_normalized
+
+    partner_tokens = set(partner_normalized.split())
+    best_token_match: Optional[str] = None
+    best_token_count = 0
+    for normalized_account in account_display:
+        account_tokens = set(normalized_account.split())
+        if partner_tokens and partner_tokens.issubset(account_tokens):
+            if len(partner_tokens) >= 2 or len(partner_normalized) >= 8:
+                token_count = len(partner_tokens)
+                if token_count > best_token_count:
+                    best_token_count = token_count
+                    best_token_match = normalized_account
+    if best_token_match:
+        return best_token_match
+
+    best_ratio = 0.0
+    best_ratio_match: Optional[str] = None
+    for normalized_account in account_display:
+        ratio = difflib.SequenceMatcher(None, partner_normalized, normalized_account).ratio()
+        if ratio > best_ratio:
+            best_ratio = ratio
+            best_ratio_match = normalized_account
+    if best_ratio >= 0.9:
+        return best_ratio_match
+    return None
 
 
 def _is_na_name(value: str) -> bool:
@@ -411,8 +446,9 @@ def run_syndicate_audit(
             for match in matches:
                 diagnostics["syndicate_matches"] += 1
                 partner_normalized = _normalize_name(match.partner_name)
-                partner_present = partner_normalized in account_display if partner_normalized else False
-                partner_match = account_display.get(partner_normalized) if partner_present else None
+                matched_account = _find_fuzzy_account_match(partner_normalized, account_display)
+                partner_present = matched_account is not None
+                partner_match = account_display.get(matched_account) if matched_account else None
 
                 syndicate_tail_type = _extract_tail_type_label(match.tail_type or match.note_line)
                 entry = SyndicateAuditEntry(
