@@ -1,3 +1,5 @@
+import re
+
 import pandas as pd
 import streamlit as st
 
@@ -87,19 +89,55 @@ for entry in result.entries:
     )
 
 df = pd.DataFrame(rows)
+
+
+def _normalize_account(value: str) -> str:
+    cleaned = re.sub(r"[^a-z0-9]+", " ", value.lower())
+    return " ".join(cleaned.split())
+
+
+def _pair_key(row: pd.Series) -> str:
+    owner = _normalize_account(row["Owner Account"])
+    partner_raw = row["Partner Account"] if row["Partner Account"] != "—" else row["Syndicate Partner"]
+    partner = _normalize_account(str(partner_raw))
+    return "||".join(sorted([owner, partner]))
+
+
+df["_pair_key"] = df.apply(_pair_key, axis=1)
+df["_as_available"] = df["Workflow"].str.contains("as available", case=False, na=False)
 conflict_mask = df["Partner Flying"] == "Yes"
 
 conflicts = df[conflict_mask]
 cleared = df[~conflict_mask]
 
+if not conflicts.empty:
+    conflicts = conflicts.sort_values(
+        by=["_pair_key", "_as_available", "Owner Account", "Partner Account"],
+        ascending=[True, False, True, True],
+    )
+
 st.subheader("⚠️ Syndicate partners flying the same day")
 if conflicts.empty:
     st.success("No syndicate partners were booked on the same day as their owner.")
 else:
-    st.dataframe(conflicts, width="stretch")
+    conflict_pairs = conflicts.groupby("_pair_key")["_as_available"]
+    any_available = conflict_pairs.transform("any")
+    has_pair = conflict_pairs.transform("size") > 1
+    highlight_yellow = (~any_available) & has_pair
+
+    def _highlight_rows(row: pd.Series) -> list[str]:
+        if conflicts.loc[row.name, "_as_available"]:
+            return ["background-color: #0f5132; color: #d1e7dd;"] * len(row)
+        if highlight_yellow.loc[row.name]:
+            return ["background-color: #664d03; color: #fff3cd;"] * len(row)
+        return [""] * len(row)
+
+    display_conflicts = conflicts.drop(columns=["_pair_key", "_as_available"])
+    styled_conflicts = display_conflicts.style.apply(_highlight_rows, axis=1)
+    st.dataframe(styled_conflicts, width="stretch")
 
 st.subheader("✅ Syndicate partners not on the schedule")
 if cleared.empty:
     st.info("All syndicate partners are also flying on the selected day.")
 else:
-    st.dataframe(cleared, width="stretch")
+    st.dataframe(cleared.drop(columns=["_pair_key", "_as_available"]), width="stretch")
