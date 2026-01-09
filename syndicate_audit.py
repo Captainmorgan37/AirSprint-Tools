@@ -116,7 +116,7 @@ def _extract_syndicate_matches(notes: str) -> List[SyndicateMatch]:
             continue
         if "syndicate" not in line.lower() and "partner" not in line.lower():
             continue
-        match = re.search(r"(?P<label>syndicate|partner)\s*:\s*(?P<name>.+)", line, flags=re.IGNORECASE)
+        match = re.search(r"(?P<label>syndicate|partner)\s*[:\-–]\s*(?P<name>.+)", line, flags=re.IGNORECASE)
         if not match:
             continue
         label = match.group("label").strip().title()
