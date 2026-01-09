@@ -434,6 +434,10 @@ def _extract_preflight_date(payload: Any) -> Optional[date]:
 
 def _extract_leg_flight_id(payload: Any) -> Optional[str]:
     for candidate in _iter_mapping_candidates(payload):
+        for key in ("flightId", "flight_id", "flightID"):
+            flight_value = _coerce_to_str(candidate.get(key))
+            if flight_value:
+                return flight_value
         flight_id = _extract_flight_identifier(candidate)
         if flight_id:
             return flight_id
