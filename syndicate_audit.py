@@ -10,7 +10,13 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 import requests
 
-from fl3xx_api import Fl3xxApiConfig, MOUNTAIN_TIME_ZONE, fetch_flights, fetch_preflight
+from fl3xx_api import (
+    Fl3xxApiConfig,
+    MOUNTAIN_TIME_ZONE,
+    fetch_flights,
+    fetch_leg_details,
+    fetch_preflight,
+)
 from flight_leg_utils import filter_out_subcharter_rows, normalize_fl3xx_payload, safe_parse_dt
 
 
@@ -50,6 +56,40 @@ class SyndicateAuditEntry:
 class SyndicateAuditResult:
     date: date
     entries: List[SyndicateAuditEntry]
+    diagnostics: Dict[str, Any]
+    warnings: List[str]
+
+
+@dataclass
+class SyndicateQuoteMatch:
+    partner_account: str
+    partner_present: bool
+    partner_match: Optional[str]
+    note_type: str
+    note_line: str
+    syndicate_tail_type: str
+
+
+@dataclass
+class SyndicateQuoteFlight:
+    account: str
+    booking_reference: str
+    flight_id: str
+    aircraft_type: str
+    workflow: str
+    tail: str
+    route: str
+    dep_time: Optional[datetime]
+
+
+@dataclass
+class SyndicateQuoteAuditResult:
+    quote_id: str
+    flight_id: Optional[str]
+    flight_date: Optional[date]
+    owner_account: Optional[str]
+    matches: List[SyndicateQuoteMatch]
+    partner_flights: List[SyndicateQuoteFlight]
     diagnostics: Dict[str, Any]
     warnings: List[str]
 
@@ -341,6 +381,70 @@ def _parse_mountain_datetime(value: Any) -> Optional[datetime]:
     return parsed.astimezone(MOUNTAIN_TIME_ZONE)
 
 
+def _parse_mountain_datetime_value(value: Any) -> Optional[datetime]:
+    if isinstance(value, (int, float)):
+        timestamp = float(value)
+        if timestamp > 1_000_000_000_000:
+            timestamp /= 1000.0
+        try:
+            parsed = datetime.fromtimestamp(timestamp, tz=timezone.utc)
+        except (OSError, OverflowError, ValueError):
+            return None
+        return parsed.astimezone(MOUNTAIN_TIME_ZONE)
+    return _parse_mountain_datetime(value)
+
+
+_PREFLIGHT_DATE_KEYS = (
+    "dep_time",
+    "depTime",
+    "dep_time_utc",
+    "depTimeUtc",
+    "departureTime",
+    "departure_time",
+    "departure_time_utc",
+    "departureDate",
+    "dep_date",
+    "depDate",
+    "flightDate",
+    "std",
+    "stdUtc",
+    "date",
+)
+
+
+def _extract_preflight_date(payload: Any) -> Optional[date]:
+    for candidate in _iter_mapping_candidates(payload):
+        for key in _PREFLIGHT_DATE_KEYS:
+            if key not in candidate:
+                continue
+            parsed = _parse_mountain_datetime_value(candidate.get(key))
+            if parsed:
+                return parsed.date()
+        for container_key in ("dep", "departure", "flightDetails", "detailsDeparture"):
+            nested = candidate.get(container_key)
+            if isinstance(nested, Mapping):
+                for key in _PREFLIGHT_DATE_KEYS:
+                    if key not in nested:
+                        continue
+                    parsed = _parse_mountain_datetime_value(nested.get(key))
+                    if parsed:
+                        return parsed.date()
+    return None
+
+
+def _extract_leg_flight_id(payload: Any) -> Optional[str]:
+    for candidate in _iter_mapping_candidates(payload):
+        for key in ("flightId", "flight_id", "flightID"):
+            flight_value = _coerce_to_str(candidate.get(key))
+            if flight_value:
+                return flight_value
+    for candidate in _iter_mapping_candidates(payload):
+        flight_id = _extract_flight_identifier(candidate)
+        if flight_id:
+            return flight_id
+    return None
+
+
 def _filter_rows_for_target_date(rows: Iterable[Mapping[str, Any]], target_date: date) -> List[Mapping[str, Any]]:
     filtered: List[Mapping[str, Any]] = []
     for row in rows:
@@ -481,8 +585,177 @@ def run_syndicate_audit(
     )
 
 
+def run_syndicate_quote_audit(
+    config: Fl3xxApiConfig,
+    *,
+    quote_id: str,
+    session: Optional[requests.Session] = None,
+) -> SyndicateQuoteAuditResult:
+    diagnostics: Dict[str, Any] = {
+        "preflight_requests": 0,
+        "preflight_errors": 0,
+        "leg_requests": 0,
+        "flight_date_found": False,
+        "syndicate_matches": 0,
+        "partner_flights": 0,
+    }
+    warnings: List[str] = []
+    matches: List[SyndicateQuoteMatch] = []
+    partner_flights: List[SyndicateQuoteFlight] = []
+    flight_id: Optional[str] = None
+    flight_date: Optional[date] = None
+    owner_account: Optional[str] = None
+
+    http = session or requests.Session()
+    close_session = session is None
+    try:
+        diagnostics["leg_requests"] += 1
+        leg_payload = fetch_leg_details(config, quote_id, session=http)
+        flight_id = _extract_leg_flight_id(leg_payload)
+        if not flight_id:
+            warnings.append(f"Quote {quote_id}: no flightId found in leg payload.")
+            return SyndicateQuoteAuditResult(
+                quote_id=quote_id,
+                flight_id=None,
+                flight_date=None,
+                owner_account=None,
+                matches=[],
+                partner_flights=[],
+                diagnostics=diagnostics,
+                warnings=warnings,
+            )
+
+        diagnostics["preflight_requests"] += 1
+        try:
+            preflight_payload = fetch_preflight(config, flight_id, session=http)
+        except Exception as exc:
+            diagnostics["preflight_errors"] += 1
+            warnings.append(f"Flight {flight_id}: unable to fetch preflight: {exc}")
+            return SyndicateQuoteAuditResult(
+                quote_id=quote_id,
+                flight_id=flight_id,
+                flight_date=None,
+                owner_account=None,
+                matches=[],
+                partner_flights=[],
+                diagnostics=diagnostics,
+                warnings=warnings,
+            )
+
+        booking_notes = _extract_booking_notes(preflight_payload) or ""
+        flight_date = _extract_preflight_date(preflight_payload)
+        diagnostics["flight_date_found"] = flight_date is not None
+
+        syndicate_matches = _extract_syndicate_matches(booking_notes) if booking_notes else []
+        diagnostics["syndicate_matches"] = len(syndicate_matches)
+        for match in syndicate_matches:
+            syndicate_tail_type = _extract_tail_type_label(match.tail_type or match.note_line)
+            matches.append(
+                SyndicateQuoteMatch(
+                    partner_account=match.partner_name,
+                    partner_present=False,
+                    partner_match=None,
+                    note_type=match.note_type,
+                    note_line=match.note_line,
+                    syndicate_tail_type=syndicate_tail_type,
+                )
+            )
+
+        if not flight_date:
+            warnings.append(f"Flight {flight_id}: unable to determine flight date from preflight payload.")
+            return SyndicateQuoteAuditResult(
+                quote_id=quote_id,
+                flight_id=flight_id,
+                flight_date=None,
+                owner_account=None,
+                matches=matches,
+                partner_flights=[],
+                diagnostics=diagnostics,
+                warnings=warnings,
+            )
+
+        flights, metadata = fetch_flights(
+            config,
+            from_date=flight_date,
+            to_date=flight_date + timedelta(days=1),
+            session=http,
+        )
+        diagnostics["fetch_metadata"] = metadata
+
+        normalized_rows, normalization_stats = normalize_fl3xx_payload({"items": flights})
+        filtered_rows, skipped_subcharter = filter_out_subcharter_rows(normalized_rows)
+        targeted_rows = _filter_rows_for_target_date(filtered_rows, flight_date)
+        diagnostics["normalization_stats"] = normalization_stats
+        diagnostics["skipped_subcharter"] = skipped_subcharter
+
+        pax_rows = [row for row in targeted_rows if _is_pax_flight(row)]
+        account_rows: Dict[str, List[Mapping[str, Any]]] = {}
+        account_display: Dict[str, str] = {}
+        for row in pax_rows:
+            account_name = _extract_account_name(row)
+            if not account_name:
+                continue
+            normalized_account = _normalize_name(account_name)
+            if not normalized_account:
+                continue
+            account_rows.setdefault(normalized_account, []).append(row)
+            account_display.setdefault(normalized_account, account_name)
+
+        owner_row = next(
+            (row for row in pax_rows if _extract_flight_identifier(row) == str(flight_id)),
+            None,
+        )
+        if owner_row:
+            owner_account = _extract_account_name(owner_row)
+
+        if matches:
+            for entry in matches:
+                partner_normalized = _normalize_name(entry.partner_account)
+                matched_account = _find_fuzzy_account_match(partner_normalized, account_display)
+                entry.partner_present = matched_account is not None
+                entry.partner_match = account_display.get(matched_account) if matched_account else None
+
+                if matched_account and matched_account in account_rows:
+                    for row in account_rows[matched_account]:
+                        flight_identifier = _extract_flight_identifier(row) or ""
+                        partner_flights.append(
+                            SyndicateQuoteFlight(
+                                account=account_display.get(matched_account, matched_account),
+                                booking_reference=_extract_booking_reference(row) or flight_identifier,
+                                flight_id=flight_identifier,
+                                aircraft_type=_extract_aircraft_type(row) or "",
+                                workflow=_extract_workflow_label(row) or "",
+                                tail=_extract_tail(row),
+                                route=_format_route(row),
+                                dep_time=_parse_mountain_datetime(row.get("dep_time")),
+                            )
+                        )
+            diagnostics["partner_flights"] = len(partner_flights)
+    finally:
+        if close_session:
+            try:
+                http.close()
+            except AttributeError:
+                pass
+
+    return SyndicateQuoteAuditResult(
+        quote_id=quote_id,
+        flight_id=flight_id,
+        flight_date=flight_date,
+        owner_account=owner_account,
+        matches=matches,
+        partner_flights=partner_flights,
+        diagnostics=diagnostics,
+        warnings=warnings,
+    )
+
+
 __all__ = [
     "SyndicateAuditEntry",
     "SyndicateAuditResult",
+    "SyndicateQuoteAuditResult",
+    "SyndicateQuoteMatch",
+    "SyndicateQuoteFlight",
     "run_syndicate_audit",
+    "run_syndicate_quote_audit",
 ]
