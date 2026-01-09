@@ -229,6 +229,32 @@ def _extract_aircraft_type(row: Mapping[str, Any]) -> Optional[str]:
     )
 
 
+_TAIL_TYPE_PATTERNS = [
+    r"\bCJ2\+?\b",
+    r"\bCJ3\+?\b",
+    r"\bP500\b",
+    r"\bPraetor\s*500\b",
+    r"\bL450\b",
+    r"\bLegacy\s*450\b",
+    r"\bLegacy\b",
+    r"\bEmbraer\b",
+]
+_TAIL_TYPE_REGEX = re.compile("|".join(_TAIL_TYPE_PATTERNS), re.IGNORECASE)
+
+
+def _extract_tail_type_label(value: Optional[str]) -> str:
+    if not value:
+        return ""
+    match = _TAIL_TYPE_REGEX.search(value)
+    if not match:
+        return ""
+    label = match.group(0).strip()
+    normalized = " ".join(label.split())
+    if normalized.lower() == "legacy":
+        return "Legacy"
+    return normalized
+
+
 def _extract_tail(row: Mapping[str, Any]) -> str:
     return _first_nonempty(
         (
@@ -388,6 +414,7 @@ def run_syndicate_audit(
                 partner_present = partner_normalized in account_display if partner_normalized else False
                 partner_match = account_display.get(partner_normalized) if partner_present else None
 
+                syndicate_tail_type = _extract_tail_type_label(match.tail_type or match.note_line)
                 entry = SyndicateAuditEntry(
                     owner_account=account_display.get(normalized_account, normalized_account),
                     partner_account=match.partner_name,
@@ -400,7 +427,7 @@ def run_syndicate_audit(
                     route=_format_route(row),
                     note_type=match.note_type,
                     note_line=match.note_line,
-                    syndicate_tail_type=match.tail_type or match.note_line,
+                    syndicate_tail_type=syndicate_tail_type,
                 )
                 entries.append(entry)
     finally:
