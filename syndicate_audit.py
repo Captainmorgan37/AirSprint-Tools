@@ -98,7 +98,18 @@ def _is_na_name(value: str) -> bool:
     return normalized in {"na", "n a", "none", "no partner"}
 
 
-def _extract_syndicate_match(notes: str) -> Optional[SyndicateMatch]:
+def _split_partner_names(value: str) -> List[str]:
+    parts = re.split(r"[;,]", value)
+    names: List[str] = []
+    for part in parts:
+        text = part.strip()
+        if text:
+            names.append(text)
+    return names
+
+
+def _extract_syndicate_matches(notes: str) -> List[SyndicateMatch]:
+    matches: List[SyndicateMatch] = []
     for raw_line in notes.splitlines():
         line = raw_line.strip()
         if not line:
@@ -108,16 +119,19 @@ def _extract_syndicate_match(notes: str) -> Optional[SyndicateMatch]:
         match = re.search(r"(?P<label>syndicate|partner)\s*:\s*(?P<name>.+)", line, flags=re.IGNORECASE)
         if not match:
             continue
-        name = match.group("name").strip()
-        if not name:
-            continue
-        name = name.split("[", 1)[0].strip()
-        name = name.split("(", 1)[0].strip()
-        if not name or _is_na_name(name):
-            continue
         label = match.group("label").strip().title()
-        return SyndicateMatch(note_type=label, partner_name=name, note_line=line)
-    return None
+        raw_name = match.group("name").strip()
+        if not raw_name:
+            continue
+        raw_name = raw_name.split("[", 1)[0].strip()
+        raw_name = raw_name.split("(", 1)[0].strip()
+        if not raw_name:
+            continue
+        for name in _split_partner_names(raw_name):
+            if not name or _is_na_name(name):
+                continue
+            matches.append(SyndicateMatch(note_type=label, partner_name=name, note_line=line))
+    return matches
 
 
 def _extract_flight_identifier(row: Mapping[str, Any]) -> Optional[str]:
@@ -348,32 +362,33 @@ def run_syndicate_audit(
                 diagnostics["missing_booking_notes"] += 1
                 continue
 
-            match = _extract_syndicate_match(booking_notes)
-            if not match:
+            matches = _extract_syndicate_matches(booking_notes)
+            if not matches:
                 continue
-
-            diagnostics["syndicate_matches"] += 1
-            partner_normalized = _normalize_name(match.partner_name)
-            partner_present = partner_normalized in account_display if partner_normalized else False
-            partner_match = account_display.get(partner_normalized) if partner_present else None
 
             booking_reference = _extract_booking_reference(row) or flight_id
             aircraft_type = _extract_aircraft_type(row) or ""
             workflow = _extract_workflow_label(row) or ""
-            entry = SyndicateAuditEntry(
-                owner_account=account_display.get(normalized_account, normalized_account),
-                partner_account=match.partner_name,
-                partner_present=partner_present,
-                partner_match=partner_match,
-                booking_reference=booking_reference,
-                aircraft_type=aircraft_type,
-                workflow=workflow,
-                tail=_extract_tail(row),
-                route=_format_route(row),
-                note_type=match.note_type,
-                note_line=match.note_line,
-            )
-            entries.append(entry)
+            for match in matches:
+                diagnostics["syndicate_matches"] += 1
+                partner_normalized = _normalize_name(match.partner_name)
+                partner_present = partner_normalized in account_display if partner_normalized else False
+                partner_match = account_display.get(partner_normalized) if partner_present else None
+
+                entry = SyndicateAuditEntry(
+                    owner_account=account_display.get(normalized_account, normalized_account),
+                    partner_account=match.partner_name,
+                    partner_present=partner_present,
+                    partner_match=partner_match,
+                    booking_reference=booking_reference,
+                    aircraft_type=aircraft_type,
+                    workflow=workflow,
+                    tail=_extract_tail(row),
+                    route=_format_route(row),
+                    note_type=match.note_type,
+                    note_line=match.note_line,
+                )
+                entries.append(entry)
     finally:
         if close_session:
             try:
