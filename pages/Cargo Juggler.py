@@ -1,5 +1,6 @@
 import itertools
 import math
+import random
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -139,162 +140,235 @@ def bag_volume(dims):
 def cargo_volume(interior, container_type):
     if container_type == "CJ":
         main_vol = interior["depth"] * interior["width"] * interior["height"]
-        tunnel_vol = interior["tunnel"]["depth"] * interior["tunnel"]["width"] * interior["height"]
-        return main_vol + tunnel_vol
+        restricted = interior["restricted"]
+        restricted_vol = restricted["depth"] * restricted["width"] * interior["height"]
+        return max(0.0, main_vol - restricted_vol)
     else:
         # approximate trapezoidal cross-section (average width)
         return interior["depth"] * ((interior["width_min"] + interior["width_max"]) / 2) * interior["height"]
 
 # ============================================================
-# Greedy 3D Packing (with CJ Tunnel specialization)
+# Free-Space 3D Packing (with CJ Tunnel specialization)
 # ============================================================
-def greedy_3d_packing(baggage_list, container_type, interior, force_tunnel_for_long=True, long_threshold=50):
+def space_volume(space):
+    return space["L"] * space["W"] * space["H"]
+
+def prune_spaces(spaces):
+    pruned = []
+    for i, space in enumerate(spaces):
+        contained = False
+        for j, other in enumerate(spaces):
+            if i == j:
+                continue
+            if (
+                space["x"] >= other["x"]
+                and space["y"] >= other["y"]
+                and space["z"] >= other["z"]
+                and space["x"] + space["L"] <= other["x"] + other["L"]
+                and space["y"] + space["W"] <= other["y"] + other["W"]
+                and space["z"] + space["H"] <= other["z"] + other["H"]
+                and space["Section"] == other["Section"]
+            ):
+                contained = True
+                break
+        if not contained:
+            pruned.append(space)
+    return pruned
+
+def initial_spaces(container_type, interior):
+    if container_type == "CJ":
+        cargo_L = interior["depth"]
+        cargo_W = interior["width"]
+        cargo_H = interior["height"]
+        r = interior["restricted"]
+        t = interior["tunnel"]
+
+        spaces = []
+        # Space near door, left side (exclude restricted block)
+        spaces.append({
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0,
+            "L": r["depth"],
+            "W": max(0.0, cargo_W - r["width"]),
+            "H": cargo_H,
+            "Section": "Main"
+        })
+        # Space behind restricted block, before tunnel
+        spaces.append({
+            "x": r["depth"],
+            "y": 0.0,
+            "z": 0.0,
+            "L": max(0.0, cargo_L - r["depth"] - t["depth"]),
+            "W": cargo_W,
+            "H": cargo_H,
+            "Section": "Main"
+        })
+        # Space beside tunnel at back wall
+        spaces.append({
+            "x": max(0.0, cargo_L - t["depth"]),
+            "y": t["width"],
+            "z": 0.0,
+            "L": t["depth"],
+            "W": max(0.0, cargo_W - t["width"]),
+            "H": cargo_H,
+            "Section": "Main"
+        })
+        # Tunnel space
+        spaces.append({
+            "x": max(0.0, cargo_L - t["depth"]),
+            "y": 0.0,
+            "z": 0.0,
+            "L": t["depth"],
+            "W": t["width"],
+            "H": cargo_H,
+            "Section": "Tunnel"
+        })
+        return [s for s in spaces if s["L"] > 0 and s["W"] > 0 and s["H"] > 0]
+
+    # Legacy (tapered) - use max width with taper checks on placement
+    return [{
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "L": interior["depth"],
+        "W": interior["width_max"],
+        "H": interior["height"],
+        "Section": "Main"
+    }]
+
+def legacy_width_ok(interior, y1, z0, z1):
+    from_bottom = legacy_width_at_height(interior, z0)
+    to_top = legacy_width_at_height(interior, z1)
+    w_avail = min(from_bottom, to_top)
+    return y1 <= w_avail
+
+def choose_oriented_fit(box_dims, space_dims, prefer_long_axis=False):
+    permutations = list(itertools.permutations(box_dims))
+    if prefer_long_axis:
+        longest = max(box_dims)
+        preferred = [dims for dims in permutations if dims[1] == longest]
+        permutations = preferred + [dims for dims in permutations if dims not in preferred]
+    for dims in permutations:
+        bl, bw, bh = dims
+        if bl <= space_dims[0] and bw <= space_dims[1] and bh <= space_dims[2]:
+            return dims
+    return None
+
+def split_space(space, dims):
+    l, w, h = dims
+    spaces = []
+    if space["L"] - l > 1e-6:
+        spaces.append({
+            "x": space["x"] + l,
+            "y": space["y"],
+            "z": space["z"],
+            "L": space["L"] - l,
+            "W": space["W"],
+            "H": space["H"],
+            "Section": space["Section"]
+        })
+    if space["W"] - w > 1e-6:
+        spaces.append({
+            "x": space["x"],
+            "y": space["y"] + w,
+            "z": space["z"],
+            "L": l,
+            "W": space["W"] - w,
+            "H": space["H"],
+            "Section": space["Section"]
+        })
+    if space["H"] - h > 1e-6:
+        spaces.append({
+            "x": space["x"],
+            "y": space["y"],
+            "z": space["z"] + h,
+            "L": l,
+            "W": w,
+            "H": space["H"] - h,
+            "Section": space["Section"]
+        })
+    return spaces
+
+def greedy_3d_packing(
+    baggage_list,
+    container_type,
+    interior,
+    force_tunnel_for_long=True,
+    long_threshold=50,
+    allow_tunnel_for_short=False
+):
     """
     Returns (success: bool, placements: list[dict]).
     Each placement: {Item, Type, Dims: (x,y,z) oriented, Position: (x0,y0,z0), Section: "Tunnel"/"Main"}
     """
     placements = []
-
-    if container_type == "CJ":
-        cargo_L = interior["depth"]    # x
-        cargo_W = interior["width"]    # y
-        cargo_H = interior["height"]   # z
-
-        # Tunnel geometry
-        t_depth = interior["tunnel"]["depth"]  # along x (shallow)
-        t_width = interior["tunnel"]["width"]  # along y (long run)
-        t_y0 = 0.0
-        t_z0 = 0.0
-
-        # Tunnel cursors: lay bags along y, then stack layers in z
-        t_y_cursor = 0.0
-        t_z_cursor = 0.0
-        t_row_height = 0.0
-
-    else:  # Legacy (rectangular with taper)
-        cargo_L = interior["depth"]
-        cargo_W = interior["width_min"]  # baseline width we can always rely on
-        cargo_H = interior["height"]
-
-    # Main hold cursors
-    x_cursor = y_cursor = z_cursor = 0.0
-    row_height = 0.0
-    max_y_in_row = 0.0
+    spaces = initial_spaces(container_type, interior)
 
     for i, item in enumerate(baggage_list):
         dims_flex = apply_flex(item["Dims"], item.get("Flex", 1.0))
         placed = False
+        is_long = max(dims_flex) >= long_threshold
 
-        # ---------- CJ Tunnel specialization for long items ----------
-        if container_type == "CJ" and (not placed):
-            is_long = max(dims_flex) >= long_threshold  # heuristic threshold can vary
-            if is_long and force_tunnel_for_long:
-                # Force orientation: x=thickness, y=length, z=height
-                length = max(dims_flex)
-                others = sorted([d for d in dims_flex if d != length] or [dims_flex[0], dims_flex[1]])
-                thickness, height = others[0], others[-1]
+        tunnel_first = container_type == "CJ" and is_long and force_tunnel_for_long
+        allowed_tunnel = container_type == "CJ" and (allow_tunnel_for_short or is_long)
 
-                # Remaining tunnel space in current row/layer
-                rem_width  = max(0.0, t_width - t_y_cursor)
-                rem_height = max(0.0, cargo_H - t_z_cursor)
+        space_order = []
+        if tunnel_first:
+            space_order.extend([s for s in spaces if s["Section"] == "Tunnel"])
+            space_order.extend([s for s in spaces if s["Section"] == "Main"])
+        elif allowed_tunnel:
+            space_order.extend(spaces)
+        else:
+            space_order.extend([s for s in spaces if s["Section"] == "Main"])
 
-                if thickness <= t_depth and length <= rem_width and height <= rem_height:
-                    # Place with back face flush to cargo back wall:
-                    # cargo back wall is at x = cargo_L; our item spans [cargo_L - thickness, cargo_L]
-                    x0 = cargo_L - thickness
-                    y0 = t_y0 + t_y_cursor
-                    z0 = t_z0 + t_z_cursor
+        best_choice = None
+        best_space = None
+        best_dims = None
 
-                    placements.append({
-                        "Item": i + 1,
-                        "Type": item["Type"],
-                        "Dims": (thickness, length, height),  # oriented dims (x,y,z)
-                        "Position": (x0, y0, z0),
-                        "Section": "Tunnel"
-                    })
-
-                    # Advance along tunnel run (y), then layer in z
-                    t_y_cursor += length
-                    t_row_height = max(t_row_height, height)
-                    if t_y_cursor > t_width + 1e-6:
-                        t_y_cursor = 0.0
-                        t_z_cursor += t_row_height
-                        t_row_height = 0.0
-                    placed = True
-
-        if placed:
-            continue
-
-        # ---------- Normal greedy packing in main hold ----------
-        for attempt in range(3):  # 0: extend row; 1: new row; 2: new layer
-            oriented = fits_in_space(
+        for space in space_order:
+            if space["Section"] == "Tunnel" and not allowed_tunnel:
+                continue
+            oriented = choose_oriented_fit(
                 dims_flex,
-                (
-                    max(0.0, cargo_L - x_cursor),
-                    max(0.0, cargo_W - y_cursor),
-                    max(0.0, cargo_H - z_cursor)
+                (space["L"], space["W"], space["H"]),
+                prefer_long_axis=(
+                    container_type == "CJ"
+                    and space["Section"] == "Tunnel"
+                    and is_long
+                    and force_tunnel_for_long
                 )
             )
-            if oriented:
-                l, w, h = oriented
-                x0, y0, z0 = x_cursor, y_cursor, z_cursor
-                x1, y1, z1 = x0 + l, y0 + w, z0 + h
+            if not oriented:
+                continue
+            l, w, h = oriented
+            x0, y0, z0 = space["x"], space["y"], space["z"]
+            x1, y1, z1 = x0 + l, y0 + w, z0 + h
 
-                if container_type == "CJ":
-                    # Avoid restricted block near the door (right side / high y)
-                    r = interior["restricted"]
-                    rx0, rx1 = 0.0, r["depth"]
-                    ry0, ry1 = cargo_W - r["width"], cargo_W
-                    rz0, rz1 = 0.0, cargo_H
+            if container_type == "Legacy" and not legacy_width_ok(interior, y1, z0, z1):
+                continue
 
-                    overlap = not (x1 <= rx0 or x0 >= rx1 or y1 <= ry0 or y0 >= ry1 or z1 <= rz0 or z0 >= rz1)
-                    if not overlap:
-                        placements.append({
-                            "Item": i + 1,
-                            "Type": item["Type"],
-                            "Dims": (l, w, h),          # oriented dims used for drawing
-                            "Position": (x0, y0, z0),
-                            "Section": "Main"
-                        })
-                        x_cursor += l
-                        row_height = max(row_height, h)
-                        max_y_in_row = max(max_y_in_row, w)
-                        placed = True
-                        break
+            leftover = space_volume(space) - (l * w * h)
+            if best_choice is None or leftover < best_choice:
+                best_choice = leftover
+                best_space = space
+                best_dims = (l, w, h)
 
-                else:  # Legacy taper guard
-                    from_bottom = legacy_width_at_height(interior, z0)
-                    to_top = legacy_width_at_height(interior, z1)
-                    w_avail = min(from_bottom, to_top)
-                    if y1 <= w_avail:
-                        placements.append({
-                            "Item": i + 1,
-                            "Type": item["Type"],
-                            "Dims": (l, w, h),          # oriented dims
-                            "Position": (x0, y0, z0),
-                            "Section": "Main"
-                        })
-                        x_cursor += l
-                        row_height = max(row_height, h)
-                        max_y_in_row = max(max_y_in_row, w)
-                        placed = True
-                        break
-
-            # Advance to next try
-            if not placed:
-                if attempt == 0:
-                    # new row
-                    x_cursor = 0.0
-                    y_cursor += max_y_in_row
-                    max_y_in_row = 0.0
-                elif attempt == 1:
-                    # new layer
-                    x_cursor = y_cursor = 0.0
-                    z_cursor += row_height
-                    row_height = 0.0
+        if best_space and best_dims:
+            l, w, h = best_dims
+            placements.append({
+                "Item": i + 1,
+                "Type": item["Type"],
+                "Dims": best_dims,
+                "Position": (best_space["x"], best_space["y"], best_space["z"]),
+                "Section": best_space["Section"]
+            })
+            spaces.remove(best_space)
+            spaces.extend(split_space(best_space, best_dims))
+            spaces = prune_spaces([s for s in spaces if s["L"] > 1e-6 and s["W"] > 1e-6 and s["H"] > 1e-6])
+            placed = True
 
         if not placed:
-            # Could not place this item
             return False, placements
 
     return True, placements
@@ -308,8 +382,14 @@ def multi_strategy_packing(baggage_list, container_type, interior):
         "Original Order": baggage_list,
         "Largest Volume First": sorted(baggage_list, key=lambda x: bag_volume(x["Dims"]), reverse=True),
         "Largest Dimension First": sorted(baggage_list, key=lambda x: max(x["Dims"]), reverse=True),
+        "Largest Footprint First": sorted(baggage_list, key=lambda x: (x["Dims"][0] * x["Dims"][1]), reverse=True),
         "Smallest First": sorted(baggage_list, key=lambda x: bag_volume(x["Dims"]))
     }
+
+    for seed in (7, 23, 91):
+        shuffled = baggage_list[:]
+        random.Random(seed).shuffle(shuffled)
+        strategies[f"Random Shuffle {seed}"] = shuffled
 
     if container_type == "CJ":
         def is_long(item):
@@ -326,13 +406,28 @@ def multi_strategy_packing(baggage_list, container_type, interior):
 
     if container_type == "CJ":
         variant_settings = [
-            {"force_tunnel_for_long": True, "long_threshold": 50, "label": "Tunnel priority ≥50\""},
-            {"force_tunnel_for_long": True, "long_threshold": 60, "label": "Tunnel priority ≥60\""},
-            {"force_tunnel_for_long": False, "long_threshold": 50, "label": "Tunnel optional"},
+            {
+                "force_tunnel_for_long": True,
+                "long_threshold": 50,
+                "allow_tunnel_for_short": False,
+                "label": "Prefer tunnel ≥50\""
+            },
+            {
+                "force_tunnel_for_long": True,
+                "long_threshold": 60,
+                "allow_tunnel_for_short": False,
+                "label": "Prefer tunnel ≥60\""
+            },
+            {
+                "force_tunnel_for_long": False,
+                "long_threshold": 50,
+                "allow_tunnel_for_short": True,
+                "label": "Tunnel allowed all"
+            },
         ]
     else:
         variant_settings = [
-            {"force_tunnel_for_long": True, "long_threshold": 50, "label": None}
+            {"force_tunnel_for_long": True, "long_threshold": 50, "allow_tunnel_for_short": False, "label": None}
         ]
 
     best_result = {"success": False, "placements": [], "strategy": None, "fit_count": 0}
@@ -344,7 +439,8 @@ def multi_strategy_packing(baggage_list, container_type, interior):
                 container_type,
                 interior,
                 force_tunnel_for_long=variant["force_tunnel_for_long"],
-                long_threshold=variant["long_threshold"]
+                long_threshold=variant["long_threshold"],
+                allow_tunnel_for_short=variant["allow_tunnel_for_short"]
             )
             strategy_label = name
             if container_type == "CJ" and variant["label"]:
@@ -612,7 +708,7 @@ if st.session_state["baggage_list"]:
             total_bag_vol = sum(bag_volume(item["Dims"]) for item in st.session_state["baggage_list"])
             hold_vol = cargo_volume(container["interior"], container_choice)
             utilization = (total_bag_vol / hold_vol) * 100 if hold_vol > 0 else 0.0
-            st.info(f"📦 Estimated Volume Utilization: {utilization:.1f}% (bags / gross hold volume)")
+            st.info(f"📦 Estimated Volume Utilization: {utilization:.1f}% (bags / usable hold volume)")
 
             # Visualization
             st.write("### Cargo Load Visualization")
@@ -630,8 +726,3 @@ if st.session_state["baggage_list"]:
             # Debug expander (optional)
             with st.expander("🔎 Debug data (raw placements)"):
                 st.json(placements)
-
-
-
-
-
