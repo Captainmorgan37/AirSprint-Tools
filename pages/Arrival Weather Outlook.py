@@ -128,6 +128,21 @@ ARRIVAL_TIME_KEYS: Sequence[str] = (
     "blockOnUtc",
     "arr_time",
 )
+ACTUAL_ARRIVAL_TIME_KEYS: Sequence[str] = (
+    "arrivalActualUtc",
+    "arrivalActualTime",
+    "arrivalActual",
+    "onBlockTimeUtc",
+    "onBlockUtc",
+    "onBlockTime",
+    "onBlockActual",
+    "blockOnTimeUtc",
+    "blockOnUtc",
+    "blockOnTime",
+    "blockOnActualUTC",
+    "blockOnActualUtc",
+    "blockOnActual",
+)
 DEPARTURE_TIME_KEYS: Sequence[str] = (
     "dep_time",
     "departureTimeUtc",
@@ -901,12 +916,31 @@ def _build_flight_card(flight: Dict[str, Any], taf_html: str) -> str:
     arr_line = f"Arr: {_format_local(flight['arr_dt_local'])} ({_format_utc(flight['arr_dt_utc'])})"
     card_classes = ["flight-card"]
     arrival_utc = _ensure_utc(flight.get("arr_dt_utc"))
+    actual_arrival_utc = _ensure_utc(flight.get("arr_actual_dt_utc"))
     arrival_state: Optional[str] = None
     past_flag_html = ""
-    if arrival_utc is not None:
+    arrival_reference = actual_arrival_utc or arrival_utc
+    if arrival_reference is not None:
         now_utc = datetime.now(timezone.utc)
-        diff = now_utc - arrival_utc
-        if diff >= timedelta(hours=2):
+        diff = now_utc - arrival_reference
+        if actual_arrival_utc is not None:
+            if diff >= timedelta(hours=1):
+                arrival_state = "past"
+                elapsed_text = _format_duration_short(diff)
+                past_flag_html = (
+                    "<div class='past-flag'>"
+                    f"Landed {html.escape(elapsed_text)} ago"
+                    "</div>"
+                )
+            elif diff >= timedelta(seconds=0):
+                arrival_state = "elapsed"
+                elapsed_text = _format_duration_short(diff)
+                past_flag_html = (
+                    "<div class='arrival-elapsed-flag'>"
+                    f"Landed {html.escape(elapsed_text)} ago"
+                    "</div>"
+                )
+        elif diff >= timedelta(hours=2):
             arrival_state = "past"
             elapsed_text = _format_duration_short(diff)
             past_flag_html = (
@@ -1034,6 +1068,7 @@ for row in flight_rows:
     if not tail:
         continue
     arr_dt_utc = _extract_datetime(row, ARRIVAL_TIME_KEYS)
+    arr_actual_dt_utc = _extract_datetime(row, ACTUAL_ARRIVAL_TIME_KEYS)
     dep_dt_utc = _extract_datetime(row, DEPARTURE_TIME_KEYS)
     arr_dt_local = _to_local(arr_dt_utc)
     dep_dt_local = _to_local(dep_dt_utc)
@@ -1052,6 +1087,7 @@ for row in flight_rows:
             "arrival_airport": arrival_airport,
             "departure_airport": departure_airport,
             "arr_dt_utc": arr_dt_utc,
+            "arr_actual_dt_utc": arr_actual_dt_utc,
             "dep_dt_utc": dep_dt_utc,
             "arr_dt_local": arr_dt_local,
             "dep_dt_local": dep_dt_local,
