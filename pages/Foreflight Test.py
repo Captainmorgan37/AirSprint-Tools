@@ -411,7 +411,7 @@ if fetch:
             "toDate": f"{to_date.isoformat()}Z",
         }
         headers = {
-            "Authorization": f"Bearer {foreflight_token}",
+            "x-api-key": foreflight_token,
             "Accept": "application/json",
         }
         response = requests.get(FORE_FLIGHT_BASE_URL, params=params, headers=headers, timeout=30)
