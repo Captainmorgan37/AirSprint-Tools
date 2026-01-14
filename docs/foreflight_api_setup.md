@@ -44,7 +44,8 @@ params = {
     "toDate": "2026-01-19Z",
 }
 headers = {
-    "Authorization": f"Bearer {st.secrets['foreflight_api']['api_token']}",
+    # ForeFlight requires the API key in the x-api-key header.
+    "x-api-key": st.secrets["foreflight_api"]["api_token"],
     "Accept": "application/json",
 }
 
