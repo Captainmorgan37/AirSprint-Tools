@@ -126,12 +126,16 @@ ARRIVAL_TIME_KEYS: Sequence[str] = (
     "arrivalScheduledUtc",
     "blockOnTimeUtc",
     "blockOnUtc",
+    "realDateIN",
+    "realDateON",
     "arr_time",
 )
 ACTUAL_ARRIVAL_TIME_KEYS: Sequence[str] = (
     "arrivalActualUtc",
     "arrivalActualTime",
     "arrivalActual",
+    "realDateIN",
+    "realDateON",
     "onBlockTimeUtc",
     "onBlockUtc",
     "onBlockTime",
