@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+import re
 from typing import Any, Iterable, Mapping, Optional
 
 import pandas as pd
@@ -15,6 +16,7 @@ from Home import configure_page, get_secret, password_gate, render_sidebar
 
 FORE_FLIGHT_BASE_URL = "https://public-api.foreflight.com/public/api/Flights/flights"
 DEFAULT_MISMATCH_THRESHOLD_MIN = 20
+TAG_PATTERN = re.compile(r"^[A-Z]{5}\d?$")
 
 
 @dataclass
@@ -57,6 +59,19 @@ def _normalize_airport(value: Any) -> Optional[str]:
             if key in value and value[key]:
                 return _normalize_text(value[key])
     return _normalize_text(value)
+
+
+def _extract_booking_identifier_from_tags(tags: Any) -> Optional[str]:
+    if not isinstance(tags, list):
+        return None
+    for tag in tags:
+        normalized = _normalize_text(tag)
+        if not normalized:
+            continue
+        candidate = normalized.upper()
+        if TAG_PATTERN.match(candidate):
+            return candidate
+    return None
 
 
 def _parse_datetime(value: Any) -> Optional[datetime]:
@@ -203,9 +218,7 @@ def _foreflight_record(flight: Mapping[str, Any]) -> Optional[FlightRecord]:
 
     booking_identifier = _normalize_text(_extract_first(flight, "bookingIdentifier", "booking_identifier"))
     if not booking_identifier:
-        tags = flight.get("tags")
-        if isinstance(tags, list):
-            booking_identifier = next((_normalize_text(tag) for tag in tags if _normalize_text(tag)), None)
+        booking_identifier = _extract_booking_identifier_from_tags(flight.get("tags"))
 
     return FlightRecord(
         source="ForeFlight",
