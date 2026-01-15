@@ -164,7 +164,16 @@ with st.form("historical_airport_use_form"):
 
 
 if submit_fetch:
-    settings = dict(st.secrets)
+    settings = st.secrets.get("fl3xx_api", {})  # type: ignore[attr-defined]
+    if not settings:
+        st.error("FL3XX API credentials are missing. Update `.streamlit/secrets.toml` and try again.")
+        st.stop()
+    if not settings.get("api_token") and not settings.get("auth_header"):
+        st.error(
+            "FL3XX API credentials are incomplete. Ensure `api_token` or `auth_header` is set in Streamlit secrets."
+        )
+        st.stop()
+
     settings_digest = _settings_digest(settings)
     start_date, end_date = _normalise_date_range(date_selection, default_start, default_end)
 
