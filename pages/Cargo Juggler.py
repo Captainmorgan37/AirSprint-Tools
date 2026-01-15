@@ -523,8 +523,18 @@ def plot_cargo(cargo_dims, placements, container_type=None, interior=None):
                  (2,3,7),(2,7,6),(3,0,4),(3,4,7)]
         i, j, k = zip(*faces)
         fig.add_trace(go.Mesh3d(x=x, y=y, z=z, i=i, j=j, k=k,
-                                color='lightblue', opacity=0.2,
+                                color='rgba(0,0,0,0)', opacity=0.0,
                                 name='Long Tunnel'))
+        edges = [(0,1),(1,2),(2,3),(3,0),(4,5),(5,6),(6,7),(7,4),(0,4),(1,5),(2,6),(3,7)]
+        for e in edges:
+            fig.add_trace(go.Scatter3d(
+                x=[x[e[0]], x[e[1]]],
+                y=[y[e[0]], y[e[1]]],
+                z=[z[e[0]], z[e[1]]],
+                mode='lines',
+                line=dict(color='rgba(0,0,0,0.4)', width=2),
+                showlegend=False
+            ))
 
     # ---- Legacy: tapered hold ----
     if container_type == "Legacy":
@@ -555,7 +565,19 @@ def plot_cargo(cargo_dims, placements, container_type=None, interior=None):
         z = [z0, z0, z0, z0, z0+h, z0+h, z0+h, z0+h]
         fig.add_trace(go.Mesh3d(x=x, y=y, z=z,
                                 color=color, opacity=0.5,
+                                flatshading=True,
+                                lighting=dict(ambient=0.4, diffuse=0.6, specular=0.2, roughness=0.9),
                                 name=f"{item['Type']} ({item.get('Section','Main')})"))
+        edges = [(0,1),(1,2),(2,3),(3,0),(4,5),(5,6),(6,7),(7,4),(0,4),(1,5),(2,6),(3,7)]
+        for e in edges:
+            fig.add_trace(go.Scatter3d(
+                x=[x[e[0]], x[e[1]]],
+                y=[y[e[0]], y[e[1]]],
+                z=[z[e[0]], z[e[1]]],
+                mode='lines',
+                line=dict(color='rgba(0,0,0,0.6)', width=2),
+                showlegend=False
+            ))
 
     fig.update_layout(
         scene=dict(
