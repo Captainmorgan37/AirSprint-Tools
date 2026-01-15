@@ -920,27 +920,42 @@ def _build_flight_card(flight: Dict[str, Any], taf_html: str) -> str:
     arr_line = f"Arr: {_format_local(flight['arr_dt_local'])} ({_format_utc(flight['arr_dt_utc'])})"
     card_classes = ["flight-card"]
     actual_arrival_utc = _ensure_utc(flight.get("arr_actual_dt_utc"))
+    arrival_utc = _ensure_utc(flight.get("arr_dt_utc"))
     arrival_state: Optional[str] = None
     past_flag_html = ""
     if actual_arrival_utc is not None:
         now_utc = datetime.now(timezone.utc)
         diff = now_utc - actual_arrival_utc
-        if diff >= timedelta(hours=1):
-            arrival_state = "past"
+        arrival_state = "past"
+        if diff >= timedelta(seconds=0):
             elapsed_text = _format_duration_short(diff)
             past_flag_html = (
                 "<div class='past-flag'>"
                 f"Landed {html.escape(elapsed_text)} ago"
                 "</div>"
             )
-        elif diff >= timedelta(seconds=0):
+        else:
+            past_flag_html = "<div class='past-flag'>Landed</div>"
+    elif arrival_utc is not None:
+        now_utc = datetime.now(timezone.utc)
+        if arrival_utc <= now_utc:
             arrival_state = "elapsed"
-            elapsed_text = _format_duration_short(diff)
+            elapsed_text = _format_duration_short(now_utc - arrival_utc)
             past_flag_html = (
                 "<div class='arrival-elapsed-flag'>"
-                f"Landed {html.escape(elapsed_text)} ago"
+                f"Estimated arrival time elapsed {html.escape(elapsed_text)} ago"
                 "</div>"
             )
+        else:
+            remaining = arrival_utc - now_utc
+            if remaining <= timedelta(minutes=30):
+                arrival_state = "elapsed"
+                remaining_text = _format_duration_short(remaining)
+                past_flag_html = (
+                    "<div class='arrival-elapsed-flag'>"
+                    f"Estimated arrival in {html.escape(remaining_text)}"
+                    "</div>"
+                )
     if arrival_state == "past":
         card_classes.append("flight-card--past")
     elif arrival_state == "elapsed":
