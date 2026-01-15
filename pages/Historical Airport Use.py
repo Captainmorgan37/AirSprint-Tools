@@ -118,13 +118,13 @@ def _extract_departure_code(leg: Mapping[str, Any]) -> Optional[str]:
 @st.cache_data(show_spinner=True, ttl=300, hash_funcs={dict: lambda _: "0"})
 def _load_legs(
     settings_digest: str,
-    settings: Dict[str, Any],
+    _settings: Dict[str, Any],
     *,
     from_date: date,
     to_date: date,
 ) -> Tuple[list[dict[str, Any]], Dict[str, Any]]:
     _ = settings_digest
-
+    settings = dict(_settings)
     config = build_fl3xx_api_config(settings)
     flights: list[dict[str, Any]] = []
     chunk_meta: list[dict[str, Any]] = []
@@ -164,7 +164,7 @@ with st.form("historical_airport_use_form"):
 
 
 if submit_fetch:
-    settings = st.secrets.get("fl3xx_api", {})  # type: ignore[attr-defined]
+    settings = dict(st.secrets.get("fl3xx_api", {}))  # type: ignore[attr-defined]
     if not settings:
         st.error("FL3XX API credentials are missing. Update `.streamlit/secrets.toml` and try again.")
         st.stop()
