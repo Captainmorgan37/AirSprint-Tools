@@ -126,16 +126,12 @@ ARRIVAL_TIME_KEYS: Sequence[str] = (
     "arrivalScheduledUtc",
     "blockOnTimeUtc",
     "blockOnUtc",
-    "realDateIN",
-    "realDateON",
     "arr_time",
 )
 ACTUAL_ARRIVAL_TIME_KEYS: Sequence[str] = (
     "arrivalActualUtc",
     "arrivalActualTime",
     "arrivalActual",
-    "realDateIN",
-    "realDateON",
     "onBlockTimeUtc",
     "onBlockUtc",
     "onBlockTime",
@@ -171,8 +167,6 @@ st.markdown(
                         box-shadow:0 0 0 2px rgba(34, 197, 94, 0.45), 0 12px 24px rgba(22, 101, 52, 0.35);}
     .flight-card--arrival-elapsed {background:rgba(202, 138, 4, 0.78); border-color:rgba(250, 204, 21, 0.82);
                                    box-shadow:0 0 0 2px rgba(250, 204, 21, 0.45), 0 12px 24px rgba(161, 98, 7, 0.35);}
-    .flight-card--arrival-overdue {background:rgba(239, 68, 68, 0.18); border-color:rgba(248, 113, 113, 0.65);
-                                   box-shadow:0 0 0 2px rgba(248, 113, 113, 0.25), 0 12px 24px rgba(239, 68, 68, 0.18);}
     .flight-card__header {display:flex; justify-content:space-between; align-items:flex-start; gap:0.75rem;}
     .flight-card h4 {margin:0 0 0.35rem 0; font-size:1.05rem; color:#f8fafc;}
     .flight-card__runway {font-size:0.75rem; color:#e2e8f0; background:rgba(30, 64, 175, 0.35);
@@ -921,57 +915,49 @@ def _build_flight_card(flight: Dict[str, Any], taf_html: str) -> str:
     dep_line = f"Dep: {_format_local(flight['dep_dt_local'])} ({_format_utc(flight['dep_dt_utc'])})"
     arr_line = f"Arr: {_format_local(flight['arr_dt_local'])} ({_format_utc(flight['arr_dt_utc'])})"
     card_classes = ["flight-card"]
-    actual_arrival_utc = _ensure_utc(flight.get("arr_actual_dt_utc"))
     arrival_utc = _ensure_utc(flight.get("arr_dt_utc"))
+    actual_arrival_utc = _ensure_utc(flight.get("arr_actual_dt_utc"))
     arrival_state: Optional[str] = None
     past_flag_html = ""
-    if actual_arrival_utc is not None:
+    arrival_reference = actual_arrival_utc or arrival_utc
+    if arrival_reference is not None:
         now_utc = datetime.now(timezone.utc)
-        diff = now_utc - actual_arrival_utc
-        arrival_state = "past"
-        if diff >= timedelta(seconds=0):
+        diff = now_utc - arrival_reference
+        if actual_arrival_utc is not None:
+            if diff >= timedelta(hours=1):
+                arrival_state = "past"
+                elapsed_text = _format_duration_short(diff)
+                past_flag_html = (
+                    "<div class='past-flag'>"
+                    f"Landed {html.escape(elapsed_text)} ago"
+                    "</div>"
+                )
+            elif diff >= timedelta(seconds=0):
+                arrival_state = "elapsed"
+                elapsed_text = _format_duration_short(diff)
+                past_flag_html = (
+                    "<div class='arrival-elapsed-flag'>"
+                    f"Landed {html.escape(elapsed_text)} ago"
+                    "</div>"
+                )
+        elif diff >= timedelta(hours=2):
+            arrival_state = "past"
             elapsed_text = _format_duration_short(diff)
             past_flag_html = (
                 "<div class='past-flag'>"
-                f"Landed {html.escape(elapsed_text)} ago"
+                f"Arrived {html.escape(elapsed_text)} ago"
                 "</div>"
             )
-        else:
-            past_flag_html = "<div class='past-flag'>Landed</div>"
-    elif arrival_utc is not None:
-        now_utc = datetime.now(timezone.utc)
-        if arrival_utc <= now_utc:
-            elapsed = now_utc - arrival_utc
-            if elapsed >= timedelta(hours=1):
-                arrival_state = "overdue"
-                elapsed_text = _format_duration_short(elapsed)
-                past_flag_html = (
-                    "<div class='arrival-elapsed-flag'>"
-                    f"Estimated arrival time elapsed {html.escape(elapsed_text)} ago"
-                    "</div>"
-                )
-            else:
-                arrival_state = "elapsed"
-                elapsed_text = _format_duration_short(elapsed)
-                past_flag_html = (
-                    "<div class='arrival-elapsed-flag'>"
-                    f"Estimated arrival time elapsed {html.escape(elapsed_text)} ago"
-                    "</div>"
-                )
-        else:
-            remaining = arrival_utc - now_utc
-            if remaining <= timedelta(minutes=30):
-                arrival_state = "elapsed"
-                remaining_text = _format_duration_short(remaining)
-                past_flag_html = (
-                    "<div class='arrival-elapsed-flag'>"
-                    f"Estimated arrival in {html.escape(remaining_text)}"
-                    "</div>"
-                )
+        elif diff >= timedelta(minutes=1):
+            arrival_state = "elapsed"
+            elapsed_text = _format_duration_short(diff)
+            past_flag_html = (
+                "<div class='arrival-elapsed-flag'>"
+                f"Scheduled arrival time elapsed {html.escape(elapsed_text)} ago"
+                "</div>"
+            )
     if arrival_state == "past":
         card_classes.append("flight-card--past")
-    elif arrival_state == "overdue":
-        card_classes.append("flight-card--arrival-overdue")
     elif arrival_state == "elapsed":
         card_classes.append("flight-card--arrival-elapsed")
     elif flight.get("is_today"):
