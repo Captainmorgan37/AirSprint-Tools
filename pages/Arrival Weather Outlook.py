@@ -171,6 +171,8 @@ st.markdown(
                         box-shadow:0 0 0 2px rgba(34, 197, 94, 0.45), 0 12px 24px rgba(22, 101, 52, 0.35);}
     .flight-card--arrival-elapsed {background:rgba(202, 138, 4, 0.78); border-color:rgba(250, 204, 21, 0.82);
                                    box-shadow:0 0 0 2px rgba(250, 204, 21, 0.45), 0 12px 24px rgba(161, 98, 7, 0.35);}
+    .flight-card--arrival-overdue {background:rgba(239, 68, 68, 0.18); border-color:rgba(248, 113, 113, 0.65);
+                                   box-shadow:0 0 0 2px rgba(248, 113, 113, 0.25), 0 12px 24px rgba(239, 68, 68, 0.18);}
     .flight-card__header {display:flex; justify-content:space-between; align-items:flex-start; gap:0.75rem;}
     .flight-card h4 {margin:0 0 0.35rem 0; font-size:1.05rem; color:#f8fafc;}
     .flight-card__runway {font-size:0.75rem; color:#e2e8f0; background:rgba(30, 64, 175, 0.35);
@@ -939,13 +941,23 @@ def _build_flight_card(flight: Dict[str, Any], taf_html: str) -> str:
     elif arrival_utc is not None:
         now_utc = datetime.now(timezone.utc)
         if arrival_utc <= now_utc:
-            arrival_state = "elapsed"
-            elapsed_text = _format_duration_short(now_utc - arrival_utc)
-            past_flag_html = (
-                "<div class='arrival-elapsed-flag'>"
-                f"Estimated arrival time elapsed {html.escape(elapsed_text)} ago"
-                "</div>"
-            )
+            elapsed = now_utc - arrival_utc
+            if elapsed >= timedelta(hours=1):
+                arrival_state = "overdue"
+                elapsed_text = _format_duration_short(elapsed)
+                past_flag_html = (
+                    "<div class='arrival-elapsed-flag'>"
+                    f"Estimated arrival time elapsed {html.escape(elapsed_text)} ago"
+                    "</div>"
+                )
+            else:
+                arrival_state = "elapsed"
+                elapsed_text = _format_duration_short(elapsed)
+                past_flag_html = (
+                    "<div class='arrival-elapsed-flag'>"
+                    f"Estimated arrival time elapsed {html.escape(elapsed_text)} ago"
+                    "</div>"
+                )
         else:
             remaining = arrival_utc - now_utc
             if remaining <= timedelta(minutes=30):
@@ -958,6 +970,8 @@ def _build_flight_card(flight: Dict[str, Any], taf_html: str) -> str:
                 )
     if arrival_state == "past":
         card_classes.append("flight-card--past")
+    elif arrival_state == "overdue":
+        card_classes.append("flight-card--arrival-overdue")
     elif arrival_state == "elapsed":
         card_classes.append("flight-card--arrival-elapsed")
     elif flight.get("is_today"):
