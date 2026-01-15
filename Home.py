@@ -132,6 +132,8 @@ def _sidebar_links() -> list[dict[str, Any]]:
             "links": [
                 {"path": "pages/Reserve Calendar Day Checker.py", "label": "Reserve Calendar Checker"},
                 {"path": "pages/Pax Passport Check.py", "label": "Pax Passport Check"},
+                {"path": "pages/Historical Airport Use.py", "label": "Historical Airport Use"},
+                {"path": "pages/Route Watcher.py", "label": "Route Watcher"},
             ],
         },
         {
