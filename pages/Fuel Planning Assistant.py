@@ -496,6 +496,18 @@ def _build_recommendations(df: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
+def _sort_by_departure_time(df: pd.DataFrame) -> pd.DataFrame:
+    if "Dep Time (UTC)" not in df.columns:
+        return df
+    sorted_df = df.copy()
+    sorted_df["__dep_time_sort"] = pd.to_datetime(
+        sorted_df["Dep Time (UTC)"], utc=True, errors="coerce"
+    )
+    sorted_df = sorted_df.sort_values("__dep_time_sort", na_position="last")
+    sorted_df = sorted_df.drop(columns=["__dep_time_sort"]).reset_index(drop=True)
+    return sorted_df
+
+
 col1, col2, col3 = st.columns(3)
 
 with col1:
@@ -624,7 +636,7 @@ if fetch:
                 }
             )
 
-    st.session_state["fuel_planning_df"] = pd.DataFrame(rows)
+    st.session_state["fuel_planning_df"] = _sort_by_departure_time(pd.DataFrame(rows))
     st.session_state["fuel_planning_missing_performance"] = missing_performance
     st.session_state["fuel_planning_recommendations"] = pd.DataFrame()
 
@@ -653,7 +665,6 @@ if fuel_df is not None and not fuel_df.empty:
         fuel_df,
         use_container_width=True,
         hide_index=True,
-        key="fuelerlinx_inputs_editor",
         column_config={
             "Fuel Price ($/unit)": st.column_config.NumberColumn(min_value=0.0, step=0.01),
             "Ramp Fee ($)": st.column_config.NumberColumn(min_value=0.0, step=1.0),
@@ -681,7 +692,7 @@ if fuel_df is not None and not fuel_df.empty:
         ],
     )
 
-    st.session_state["fuel_planning_df"] = data_editor
+    st.session_state["fuel_planning_df"] = data_editor.copy()
 
     st.markdown("### Decision logic (MVP)")
     st.caption(
