@@ -118,6 +118,9 @@ def can_fit_rotated_in_plane(item_length, item_width, space_length, space_width,
             return True
     return False
 
+def box_diagonal(length, width, height):
+    return math.sqrt(length ** 2 + width ** 2 + height ** 2)
+
 def fits_inside(box_dims, interior, container_type, flex=1.0, allow_diagonal=False):
     """Check if a single box can fit somewhere in the empty hold (not a packing check)."""
     dims_flex = apply_flex(box_dims, flex)
@@ -148,6 +151,9 @@ def fits_inside(box_dims, interior, container_type, flex=1.0, allow_diagonal=Fal
                 for space_depth, space_width in diagonal_spaces:
                     if can_fit_rotated_in_plane(bl, bw, space_depth, space_width):
                         return True, True
+                space_diag = box_diagonal(interior["depth"], interior["width"], interior["height"])
+                if bl <= space_diag and bw <= interior["width"] and bh <= interior["height"]:
+                    return True, True
         elif container_type == "Legacy":
             width_limit = min(
                 legacy_width_at_height(interior, 0),
@@ -158,6 +164,9 @@ def fits_inside(box_dims, interior, container_type, flex=1.0, allow_diagonal=Fal
                     return True, False
             if allow_diagonal and bh <= interior["height"]:
                 if can_fit_rotated_in_plane(bl, bw, interior["depth"], width_limit):
+                    return True, True
+                space_diag = box_diagonal(interior["depth"], width_limit, interior["height"])
+                if bl <= space_diag and bw <= width_limit and bh <= interior["height"]:
                     return True, True
     return False, False
 
@@ -639,8 +648,8 @@ allow_diagonal_fit = st.checkbox(
     "Allow diagonal floor placement for single-item fit checks",
     value=False,
     help=(
-        "Uses a diagonal/angled placement check for individual items (CJ and Legacy). "
-        "Packing/visualization remains axis-aligned."
+        "Uses diagonal/angled placement checks for individual items (CJ and Legacy), including "
+        "floor and 3D diagonals. Packing/visualization remains axis-aligned."
     )
 )
 
