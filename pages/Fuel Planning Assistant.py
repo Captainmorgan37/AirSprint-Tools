@@ -431,8 +431,8 @@ target_landing_fuel = st.number_input(
 
 fetch = st.button("Fetch flights & performance")
 
-if "fuel_planning_rows" not in st.session_state:
-    st.session_state["fuel_planning_rows"] = []
+if "fuel_planning_df" not in st.session_state:
+    st.session_state["fuel_planning_df"] = pd.DataFrame()
 if "fuel_planning_missing_performance" not in st.session_state:
     st.session_state["fuel_planning_missing_performance"] = []
 if "fuel_planning_summary" not in st.session_state:
@@ -490,7 +490,7 @@ if fetch:
 
     if not matches:
         st.warning("No matched flights found for that tail/date.")
-        st.session_state["fuel_planning_rows"] = []
+        st.session_state["fuel_planning_df"] = pd.DataFrame()
         st.session_state["fuel_planning_missing_performance"] = []
         st.stop()
 
@@ -538,13 +538,13 @@ if fetch:
                 }
             )
 
-    st.session_state["fuel_planning_rows"] = rows
+    st.session_state["fuel_planning_df"] = pd.DataFrame(rows)
     st.session_state["fuel_planning_missing_performance"] = missing_performance
 
 summary = st.session_state.get("fuel_planning_summary")
-rows = st.session_state.get("fuel_planning_rows", [])
+fuel_df = st.session_state.get("fuel_planning_df")
 
-if summary and rows:
+if summary is not None and fuel_df is not None and not fuel_df.empty:
     st.subheader("Matched legs")
     st.caption(
         f"{summary['matched']} matched • {summary['unmatched_foreflight']} ForeFlight-only • "
@@ -552,7 +552,7 @@ if summary and rows:
     )
 
 missing_performance = st.session_state.get("fuel_planning_missing_performance", [])
-if rows:
+if fuel_df is not None and not fuel_df.empty:
     if missing_performance:
         st.warning(
             "Missing performance data for: "
@@ -563,7 +563,7 @@ if rows:
     st.caption("Enter values per departure airport. Units should align with the ForeFlight fuel unit (lb).")
 
     data_editor = st.data_editor(
-        pd.DataFrame(rows),
+        fuel_df,
         use_container_width=True,
         hide_index=True,
         key="fuelerlinx_inputs_editor",
@@ -594,7 +594,7 @@ if rows:
         ],
     )
 
-    st.session_state["fuel_planning_rows"] = data_editor.to_dict(orient="records")
+    st.session_state["fuel_planning_df"] = data_editor
 
     st.markdown("### Next steps")
     st.info(
