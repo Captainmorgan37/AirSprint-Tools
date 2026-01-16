@@ -413,6 +413,89 @@ def _extract_performance_fields(payload: Mapping[str, Any]) -> dict[str, Optiona
     }
 
 
+def _as_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        if pd.isna(value):
+            return None
+        return float(value)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _build_recommendations(df: pd.DataFrame) -> pd.DataFrame:
+    recommendations: list[str] = []
+    notes: list[str] = []
+
+    rows = df.to_dict(orient="records")
+
+    for index, row in enumerate(rows):
+        required_departure_fuel = _as_float(row.get("Required Dep Fuel (lb)"))
+        max_total_fuel = _as_float(row.get("Max Total Fuel (lb)"))
+        fuel_price = _as_float(row.get("Fuel Price ($/unit)"))
+        ramp_fee = _as_float(row.get("Ramp Fee ($)"))
+        waiver_fuel = _as_float(row.get("Waiver Fuel (unit)"))
+
+        decision = "Review manually"
+        detail: list[str] = []
+
+        if required_departure_fuel is None:
+            detail.append("Missing required departure fuel.")
+        else:
+            decision = f"Take at least {required_departure_fuel:,.0f} lb"
+            detail.append("Meets target landing fuel requirement.")
+
+            if waiver_fuel and waiver_fuel > 0:
+                if max_total_fuel is not None and waiver_fuel > max_total_fuel:
+                    detail.append("Waiver threshold exceeds max fuel; cannot waive.")
+                elif required_departure_fuel >= waiver_fuel:
+                    decision = "Waiver already met"
+                    detail.append("Required fuel already meets waiver threshold.")
+                elif fuel_price is not None and ramp_fee is not None:
+                    extra_needed = waiver_fuel - required_departure_fuel
+                    extra_cost = extra_needed * fuel_price
+                    if ramp_fee > extra_cost:
+                        decision = "Buy waiver only"
+                        detail.append(
+                            f"Extra {extra_needed:,.0f} lb to waive saves about "
+                            f"${ramp_fee - extra_cost:,.0f}."
+                        )
+                    else:
+                        decision = "Take minimum and pay ramp fee"
+                        detail.append(
+                            f"Ramp fee (${ramp_fee:,.0f}) is cheaper than extra fuel "
+                            f"(${extra_cost:,.0f})."
+                        )
+                else:
+                    detail.append("Add fuel price and ramp fee to compare waiver savings.")
+
+        next_row = rows[index + 1] if index + 1 < len(rows) else None
+        next_price = _as_float(next_row.get("Fuel Price ($/unit)")) if next_row else None
+        if (
+            fuel_price is not None
+            and next_price is not None
+            and required_departure_fuel is not None
+            and max_total_fuel is not None
+        ):
+            extra_capacity = max_total_fuel - required_departure_fuel
+            if extra_capacity > 0 and fuel_price < next_price:
+                decision = f"{decision} • Tankering recommended"
+                detail.append(
+                    f"Fuel is ${next_price - fuel_price:,.2f}/unit cheaper than next leg."
+                )
+
+        recommendations.append(decision)
+        notes.append(" ".join(detail))
+
+    result = df.copy()
+    result["Recommendation"] = recommendations
+    result["Decision Notes"] = notes
+    return result
+
+
 col1, col2, col3 = st.columns(3)
 
 with col1:
@@ -437,6 +520,8 @@ if "fuel_planning_missing_performance" not in st.session_state:
     st.session_state["fuel_planning_missing_performance"] = []
 if "fuel_planning_summary" not in st.session_state:
     st.session_state["fuel_planning_summary"] = None
+if "fuel_planning_recommendations" not in st.session_state:
+    st.session_state["fuel_planning_recommendations"] = pd.DataFrame()
 
 if fetch:
     foreflight_token = get_secret("foreflight_api", {}).get("api_token")
@@ -492,6 +577,7 @@ if fetch:
         st.warning("No matched flights found for that tail/date.")
         st.session_state["fuel_planning_df"] = pd.DataFrame()
         st.session_state["fuel_planning_missing_performance"] = []
+        st.session_state["fuel_planning_recommendations"] = pd.DataFrame()
         st.stop()
 
     rows: list[dict[str, Any]] = []
@@ -540,6 +626,7 @@ if fetch:
 
     st.session_state["fuel_planning_df"] = pd.DataFrame(rows)
     st.session_state["fuel_planning_missing_performance"] = missing_performance
+    st.session_state["fuel_planning_recommendations"] = pd.DataFrame()
 
 summary = st.session_state.get("fuel_planning_summary")
 fuel_df = st.session_state.get("fuel_planning_df")
@@ -596,9 +683,15 @@ if fuel_df is not None and not fuel_df.empty:
 
     st.session_state["fuel_planning_df"] = data_editor
 
-    st.markdown("### Next steps")
-    st.info(
-        "Fuel optimization logic will use the inputs above to recommend where to waive ramp fees, "
-        "where to tanker, and how to meet landing-fuel targets. The current view confirms the "
-        "required performance data is available."
+    st.markdown("### Decision logic (MVP)")
+    st.caption(
+        "Generate instructional recommendations that satisfy target landing fuel and compare "
+        "ramp-fee waivers vs fuel price savings."
     )
+    if st.button("Generate recommendations"):
+        st.session_state["fuel_planning_recommendations"] = _build_recommendations(data_editor)
+
+recommendations_df = st.session_state.get("fuel_planning_recommendations")
+if recommendations_df is not None and not recommendations_df.empty:
+    st.markdown("### Recommendations")
+    st.dataframe(recommendations_df, use_container_width=True, hide_index=True)
