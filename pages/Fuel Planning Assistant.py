@@ -431,6 +431,13 @@ target_landing_fuel = st.number_input(
 
 fetch = st.button("Fetch flights & performance")
 
+if "fuel_planning_rows" not in st.session_state:
+    st.session_state["fuel_planning_rows"] = []
+if "fuel_planning_missing_performance" not in st.session_state:
+    st.session_state["fuel_planning_missing_performance"] = []
+if "fuel_planning_summary" not in st.session_state:
+    st.session_state["fuel_planning_summary"] = None
+
 if fetch:
     foreflight_token = get_secret("foreflight_api", {}).get("api_token")
     fl3xx_token = get_secret("fl3xx_api", {}).get("api_token")
@@ -474,13 +481,17 @@ if fetch:
 
     matches, unmatched_foreflight, unmatched_fl3xx = _match_records(foreflight_records, fl3xx_records)
 
-    st.subheader("Matched legs")
-    st.caption(
-        f"{len(matches)} matched • {len(unmatched_foreflight)} ForeFlight-only • {len(unmatched_fl3xx)} FL3XX-only"
-    )
+    summary = {
+        "matched": len(matches),
+        "unmatched_foreflight": len(unmatched_foreflight),
+        "unmatched_fl3xx": len(unmatched_fl3xx),
+    }
+    st.session_state["fuel_planning_summary"] = summary
 
     if not matches:
         st.warning("No matched flights found for that tail/date.")
+        st.session_state["fuel_planning_rows"] = []
+        st.session_state["fuel_planning_missing_performance"] = []
         st.stop()
 
     rows: list[dict[str, Any]] = []
@@ -507,7 +518,6 @@ if fetch:
                     "Arrival": ff_record.arrival_airport,
                     "Dep Time (UTC)": _format_timestamp(ff_record.departure_time),
                     "Arr Time (UTC)": _format_timestamp(ff_record.arrival_time),
-                    "Flight ID": ff_record.flight_id,
                     "Fuel To Dest (lb)": fuel_to_destination,
                     "Taxi Fuel (lb)": perf.get("taxi_fuel"),
                     "Landing Fuel (lb)": perf.get("landing_fuel"),
@@ -528,6 +538,21 @@ if fetch:
                 }
             )
 
+    st.session_state["fuel_planning_rows"] = rows
+    st.session_state["fuel_planning_missing_performance"] = missing_performance
+
+summary = st.session_state.get("fuel_planning_summary")
+rows = st.session_state.get("fuel_planning_rows", [])
+
+if summary and rows:
+    st.subheader("Matched legs")
+    st.caption(
+        f"{summary['matched']} matched • {summary['unmatched_foreflight']} ForeFlight-only • "
+        f"{summary['unmatched_fl3xx']} FL3XX-only"
+    )
+
+missing_performance = st.session_state.get("fuel_planning_missing_performance", [])
+if rows:
     if missing_performance:
         st.warning(
             "Missing performance data for: "
@@ -541,6 +566,7 @@ if fetch:
         pd.DataFrame(rows),
         use_container_width=True,
         hide_index=True,
+        key="fuelerlinx_inputs_editor",
         column_config={
             "Fuel Price ($/unit)": st.column_config.NumberColumn(min_value=0.0, step=0.01),
             "Ramp Fee ($)": st.column_config.NumberColumn(min_value=0.0, step=1.0),
@@ -551,7 +577,6 @@ if fetch:
             "Arrival",
             "Dep Time (UTC)",
             "Arr Time (UTC)",
-            "Flight ID",
             "Fuel To Dest (lb)",
             "Taxi Fuel (lb)",
             "Landing Fuel (lb)",
@@ -568,6 +593,8 @@ if fetch:
             "Max Zero Fuel (lb)",
         ],
     )
+
+    st.session_state["fuel_planning_rows"] = data_editor.to_dict(orient="records")
 
     st.markdown("### Next steps")
     st.info(
