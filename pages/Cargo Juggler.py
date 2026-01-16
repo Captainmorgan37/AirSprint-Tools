@@ -106,7 +106,22 @@ def fits_in_space(box_dims, space_dims):
             return dims
     return None
 
-def fits_inside(box_dims, interior, container_type, flex=1.0):
+def can_fit_rotated_in_plane(item_length, item_width, space_length, space_width, step_degrees=1.0):
+    """Check if a rectangle can fit in a rectangle via in-plane rotation."""
+    for angle_deg in [i * step_degrees for i in range(int(90 / step_degrees) + 1)]:
+        angle = math.radians(angle_deg)
+        cos_a = abs(math.cos(angle))
+        sin_a = abs(math.sin(angle))
+        proj_length = item_length * cos_a + item_width * sin_a
+        proj_width = item_length * sin_a + item_width * cos_a
+        if proj_length <= space_length and proj_width <= space_width:
+            return True
+    return False
+
+def box_diagonal(length, width, height):
+    return math.sqrt(length ** 2 + width ** 2 + height ** 2)
+
+def fits_inside(box_dims, interior, container_type, flex=1.0, allow_diagonal=False):
     """Check if a single box can fit somewhere in the empty hold (not a packing check)."""
     dims_flex = apply_flex(box_dims, flex)
     for dims in itertools.permutations(dims_flex):
@@ -123,15 +138,37 @@ def fits_inside(box_dims, interior, container_type, flex=1.0):
                     or bw <= main_width
                 )
                 if fits_outside_restricted:
-                    return True
+                    return True, False
+            if allow_diagonal and bh <= interior["height"]:
+                r = interior["restricted"]
+                main_depth = max(0.0, interior["depth"] - r["depth"])
+                main_width = max(0.0, interior["width"] - r["width"])
+                diagonal_spaces = [
+                    (r["depth"], main_width),
+                    (main_depth, interior["width"]),
+                    (interior["depth"], interior["width"]),
+                ]
+                for space_depth, space_width in diagonal_spaces:
+                    if can_fit_rotated_in_plane(bl, bw, space_depth, space_width):
+                        return True, True
+                space_diag = box_diagonal(interior["depth"], interior["width"], interior["height"])
+                if bl <= space_diag and bw <= interior["width"] and bh <= interior["height"]:
+                    return True, True
         elif container_type == "Legacy":
+            width_limit = min(
+                legacy_width_at_height(interior, 0),
+                legacy_width_at_height(interior, bh)
+            )
             if bl <= interior["depth"] and bh <= interior["height"]:
-                if bw <= min(
-                    legacy_width_at_height(interior, 0),
-                    legacy_width_at_height(interior, bh)
-                ):
-                    return True
-    return False
+                if bw <= width_limit:
+                    return True, False
+            if allow_diagonal and bh <= interior["height"]:
+                if can_fit_rotated_in_plane(bl, bw, interior["depth"], width_limit):
+                    return True, True
+                space_diag = box_diagonal(interior["depth"], width_limit, interior["height"])
+                if bl <= space_diag and bw <= width_limit and bh <= interior["height"]:
+                    return True, True
+    return False, False
 
 def bag_volume(dims):
     l, w, h = dims
@@ -607,6 +644,14 @@ with colB:
         st.success("✅ Baggage list cleared.")
 
 container = containers[container_choice]
+allow_diagonal_fit = st.checkbox(
+    "Allow diagonal floor placement for single-item fit checks",
+    value=False,
+    help=(
+        "Uses diagonal/angled placement checks for individual items (CJ and Legacy), including "
+        "floor and 3D diagonals. Packing/visualization remains axis-aligned."
+    )
+)
 
 st.write("### Add Baggage")
 col1, col2, col3, col4 = st.columns([1,1,1,1])
@@ -664,13 +709,25 @@ if st.session_state["baggage_list"]:
         # Per-item simple fit
         results = []
         door_fail_items = []
+        diagonal_fit_items = []
         for i, item in enumerate(st.session_state["baggage_list"], 1):
             box_dims = item["Dims"]
             door_fit = fits_through_door(box_dims, container["door"], item.get("Flex", 1.0))
-            interior_fit = fits_inside(box_dims, container["interior"], container_choice, item.get("Flex", 1.0))
-            status = "✅ Fits" if door_fit and interior_fit else "❌ Door Fail" if not door_fit else "❌ Interior Fail"
+            interior_fit, used_diagonal = fits_inside(
+                box_dims,
+                container["interior"],
+                container_choice,
+                item.get("Flex", 1.0),
+                allow_diagonal=allow_diagonal_fit
+            )
+            if door_fit and interior_fit:
+                status = "✅ Fits (Diagonal)" if used_diagonal else "✅ Fits"
+            else:
+                status = "❌ Door Fail" if not door_fit else "❌ Interior Fail"
             if not door_fit:
                 door_fail_items.append(i)
+            if used_diagonal:
+                diagonal_fit_items.append(i)
             results.append({"Type": item["Type"], "Dims": box_dims, "Result": status})
 
         results_df = pd.DataFrame(results).reset_index(drop=True)
@@ -690,6 +747,15 @@ if st.session_state["baggage_list"]:
             )
             st.info("Door failures must be resolved before packing calculations can continue.")
             st.stop()
+        if diagonal_fit_items:
+            diagonal_descriptions = [
+                f"{idx} ({results[idx-1]['Type']})" for idx in diagonal_fit_items
+            ]
+            diagonal_summary = ", ".join(diagonal_descriptions)
+            st.info(
+                "📐 Diagonal fit assumed for the following item(s): "
+                f"{diagonal_summary}. Packing/visualization remains axis-aligned."
+            )
 
         # Packing multi-strategy
         result = multi_strategy_packing(
