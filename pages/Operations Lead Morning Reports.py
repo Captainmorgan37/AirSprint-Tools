@@ -186,6 +186,16 @@ def _render_report_output(report: MorningReportResult):
         for warning in report.warnings:
             st.warning(warning)
 
+    if report.code == "16.1.10":
+        cj_rows = [
+            row for row in report.rows if row.get("is_cj_assigned")
+        ]
+        st.markdown("#### CJ aircraft assignments in upgrade workflow")
+        if cj_rows:
+            st.dataframe(cj_rows, width="stretch")
+        else:
+            st.info("No upgrade workflow legs assigned to CJ aircraft types.")
+
     if report.rows:
         st.markdown("#### Matching legs")
         if report.code == "16.1.6":
