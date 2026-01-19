@@ -662,6 +662,7 @@ if fetch:
     st.session_state["fuel_planning_missing_performance"] = missing_performance
     st.session_state["fuel_planning_recommendations"] = pd.DataFrame()
     st.session_state["fuel_planning_last_df"] = st.session_state["fuel_planning_df"].copy()
+    st.session_state["fuel_planning_editor_df"] = st.session_state["fuel_planning_df"].copy()
 
 summary = st.session_state.get("fuel_planning_summary")
 fuel_df = st.session_state.get("fuel_planning_df")
