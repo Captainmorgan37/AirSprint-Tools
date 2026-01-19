@@ -630,19 +630,8 @@ if fetch:
                     "Arr Time (UTC)": _format_timestamp(ff_record.arrival_time),
                     "Fuel To Dest (lb)": fuel_to_destination,
                     "Taxi Fuel (lb)": perf.get("taxi_fuel"),
-                    "Landing Fuel (lb)": perf.get("landing_fuel"),
-                    "Target Landing Fuel (lb)": target_landing_fuel,
-                    "Total Fuel (lb)": perf.get("total_fuel"),
                     "Max Total Fuel (lb)": perf.get("max_total_fuel"),
                     "Required Dep Fuel (lb)": required_departure_fuel,
-                    "Ramp Weight (lb)": perf.get("ramp_weight"),
-                    "Max Ramp (lb)": perf.get("max_ramp_weight"),
-                    "Takeoff Weight (lb)": perf.get("takeoff_weight"),
-                    "Max Takeoff (lb)": perf.get("max_takeoff_weight"),
-                    "Landing Weight (lb)": perf.get("landing_weight"),
-                    "Max Landing (lb)": perf.get("max_landing_weight"),
-                    "Zero Fuel Weight (lb)": perf.get("zero_fuel_weight"),
-                    "Max Zero Fuel (lb)": perf.get("max_zero_fuel_weight"),
                     "Fuel Price ($/unit)": None,
                     "Ramp Fee ($)": None,
                     "Waiver Fuel (unit)": None,
@@ -674,8 +663,9 @@ if fuel_df is not None and not fuel_df.empty:
     st.markdown("### Fuelerlinx inputs")
     st.caption("Enter values per departure airport. Units should align with the ForeFlight fuel unit (lb).")
 
+    editor_source = st.session_state.get("fuel_planning_editor", fuel_df)
     data_editor = st.data_editor(
-        fuel_df,
+        editor_source,
         use_container_width=True,
         hide_index=True,
         column_config={
@@ -690,20 +680,10 @@ if fuel_df is not None and not fuel_df.empty:
             "Arr Time (UTC)",
             "Fuel To Dest (lb)",
             "Taxi Fuel (lb)",
-            "Landing Fuel (lb)",
-            "Target Landing Fuel (lb)",
-            "Total Fuel (lb)",
             "Max Total Fuel (lb)",
             "Required Dep Fuel (lb)",
-            "Ramp Weight (lb)",
-            "Max Ramp (lb)",
-            "Takeoff Weight (lb)",
-            "Max Takeoff (lb)",
-            "Landing Weight (lb)",
-            "Max Landing (lb)",
-            "Zero Fuel Weight (lb)",
-            "Max Zero Fuel (lb)",
         ],
+        key="fuel_planning_editor",
     )
 
     st.session_state["fuel_planning_df"] = data_editor.copy()
