@@ -558,6 +558,8 @@ if "fuel_planning_summary" not in st.session_state:
     st.session_state["fuel_planning_summary"] = None
 if "fuel_planning_recommendations" not in st.session_state:
     st.session_state["fuel_planning_recommendations"] = pd.DataFrame()
+if "fuel_planning_editor_state" not in st.session_state:
+    st.session_state["fuel_planning_editor_state"] = pd.DataFrame()
 
 if fetch:
     foreflight_token = get_secret("foreflight_api", {}).get("api_token")
@@ -651,7 +653,7 @@ if fetch:
     st.session_state["fuel_planning_df"] = _sort_by_departure_time(pd.DataFrame(rows))
     st.session_state["fuel_planning_missing_performance"] = missing_performance
     st.session_state["fuel_planning_recommendations"] = pd.DataFrame()
-    st.session_state["fuel_planning_editor"] = st.session_state["fuel_planning_df"].copy()
+    st.session_state["fuel_planning_editor_state"] = st.session_state["fuel_planning_df"].copy()
 
 summary = st.session_state.get("fuel_planning_summary")
 fuel_df = st.session_state.get("fuel_planning_df")
@@ -675,7 +677,7 @@ if fuel_df is not None and not fuel_df.empty:
     st.caption("Enter values per departure airport. Units should align with the ForeFlight fuel unit (lb).")
 
     editor_source = _ensure_dataframe(
-        st.session_state.get("fuel_planning_editor"),
+        st.session_state.get("fuel_planning_editor_state"),
         fuel_df,
     )
     data_editor = st.data_editor(
@@ -701,7 +703,7 @@ if fuel_df is not None and not fuel_df.empty:
     )
 
     st.session_state["fuel_planning_df"] = data_editor.copy()
-    st.session_state["fuel_planning_editor"] = data_editor.copy()
+    st.session_state["fuel_planning_editor_state"] = data_editor.copy()
 
     st.markdown("### Decision logic (MVP)")
     st.caption(
