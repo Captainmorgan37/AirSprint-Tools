@@ -426,6 +426,19 @@ def _as_float(value: Any) -> Optional[float]:
         return None
 
 
+def _calculate_required_departure_fuel(
+    performance: Mapping[str, Any],
+    target_landing_fuel: float,
+) -> Optional[float]:
+    flight_fuel = _as_float(performance.get("flight_fuel"))
+    fuel_to_destination = _as_float(performance.get("fuel_to_destination"))
+    taxi_fuel = _as_float(performance.get("taxi_fuel")) or 0.0
+    burn_fuel = flight_fuel if flight_fuel is not None else fuel_to_destination
+    if burn_fuel is None:
+        return None
+    return burn_fuel + taxi_fuel + target_landing_fuel
+
+
 def _build_recommendations(df: pd.DataFrame) -> pd.DataFrame:
     recommendations: list[str] = []
     notes: list[str] = []
@@ -523,6 +536,7 @@ target_landing_fuel = st.number_input(
     min_value=0.0,
     step=100.0,
 )
+st.caption("Required departure fuel uses taxi + flight burn + this target landing fuel.")
 
 fetch = st.button("Fetch flights & performance")
 
@@ -606,9 +620,7 @@ if fetch:
                 continue
             perf = _extract_performance_fields(payload)
             fuel_to_destination = perf.get("fuel_to_destination")
-            required_departure_fuel = None
-            if fuel_to_destination is not None:
-                required_departure_fuel = fuel_to_destination + target_landing_fuel
+            required_departure_fuel = _calculate_required_departure_fuel(perf, target_landing_fuel)
 
             rows.append(
                 {
@@ -619,6 +631,7 @@ if fetch:
                     "Fuel To Dest (lb)": fuel_to_destination,
                     "Taxi Fuel (lb)": perf.get("taxi_fuel"),
                     "Landing Fuel (lb)": perf.get("landing_fuel"),
+                    "Target Landing Fuel (lb)": target_landing_fuel,
                     "Total Fuel (lb)": perf.get("total_fuel"),
                     "Max Total Fuel (lb)": perf.get("max_total_fuel"),
                     "Required Dep Fuel (lb)": required_departure_fuel,
@@ -678,6 +691,7 @@ if fuel_df is not None and not fuel_df.empty:
             "Fuel To Dest (lb)",
             "Taxi Fuel (lb)",
             "Landing Fuel (lb)",
+            "Target Landing Fuel (lb)",
             "Total Fuel (lb)",
             "Max Total Fuel (lb)",
             "Required Dep Fuel (lb)",
