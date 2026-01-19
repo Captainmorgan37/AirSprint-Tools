@@ -426,6 +426,19 @@ def _as_float(value: Any) -> Optional[float]:
         return None
 
 
+def _calculate_required_departure_fuel(
+    performance: Mapping[str, Any],
+    target_landing_fuel: float,
+) -> Optional[float]:
+    flight_fuel = _as_float(performance.get("flight_fuel"))
+    fuel_to_destination = _as_float(performance.get("fuel_to_destination"))
+    taxi_fuel = _as_float(performance.get("taxi_fuel")) or 0.0
+    burn_fuel = flight_fuel if flight_fuel is not None else fuel_to_destination
+    if burn_fuel is None:
+        return None
+    return burn_fuel + taxi_fuel + target_landing_fuel
+
+
 def _build_recommendations(df: pd.DataFrame) -> pd.DataFrame:
     recommendations: list[str] = []
     notes: list[str] = []
@@ -508,6 +521,22 @@ def _sort_by_departure_time(df: pd.DataFrame) -> pd.DataFrame:
     return sorted_df
 
 
+def _ensure_dataframe(value: Any, fallback: pd.DataFrame) -> pd.DataFrame:
+    if isinstance(value, pd.DataFrame):
+        return value
+    if isinstance(value, list):
+        return pd.DataFrame(value)
+    if isinstance(value, Mapping):
+        return pd.DataFrame([value])
+    return fallback
+
+
+def _is_editor_state(value: Any) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    return {"edited_rows", "added_rows", "deleted_rows"}.issubset(value.keys())
+
+
 col1, col2, col3 = st.columns(3)
 
 with col1:
@@ -523,6 +552,7 @@ target_landing_fuel = st.number_input(
     min_value=0.0,
     step=100.0,
 )
+st.caption("Required departure fuel uses taxi + flight burn + this target landing fuel.")
 
 fetch = st.button("Fetch flights & performance")
 
@@ -534,6 +564,8 @@ if "fuel_planning_summary" not in st.session_state:
     st.session_state["fuel_planning_summary"] = None
 if "fuel_planning_recommendations" not in st.session_state:
     st.session_state["fuel_planning_recommendations"] = pd.DataFrame()
+if "fuel_planning_last_df" not in st.session_state:
+    st.session_state["fuel_planning_last_df"] = pd.DataFrame()
 
 if fetch:
     foreflight_token = get_secret("foreflight_api", {}).get("api_token")
@@ -606,9 +638,7 @@ if fetch:
                 continue
             perf = _extract_performance_fields(payload)
             fuel_to_destination = perf.get("fuel_to_destination")
-            required_departure_fuel = None
-            if fuel_to_destination is not None:
-                required_departure_fuel = fuel_to_destination + target_landing_fuel
+            required_departure_fuel = _calculate_required_departure_fuel(perf, target_landing_fuel)
 
             rows.append(
                 {
@@ -618,18 +648,8 @@ if fetch:
                     "Arr Time (UTC)": _format_timestamp(ff_record.arrival_time),
                     "Fuel To Dest (lb)": fuel_to_destination,
                     "Taxi Fuel (lb)": perf.get("taxi_fuel"),
-                    "Landing Fuel (lb)": perf.get("landing_fuel"),
-                    "Total Fuel (lb)": perf.get("total_fuel"),
                     "Max Total Fuel (lb)": perf.get("max_total_fuel"),
                     "Required Dep Fuel (lb)": required_departure_fuel,
-                    "Ramp Weight (lb)": perf.get("ramp_weight"),
-                    "Max Ramp (lb)": perf.get("max_ramp_weight"),
-                    "Takeoff Weight (lb)": perf.get("takeoff_weight"),
-                    "Max Takeoff (lb)": perf.get("max_takeoff_weight"),
-                    "Landing Weight (lb)": perf.get("landing_weight"),
-                    "Max Landing (lb)": perf.get("max_landing_weight"),
-                    "Zero Fuel Weight (lb)": perf.get("zero_fuel_weight"),
-                    "Max Zero Fuel (lb)": perf.get("max_zero_fuel_weight"),
                     "Fuel Price ($/unit)": None,
                     "Ramp Fee ($)": None,
                     "Waiver Fuel (unit)": None,
@@ -639,9 +659,16 @@ if fetch:
     st.session_state["fuel_planning_df"] = _sort_by_departure_time(pd.DataFrame(rows))
     st.session_state["fuel_planning_missing_performance"] = missing_performance
     st.session_state["fuel_planning_recommendations"] = pd.DataFrame()
+    st.session_state["fuel_planning_last_df"] = st.session_state["fuel_planning_df"].copy()
 
 summary = st.session_state.get("fuel_planning_summary")
 fuel_df = st.session_state.get("fuel_planning_df")
+if _is_editor_state(fuel_df):
+    fuel_df = st.session_state.get("fuel_planning_last_df", pd.DataFrame())
+fuel_df = _ensure_dataframe(
+    fuel_df,
+    st.session_state.get("fuel_planning_last_df", pd.DataFrame()),
+)
 
 if summary is not None and fuel_df is not None and not fuel_df.empty:
     st.subheader("Matched legs")
@@ -677,22 +704,14 @@ if fuel_df is not None and not fuel_df.empty:
             "Arr Time (UTC)",
             "Fuel To Dest (lb)",
             "Taxi Fuel (lb)",
-            "Landing Fuel (lb)",
-            "Total Fuel (lb)",
             "Max Total Fuel (lb)",
             "Required Dep Fuel (lb)",
-            "Ramp Weight (lb)",
-            "Max Ramp (lb)",
-            "Takeoff Weight (lb)",
-            "Max Takeoff (lb)",
-            "Landing Weight (lb)",
-            "Max Landing (lb)",
-            "Zero Fuel Weight (lb)",
-            "Max Zero Fuel (lb)",
         ],
     )
 
-    st.session_state["fuel_planning_df"] = data_editor.copy()
+    if isinstance(data_editor, pd.DataFrame):
+        st.session_state["fuel_planning_df"] = data_editor.copy()
+        st.session_state["fuel_planning_last_df"] = data_editor.copy()
 
     st.markdown("### Decision logic (MVP)")
     st.caption(
