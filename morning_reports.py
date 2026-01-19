@@ -1939,6 +1939,7 @@ def _build_upgrade_flights_report(
                     f"{assigned_type or 'Unknown Assignment'}"
                 )
 
+            is_cj_assigned = _is_cj_aircraft_type(assigned_type)
             line_parts = [
                 date_component or "Unknown Date",
                 tail or "Unknown Tail",
@@ -1966,6 +1967,9 @@ def _build_upgrade_flights_report(
                     "billing_instruction_note": billing_instruction_note,
                     "planning_note": planning_note,
                     "account_name": account_name,
+                    "assigned_aircraft_type": assigned_type,
+                    "requested_aircraft_type": requested_type,
+                    "is_cj_assigned": is_cj_assigned,
                     "leg_id": formatted.get("leg_id"),
                 }
             )
@@ -3021,6 +3025,20 @@ def _extract_requested_aircraft_type(row: Mapping[str, Any]) -> Optional[str]:
             if value:
                 return value
     return None
+
+
+def _is_cj_aircraft_type(value: Optional[str]) -> bool:
+    if not value:
+        return False
+    normalized = _normalize_str(value)
+    if not normalized:
+        return False
+    upper = normalized.upper()
+    if upper.startswith("CJ"):
+        return True
+    if upper in {"C25A", "C25B"}:
+        return True
+    return bool(re.search(r"\bCJ\d?\+?\b", upper))
 
 
 def _extract_owner_class(row: Mapping[str, Any]) -> Optional[str]:
