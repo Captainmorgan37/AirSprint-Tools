@@ -521,6 +521,16 @@ def _sort_by_departure_time(df: pd.DataFrame) -> pd.DataFrame:
     return sorted_df
 
 
+def _ensure_dataframe(value: Any, fallback: pd.DataFrame) -> pd.DataFrame:
+    if isinstance(value, pd.DataFrame):
+        return value
+    if isinstance(value, list):
+        return pd.DataFrame(value)
+    if isinstance(value, Mapping):
+        return pd.DataFrame([value])
+    return fallback
+
+
 def _is_editor_state(value: Any) -> bool:
     if not isinstance(value, Mapping):
         return False
@@ -655,6 +665,10 @@ summary = st.session_state.get("fuel_planning_summary")
 fuel_df = st.session_state.get("fuel_planning_df")
 if _is_editor_state(fuel_df):
     fuel_df = st.session_state.get("fuel_planning_last_df", pd.DataFrame())
+fuel_df = _ensure_dataframe(
+    fuel_df,
+    st.session_state.get("fuel_planning_last_df", pd.DataFrame()),
+)
 
 if summary is not None and fuel_df is not None and not fuel_df.empty:
     st.subheader("Matched legs")
