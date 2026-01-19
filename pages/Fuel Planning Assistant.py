@@ -558,6 +558,8 @@ if "fuel_planning_summary" not in st.session_state:
     st.session_state["fuel_planning_summary"] = None
 if "fuel_planning_recommendations" not in st.session_state:
     st.session_state["fuel_planning_recommendations"] = pd.DataFrame()
+if "fuel_planning_editor_state" not in st.session_state:
+    st.session_state["fuel_planning_editor_state"] = pd.DataFrame()
 
 if fetch:
     foreflight_token = get_secret("foreflight_api", {}).get("api_token")
@@ -701,6 +703,7 @@ if fuel_df is not None and not fuel_df.empty:
     )
 
     st.session_state["fuel_planning_df"] = data_editor.copy()
+    st.session_state["fuel_planning_editor_state"] = data_editor.copy()
 
     st.markdown("### Decision logic (MVP)")
     st.caption(
