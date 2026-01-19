@@ -3036,6 +3036,8 @@ def _is_cj_aircraft_type(value: Optional[str]) -> bool:
     upper = normalized.upper()
     if upper.startswith("CJ"):
         return True
+    if upper in {"C25A", "C25B"}:
+        return True
     return bool(re.search(r"\bCJ\d?\+?\b", upper))
 
 
