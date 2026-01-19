@@ -688,8 +688,12 @@ if fuel_df is not None and not fuel_df.empty:
     st.markdown("### Fuelerlinx inputs")
     st.caption("Enter values per departure airport. Units should align with the ForeFlight fuel unit (lb).")
 
-    data_editor = st.data_editor(
+    editor_source = _ensure_dataframe(
+        st.session_state.get("fuel_planning_editor"),
         fuel_df,
+    )
+    data_editor = st.data_editor(
+        editor_source,
         use_container_width=True,
         hide_index=True,
         column_config={
@@ -707,6 +711,7 @@ if fuel_df is not None and not fuel_df.empty:
             "Max Total Fuel (lb)",
             "Required Dep Fuel (lb)",
         ],
+        key="fuel_planning_editor",
     )
 
     if isinstance(data_editor, pd.DataFrame):
