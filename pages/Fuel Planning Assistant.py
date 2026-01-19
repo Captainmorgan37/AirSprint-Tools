@@ -695,32 +695,47 @@ if fuel_df is not None and not fuel_df.empty:
         st.session_state.get("fuel_planning_editor_df"),
         fuel_df,
     )
-    data_editor = st.data_editor(
-        editor_source,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Fuel Price ($/unit)": st.column_config.NumberColumn(min_value=0.0, step=0.01),
-            "Ramp Fee ($)": st.column_config.NumberColumn(min_value=0.0, step=1.0),
-            "Waiver Fuel (unit)": st.column_config.NumberColumn(min_value=0.0, step=10.0),
-        },
-        disabled=[
-            "Departure",
-            "Arrival",
-            "Dep Time (UTC)",
-            "Arr Time (UTC)",
-            "Fuel To Dest (lb)",
-            "Taxi Fuel (lb)",
-            "Max Total Fuel (lb)",
-            "Required Dep Fuel (lb)",
-        ],
-        key="fuel_planning_editor",
-    )
+    st.dataframe(editor_source, use_container_width=True, hide_index=True)
 
-    if isinstance(data_editor, pd.DataFrame):
-        st.session_state["fuel_planning_df"] = data_editor.copy()
-        st.session_state["fuel_planning_last_df"] = data_editor.copy()
-        st.session_state["fuel_planning_editor_df"] = data_editor.copy()
+    updated_df = editor_source.copy()
+    with st.form("fuelerlinx_inputs"):
+        for index, row in editor_source.iterrows():
+            st.markdown(f"**{row.get('Departure', 'Unknown')} → {row.get('Arrival', '')}**")
+            col1, col2, col3 = st.columns(3)
+            fuel_price_value = row.get("Fuel Price ($/unit)")
+            ramp_fee_value = row.get("Ramp Fee ($)")
+            waiver_fuel_value = row.get("Waiver Fuel (unit)")
+
+            with col1:
+                updated_df.at[index, "Fuel Price ($/unit)"] = st.number_input(
+                    "Fuel Price ($/unit)",
+                    min_value=0.0,
+                    step=0.01,
+                    value=float(fuel_price_value) if pd.notna(fuel_price_value) else 0.0,
+                    key=f"fuelerlinx_price_{index}",
+                )
+            with col2:
+                updated_df.at[index, "Ramp Fee ($)"] = st.number_input(
+                    "Ramp Fee ($)",
+                    min_value=0.0,
+                    step=1.0,
+                    value=float(ramp_fee_value) if pd.notna(ramp_fee_value) else 0.0,
+                    key=f"fuelerlinx_ramp_{index}",
+                )
+            with col3:
+                updated_df.at[index, "Waiver Fuel (unit)"] = st.number_input(
+                    "Waiver Fuel (unit)",
+                    min_value=0.0,
+                    step=10.0,
+                    value=float(waiver_fuel_value) if pd.notna(waiver_fuel_value) else 0.0,
+                    key=f"fuelerlinx_waiver_{index}",
+                )
+        submitted = st.form_submit_button("Save Fuelerlinx inputs")
+
+    if submitted:
+        st.session_state["fuel_planning_df"] = updated_df.copy()
+        st.session_state["fuel_planning_last_df"] = updated_df.copy()
+        st.session_state["fuel_planning_editor_df"] = updated_df.copy()
 
     st.markdown("### Decision logic (MVP)")
     st.caption(
@@ -728,7 +743,9 @@ if fuel_df is not None and not fuel_df.empty:
         "ramp-fee waivers vs fuel price savings."
     )
     if st.button("Generate recommendations"):
-        st.session_state["fuel_planning_recommendations"] = _build_recommendations(data_editor)
+        st.session_state["fuel_planning_recommendations"] = _build_recommendations(
+            st.session_state.get("fuel_planning_editor_df", editor_source)
+        )
 
 recommendations_df = st.session_state.get("fuel_planning_recommendations")
 if recommendations_df is not None and not recommendations_df.empty:
