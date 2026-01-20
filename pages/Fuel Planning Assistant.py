@@ -466,6 +466,37 @@ def _calculate_required_departure_fuel(
     return burn_fuel + taxi_fuel + target_landing_fuel
 
 
+def _min_optional(*values: Optional[float]) -> Optional[float]:
+    present = [value for value in values if value is not None]
+    if not present:
+        return None
+    return min(present)
+
+
+def _calculate_weight_limited_max_fuel(
+    performance: Mapping[str, Any],
+) -> Optional[float]:
+    total_fuel = _as_float(performance.get("total_fuel"))
+    if total_fuel is None:
+        return None
+
+    margins: list[float] = []
+    for weight_key, max_key in (
+        ("ramp_weight", "max_ramp_weight"),
+        ("takeoff_weight", "max_takeoff_weight"),
+        ("landing_weight", "max_landing_weight"),
+    ):
+        weight = _as_float(performance.get(weight_key))
+        max_weight = _as_float(performance.get(max_key))
+        if weight is not None and max_weight is not None:
+            margins.append(max_weight - weight)
+
+    if not margins:
+        return None
+
+    return total_fuel + min(margins)
+
+
 def _build_recommendations(df: pd.DataFrame) -> pd.DataFrame:
     recommendations: list[str] = []
     notes: list[str] = []
@@ -475,6 +506,10 @@ def _build_recommendations(df: pd.DataFrame) -> pd.DataFrame:
     for index, row in enumerate(rows):
         required_departure_fuel = _as_float(row.get("Required Dep Fuel (lb)"))
         max_total_fuel = _as_float(row.get("Max Total Fuel (lb)"))
+        max_fuel_by_weight = _as_float(row.get("Max Fuel by Weight (lb)"))
+        effective_max_fuel = _as_float(row.get("Effective Max Fuel (lb)")) or _min_optional(
+            max_total_fuel, max_fuel_by_weight
+        )
         fuel_price = _as_float(row.get("Fuel Price ($/unit)"))
         ramp_fee = _as_float(row.get("Ramp Fee ($)"))
         waiver_fuel = _as_float(row.get("Waiver Fuel (unit)"))
@@ -487,9 +522,17 @@ def _build_recommendations(df: pd.DataFrame) -> pd.DataFrame:
         else:
             decision = f"Take at least {required_departure_fuel:,.0f} lb"
             detail.append("Meets target landing fuel requirement.")
+            if (
+                max_total_fuel is not None
+                and max_fuel_by_weight is not None
+                and max_fuel_by_weight < max_total_fuel
+            ):
+                detail.append(
+                    f"Weight limits cap max fuel at {max_fuel_by_weight:,.0f} lb."
+                )
 
             if waiver_fuel and waiver_fuel > 0:
-                if max_total_fuel is not None and waiver_fuel > max_total_fuel:
+                if effective_max_fuel is not None and waiver_fuel > effective_max_fuel:
                     detail.append("Waiver threshold exceeds max fuel; cannot waive.")
                 elif required_departure_fuel >= waiver_fuel:
                     decision = "Waiver already met"
@@ -518,9 +561,9 @@ def _build_recommendations(df: pd.DataFrame) -> pd.DataFrame:
             fuel_price is not None
             and next_price is not None
             and required_departure_fuel is not None
-            and max_total_fuel is not None
+            and effective_max_fuel is not None
         ):
-            extra_capacity = max_total_fuel - required_departure_fuel
+            extra_capacity = effective_max_fuel - required_departure_fuel
             if extra_capacity > 0 and fuel_price < next_price:
                 decision = f"{decision} • Tankering recommended"
                 detail.append(
@@ -710,6 +753,9 @@ if fetch:
                 perf,
                 effective_target_landing_fuel,
             )
+            weight_limited_max_fuel = _calculate_weight_limited_max_fuel(perf)
+            max_total_fuel = _as_float(perf.get("max_total_fuel"))
+            effective_max_fuel = _min_optional(max_total_fuel, weight_limited_max_fuel)
 
             rows.append(
                 {
@@ -719,7 +765,10 @@ if fetch:
                     "Arr Time (UTC)": _format_timestamp(ff_record.arrival_time),
                     "Fuel To Dest (lb)": fuel_to_destination,
                     "Taxi Fuel (lb)": perf.get("taxi_fuel"),
-                    "Max Total Fuel (lb)": perf.get("max_total_fuel"),
+                    "Total Fuel (lb)": perf.get("total_fuel"),
+                    "Max Total Fuel (lb)": max_total_fuel,
+                    "Max Fuel by Weight (lb)": weight_limited_max_fuel,
+                    "Effective Max Fuel (lb)": effective_max_fuel,
                     "Required Dep Fuel (lb)": required_departure_fuel,
                     "Fuel Price ($/unit)": None,
                     "Ramp Fee ($)": None,
