@@ -572,6 +572,15 @@ if "fuel_planning_target_landing_fuel" not in st.session_state:
     )
 if "fuel_planning_last_aircraft_type" not in st.session_state:
     st.session_state["fuel_planning_last_aircraft_type"] = st.session_state["fuel_planning_aircraft_type"]
+if "fuel_planning_aircraft_type_pending" not in st.session_state:
+    st.session_state["fuel_planning_aircraft_type_pending"] = None
+
+pending_type = st.session_state.get("fuel_planning_aircraft_type_pending")
+if pending_type:
+    st.session_state["fuel_planning_aircraft_type"] = pending_type
+    st.session_state["fuel_planning_last_aircraft_type"] = pending_type
+    st.session_state["fuel_planning_target_landing_fuel"] = float(TARGET_LANDING_FUEL_LBS[pending_type])
+    st.session_state["fuel_planning_aircraft_type_pending"] = None
 
 col1, col2, col3 = st.columns(3)
 
@@ -656,11 +665,8 @@ if fetch:
 
     inferred_type = _infer_aircraft_type(fl3xx_normalized, tail_input)
     if inferred_type:
-        st.session_state["fuel_planning_aircraft_type"] = inferred_type
-        st.session_state["fuel_planning_last_aircraft_type"] = inferred_type
-        st.session_state["fuel_planning_target_landing_fuel"] = float(
-            TARGET_LANDING_FUEL_LBS[inferred_type]
-        )
+        st.session_state["fuel_planning_aircraft_type_pending"] = inferred_type
+        st.rerun()
 
     foreflight_records = [record for record in foreflight_records if record.tail == tail_input]
     fl3xx_records = [record for record in fl3xx_records if record.tail == tail_input]
