@@ -664,9 +664,8 @@ if fetch:
     fl3xx_records = _build_records(_fl3xx_record(leg) for leg in fl3xx_normalized)
 
     inferred_type = _infer_aircraft_type(fl3xx_normalized, tail_input)
-    if inferred_type:
+    if inferred_type and inferred_type != st.session_state.get("fuel_planning_aircraft_type"):
         st.session_state["fuel_planning_aircraft_type_pending"] = inferred_type
-        st.rerun()
 
     foreflight_records = [record for record in foreflight_records if record.tail == tail_input]
     fl3xx_records = [record for record in fl3xx_records if record.tail == tail_input]
@@ -689,6 +688,12 @@ if fetch:
 
     rows: list[dict[str, Any]] = []
     missing_performance: list[str] = []
+    effective_aircraft_type = inferred_type or st.session_state["fuel_planning_aircraft_type"]
+    effective_target_landing_fuel = (
+        float(TARGET_LANDING_FUEL_LBS[effective_aircraft_type])
+        if inferred_type
+        else float(st.session_state["fuel_planning_target_landing_fuel"])
+    )
 
     with st.spinner("Fetching ForeFlight performance data..."):
         for ff_record, _fl3xx_record in matches:
@@ -703,7 +708,7 @@ if fetch:
             fuel_to_destination = perf.get("fuel_to_destination")
             required_departure_fuel = _calculate_required_departure_fuel(
                 perf,
-                float(st.session_state["fuel_planning_target_landing_fuel"]),
+                effective_target_landing_fuel,
             )
 
             rows.append(
