@@ -115,6 +115,33 @@ def _extract_first(container: Mapping[str, Any], *keys: str) -> Any:
     return None
 
 
+def _map_tail_type(value: Any) -> Optional[str]:
+    normalized = _normalize_text(value)
+    if not normalized:
+        return None
+    upper = normalized.upper()
+    if upper in {"C25A", "C25B"}:
+        return "CJ"
+    return "Embraer"
+
+
+def _infer_aircraft_type(
+    legs: Iterable[Mapping[str, Any]],
+    tail: Optional[str],
+) -> Optional[str]:
+    normalized_tail = _normalize_tail(tail)
+    if not normalized_tail:
+        return None
+    for leg in legs:
+        if _normalize_tail(leg.get("tail")) != normalized_tail:
+            continue
+        for key in ("aircraftCategory", "assignedAircraftType", "aircraftType", "aircraftClass"):
+            inferred = _map_tail_type(leg.get(key))
+            if inferred:
+                return inferred
+    return None
+
+
 def _build_fl3xx_config(token: Optional[str] = None) -> Fl3xxApiConfig:
     secrets_section = get_secret("fl3xx_api", {})
     base_url = secrets_section.get("base_url") or Fl3xxApiConfig().base_url
@@ -537,6 +564,24 @@ def _is_editor_state(value: Any) -> bool:
     return {"edited_rows", "added_rows", "deleted_rows"}.issubset(value.keys())
 
 
+if "fuel_planning_aircraft_type" not in st.session_state:
+    st.session_state["fuel_planning_aircraft_type"] = "CJ"
+if "fuel_planning_target_landing_fuel" not in st.session_state:
+    st.session_state["fuel_planning_target_landing_fuel"] = float(
+        TARGET_LANDING_FUEL_LBS[st.session_state["fuel_planning_aircraft_type"]]
+    )
+if "fuel_planning_last_aircraft_type" not in st.session_state:
+    st.session_state["fuel_planning_last_aircraft_type"] = st.session_state["fuel_planning_aircraft_type"]
+if "fuel_planning_aircraft_type_pending" not in st.session_state:
+    st.session_state["fuel_planning_aircraft_type_pending"] = None
+
+pending_type = st.session_state.get("fuel_planning_aircraft_type_pending")
+if pending_type:
+    st.session_state["fuel_planning_aircraft_type"] = pending_type
+    st.session_state["fuel_planning_last_aircraft_type"] = pending_type
+    st.session_state["fuel_planning_target_landing_fuel"] = float(TARGET_LANDING_FUEL_LBS[pending_type])
+    st.session_state["fuel_planning_aircraft_type_pending"] = None
+
 col1, col2, col3 = st.columns(3)
 
 with col1:
@@ -544,13 +589,24 @@ with col1:
 with col2:
     tail_input = st.text_input("Tail (registration)", placeholder="CFJAS").strip().upper()
 with col3:
-    aircraft_type = st.selectbox("Aircraft type", ["CJ", "Embraer"], index=0)
+    aircraft_type = st.selectbox(
+        "Aircraft type",
+        ["CJ", "Embraer"],
+        key="fuel_planning_aircraft_type",
+    )
+
+if aircraft_type != st.session_state.get("fuel_planning_last_aircraft_type"):
+    st.session_state["fuel_planning_target_landing_fuel"] = float(
+        TARGET_LANDING_FUEL_LBS[aircraft_type]
+    )
+    st.session_state["fuel_planning_last_aircraft_type"] = aircraft_type
 
 target_landing_fuel = st.number_input(
     "Target landing fuel (lb)",
-    value=float(TARGET_LANDING_FUEL_LBS[aircraft_type]),
+    value=float(st.session_state["fuel_planning_target_landing_fuel"]),
     min_value=0.0,
     step=100.0,
+    key="fuel_planning_target_landing_fuel",
 )
 st.caption("Required departure fuel uses taxi + flight burn + this target landing fuel.")
 
@@ -607,6 +663,10 @@ if fetch:
     foreflight_records = _build_records(_foreflight_record(flight) for flight in _extract_foreflight_flights(foreflight_payload))
     fl3xx_records = _build_records(_fl3xx_record(leg) for leg in fl3xx_normalized)
 
+    inferred_type = _infer_aircraft_type(fl3xx_normalized, tail_input)
+    if inferred_type and inferred_type != st.session_state.get("fuel_planning_aircraft_type"):
+        st.session_state["fuel_planning_aircraft_type_pending"] = inferred_type
+
     foreflight_records = [record for record in foreflight_records if record.tail == tail_input]
     fl3xx_records = [record for record in fl3xx_records if record.tail == tail_input]
 
@@ -628,6 +688,12 @@ if fetch:
 
     rows: list[dict[str, Any]] = []
     missing_performance: list[str] = []
+    effective_aircraft_type = inferred_type or st.session_state["fuel_planning_aircraft_type"]
+    effective_target_landing_fuel = (
+        float(TARGET_LANDING_FUEL_LBS[effective_aircraft_type])
+        if inferred_type
+        else float(st.session_state["fuel_planning_target_landing_fuel"])
+    )
 
     with st.spinner("Fetching ForeFlight performance data..."):
         for ff_record, _fl3xx_record in matches:
@@ -640,7 +706,10 @@ if fetch:
                 continue
             perf = _extract_performance_fields(payload)
             fuel_to_destination = perf.get("fuel_to_destination")
-            required_departure_fuel = _calculate_required_departure_fuel(perf, target_landing_fuel)
+            required_departure_fuel = _calculate_required_departure_fuel(
+                perf,
+                effective_target_landing_fuel,
+            )
 
             rows.append(
                 {
