@@ -166,6 +166,12 @@ def _arrives_in_us(leg: Mapping[str, Any], airport_lookup: Mapping[str, Mapping[
     return bool(normalized and normalized in US_COUNTRY_CODES)
 
 
+def _departs_us(leg: Mapping[str, Any], airport_lookup: Mapping[str, Mapping[str, Optional[Any]]]) -> bool:
+    dep_country, _ = leg_countries(leg, airport_lookup)
+    normalized = normalize_country_code(dep_country)
+    return bool(normalized and normalized in US_COUNTRY_CODES)
+
+
 @st.cache_data(show_spinner=True, ttl=300, hash_funcs={dict: lambda _: "0"})
 def _load_legs(
     settings_digest: str,
@@ -240,6 +246,8 @@ def _collect_flagged_passports(
     settings: Dict[str, Any],
     airport_lookup: Mapping[str, Mapping[str, Optional[Any]]],
     require_us_arrival: bool,
+    require_us_departure: bool,
+    require_non_us_arrival: bool,
     expiry_mode: str,
     expiry_soon_cutoff: Optional[date],
     expiry_window_days: Optional[int],
@@ -253,6 +261,10 @@ def _collect_flagged_passports(
         if not (is_customs_leg(leg, airport_lookup) and _is_pax_leg(leg)):
             continue
         if require_us_arrival and not _arrives_in_us(leg, airport_lookup):
+            continue
+        if require_us_departure and not _departs_us(leg, airport_lookup):
+            continue
+        if require_non_us_arrival and _arrives_in_us(leg, airport_lookup):
             continue
 
         flight_id = leg.get("flightId") or leg.get("flight_id") or leg.get("id")
@@ -392,30 +404,19 @@ def _render_results(
     fetch_metadata: Mapping[str, Any],
     fetch_errors: Sequence[str],
     include_us_focus: bool,
+    scan_label: Optional[str],
     expiry_mode: str,
     expiry_soon_cutoff: Optional[date],
     expiry_window_days: Optional[int],
 ) -> None:
     summary_cols = st.columns(4)
     summary_cols[0].metric("Legs fetched", fetch_metadata.get("legs_after_filter", 0))
-    if include_us_focus:
-        summary_cols[1].metric(
-            "US-arrival customs pax legs scanned",
-            len(
-                [
-                    leg
-                    for leg in legs
-                    if is_customs_leg(leg, airport_lookup)
-                    and _arrives_in_us(leg, airport_lookup)
-                    and _is_pax_leg(leg)
-                ]
-            ),
-        )
-    else:
-        summary_cols[1].metric(
-            "Customs pax legs scanned",
-            len([leg for leg in legs if is_customs_leg(leg, airport_lookup) and _is_pax_leg(leg)]),
-        )
+    if scan_label is None:
+        scan_label = "US-arrival customs pax legs scanned" if include_us_focus else "Customs pax legs scanned"
+    summary_cols[1].metric(
+        scan_label,
+        len([leg for leg in legs if is_customs_leg(leg, airport_lookup) and _is_pax_leg(leg)]),
+    )
     summary_cols[2].metric("Expiring before cutoff", len(expiring_passports))
     summary_cols[3].metric("Missing passport details", len(missing_passports))
 
@@ -562,6 +563,8 @@ with tabs[0]:
                         settings=dict(api_settings),
                         airport_lookup=airport_lookup,
                         require_us_arrival=False,
+                        require_us_departure=False,
+                        require_non_us_arrival=False,
                         expiry_mode=expiry_mode,
                         expiry_soon_cutoff=expiry_soon_cutoff,
                         expiry_window_days=expiry_window_days,
@@ -575,6 +578,7 @@ with tabs[0]:
                     fetch_metadata=fetch_metadata,
                     fetch_errors=fetch_errors,
                     include_us_focus=False,
+                    scan_label=None,
                     expiry_mode=expiry_mode,
                     expiry_soon_cutoff=expiry_soon_cutoff,
                     expiry_window_days=expiry_window_days,
@@ -586,7 +590,8 @@ with tabs[1]:
         """
         Scan upcoming international arrivals into the US for passengers who need attention before
         customs clearance. This view includes passport expiry checks plus a scan for missing US
-        destination addresses in the APIS payload.
+        destination addresses in the APIS payload. The results show inbound US arrivals first and
+        outbound US international flights second.
         """
     )
     expiry_mode = st.radio(
@@ -657,6 +662,21 @@ with tabs[1]:
                 st.error(f"Unable to load flights: {exc}")
             else:
                 airport_lookup = load_airport_metadata_lookup()
+                inbound_legs = [
+                    leg
+                    for leg in legs
+                    if is_customs_leg(leg, airport_lookup)
+                    and _arrives_in_us(leg, airport_lookup)
+                    and _is_pax_leg(leg)
+                ]
+                outbound_legs = [
+                    leg
+                    for leg in legs
+                    if is_customs_leg(leg, airport_lookup)
+                    and _departs_us(leg, airport_lookup)
+                    and not _arrives_in_us(leg, airport_lookup)
+                    and _is_pax_leg(leg)
+                ]
                 with st.spinner("Evaluating US customs readiness…"):
                     expiring_passports, missing_passports, missing_addresses, fetch_errors = (
                         _collect_flagged_passports(
@@ -665,13 +685,29 @@ with tabs[1]:
                             settings=dict(api_settings),
                             airport_lookup=airport_lookup,
                             require_us_arrival=True,
+                            require_us_departure=False,
+                            require_non_us_arrival=False,
                             expiry_mode=expiry_mode,
                             expiry_soon_cutoff=expiry_soon_cutoff,
                             expiry_window_days=expiry_window_days,
                         )
                     )
+                with st.spinner("Evaluating outbound US international flights…"):
+                    outbound_expiring, outbound_missing, _, outbound_errors = _collect_flagged_passports(
+                        legs,
+                        settings_digest=settings_digest,
+                        settings=dict(api_settings),
+                        airport_lookup=airport_lookup,
+                        require_us_arrival=False,
+                        require_us_departure=True,
+                        require_non_us_arrival=True,
+                        expiry_mode=expiry_mode,
+                        expiry_soon_cutoff=expiry_soon_cutoff,
+                        expiry_window_days=expiry_window_days,
+                    )
+                st.subheader("Inbound US arrivals (priority)")
                 _render_results(
-                    legs=legs,
+                    legs=inbound_legs,
                     airport_lookup=airport_lookup,
                     expiring_passports=expiring_passports,
                     missing_passports=missing_passports,
@@ -679,6 +715,23 @@ with tabs[1]:
                     fetch_metadata=fetch_metadata,
                     fetch_errors=fetch_errors,
                     include_us_focus=True,
+                    scan_label="Inbound US-arrival customs pax legs scanned",
+                    expiry_mode=expiry_mode,
+                    expiry_soon_cutoff=expiry_soon_cutoff,
+                    expiry_window_days=expiry_window_days,
+                )
+                st.divider()
+                st.subheader("Outbound US international flights")
+                _render_results(
+                    legs=outbound_legs,
+                    airport_lookup=airport_lookup,
+                    expiring_passports=outbound_expiring,
+                    missing_passports=outbound_missing,
+                    missing_addresses=[],
+                    fetch_metadata=fetch_metadata,
+                    fetch_errors=outbound_errors,
+                    include_us_focus=False,
+                    scan_label="Outbound US international pax legs scanned",
                     expiry_mode=expiry_mode,
                     expiry_soon_cutoff=expiry_soon_cutoff,
                     expiry_window_days=expiry_window_days,
