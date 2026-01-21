@@ -608,6 +608,7 @@ class PassengerDetail:
     document_number: Optional[str] = None
     document_issue_country_iso3: Optional[str] = None
     document_expiration: Optional[int] = None
+    has_us_address: Optional[bool] = None
 
 
 def _extract_preflight_status_value(value: Any) -> Optional[str]:
@@ -834,6 +835,26 @@ def _extract_passenger(ticket: Mapping[str, Any]) -> Optional[PassengerDetail]:
     else:
         issue_country = None
 
+    destination_address = (
+        ticket.get("destinationAddress")
+        if isinstance(ticket.get("destinationAddress"), Mapping)
+        else None
+    )
+    address_country_raw: Optional[str] = None
+    if isinstance(destination_address, Mapping):
+        address_country = destination_address.get("country")
+        if isinstance(address_country, Mapping):
+            address_country_raw = _clean_string(
+                address_country.get("iso2") or address_country.get("code")
+            )
+        else:
+            address_country_raw = _clean_string(
+                destination_address.get("country")
+                or destination_address.get("countryCode")
+                or destination_address.get("countryIso2")
+            )
+    has_us_address = bool(address_country_raw and address_country_raw.upper() == "US")
+
     pax_user_id = pax_user.get("id")
     pax_user_id_str: Optional[str]
     if pax_user_id is None:
@@ -854,6 +875,7 @@ def _extract_passenger(ticket: Mapping[str, Any]) -> Optional[PassengerDetail]:
         document_number=_clean_string(id_card.get("number")) if isinstance(id_card, Mapping) else None,
         document_issue_country_iso3=_clean_string(issue_country.get("iso3")) if isinstance(issue_country, Mapping) else None,
         document_expiration=_normalise_optional_epoch(id_card.get("expirationDate")) if isinstance(id_card, Mapping) else None,
+        has_us_address=has_us_address,
     )
 
 
@@ -945,6 +967,7 @@ def _merge_passenger_with_passport_card(
         or issue_country_iso3,
         document_expiration=passenger.document_expiration
         or _normalise_datetime_candidate(passport_card.get("expirationDate")),
+        has_us_address=passenger.has_us_address,
     )
 
 

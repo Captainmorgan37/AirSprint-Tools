@@ -1887,6 +1887,7 @@ def _build_upgrade_flights_report(
             quote_id = _extract_quote_identifier(row)
             assigned_type = _extract_assigned_aircraft_type(row)
             requested_type = _extract_requested_aircraft_type(row)
+            aircraft_category = _extract_aircraft_category(row)
             planning_note: Optional[str] = None
             account_name: Optional[str] = formatted.get("account_name")
 
@@ -1922,6 +1923,8 @@ def _build_upgrade_flights_report(
                         requested_type = _extract_requested_aircraft_type(detail)
                     if account_name is None:
                         account_name = _extract_account_name(detail)
+                    if aircraft_category is None:
+                        aircraft_category = _extract_aircraft_category(detail)
                     planning_note = _extract_planning_note(detail)
 
             else:
@@ -1939,6 +1942,9 @@ def _build_upgrade_flights_report(
                     f"{assigned_type or 'Unknown Assignment'}"
                 )
 
+            is_cj_assigned = _is_cj_aircraft_type(
+                assigned_type or aircraft_category
+            )
             line_parts = [
                 date_component or "Unknown Date",
                 tail or "Unknown Tail",
@@ -1966,6 +1972,10 @@ def _build_upgrade_flights_report(
                     "billing_instruction_note": billing_instruction_note,
                     "planning_note": planning_note,
                     "account_name": account_name,
+                    "assigned_aircraft_type": assigned_type,
+                    "requested_aircraft_type": requested_type,
+                    "aircraft_category": aircraft_category,
+                    "is_cj_assigned": is_cj_assigned,
                     "leg_id": formatted.get("leg_id"),
                 }
             )
@@ -3021,6 +3031,20 @@ def _extract_requested_aircraft_type(row: Mapping[str, Any]) -> Optional[str]:
             if value:
                 return value
     return None
+
+
+def _is_cj_aircraft_type(value: Optional[str]) -> bool:
+    if not value:
+        return False
+    normalized = _normalize_str(value)
+    if not normalized:
+        return False
+    upper = normalized.upper()
+    if upper.startswith("CJ"):
+        return True
+    if upper in {"C25A", "C25B"}:
+        return True
+    return bool(re.search(r"\bCJ\d?\+?\b", upper))
 
 
 def _extract_owner_class(row: Mapping[str, Any]) -> Optional[str]:
