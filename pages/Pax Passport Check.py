@@ -21,7 +21,9 @@ from flight_leg_utils import (
     build_fl3xx_api_config,
     filter_out_subcharter_rows,
     is_customs_leg,
+    leg_countries,
     load_airport_metadata_lookup,
+    normalize_country_code,
     normalize_fl3xx_payload,
     safe_parse_dt,
 )
@@ -34,10 +36,11 @@ st.title("🛂 Pax Passport Check")
 
 st.write(
     """
-    Scan upcoming customs legs for passengers whose passport expiration dates look risky.
-    The tool batches flight searches into 3-day windows, then pulls passenger passport
-    details for each pax leg that crosses an international border. Any passports expiring
-    before your selected cutoff or **after 1 Jan 2036** are flagged for review.
+    Scan upcoming international arrivals into the US for passengers who need attention before
+    customs clearance. The tool batches flight searches into 3-day windows, then pulls passenger
+    passport details and APIS destination addresses. Any passports expiring before your selected
+    cutoff or **after 1 Jan 2036** are flagged for review, along with passengers missing a US
+    address.
     """
 )
 
@@ -50,6 +53,14 @@ EXPIRY_MODE_DAYS = "Days before expiry from flight"
 DATE_RANGE_KEY = "passport_check_date_range"
 DATE_PRESET_KEY = "passport_check_date_preset"
 CUSTOM_DATE_PRESET = "Custom range"
+WEEKEND_PRESET = "Upcoming Saturday through Monday"
+US_COUNTRY_CODES = {"US", "USA", "UNITED STATES", "UNITED STATES OF AMERICA"}
+
+
+def _upcoming_weekend_range(start: date) -> Tuple[date, date]:
+    saturday = start + timedelta(days=(5 - start.weekday()) % 7)
+    monday = saturday + timedelta(days=2)
+    return saturday, monday
 
 
 def _settings_digest(settings: Mapping[str, Any]) -> str:
@@ -89,6 +100,7 @@ def _format_display_date(value: date) -> str:
 
 def _future_date_presets(start: date) -> Dict[str, Tuple[date, date]]:
     return {
+        WEEKEND_PRESET: _upcoming_weekend_range(start),
         "Next week": (start, start + timedelta(days=7)),
         "Next month": (start, start + relativedelta(months=1)),
         "Next 2 months": (start, start + relativedelta(months=2)),
@@ -144,6 +156,12 @@ def _is_pax_leg(leg: Mapping[str, Any]) -> bool:
     if isinstance(pax_refs, Sequence):
         return any(isinstance(entry, Mapping) for entry in pax_refs)
     return False
+
+
+def _arrives_in_us(leg: Mapping[str, Any], airport_lookup: Mapping[str, Mapping[str, Optional[Any]]]) -> bool:
+    _, arr_country = leg_countries(leg, airport_lookup)
+    normalized = normalize_country_code(arr_country)
+    return bool(normalized and normalized in US_COUNTRY_CODES)
 
 
 @st.cache_data(show_spinner=True, ttl=300, hash_funcs={dict: lambda _: "0"})
@@ -222,13 +240,18 @@ def _collect_flagged_passports(
     expiry_mode: str,
     expiry_soon_cutoff: Optional[date],
     expiry_window_days: Optional[int],
-) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[str]]:
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]], List[str]]:
     expiring: list[dict[str, Any]] = []
     missing: list[dict[str, Any]] = []
+    missing_address: list[dict[str, Any]] = []
     errors: list[str] = []
 
     for leg in legs:
-        if not (is_customs_leg(leg, airport_lookup) and _is_pax_leg(leg)):
+        if not (
+            is_customs_leg(leg, airport_lookup)
+            and _arrives_in_us(leg, airport_lookup)
+            and _is_pax_leg(leg)
+        ):
             continue
 
         flight_id = leg.get("flightId") or leg.get("flight_id") or leg.get("id")
@@ -268,6 +291,20 @@ def _collect_flagged_passports(
             cutoff_label = f"Expiring before {_format_display_date(cutoff_date)}"
 
         for pax in passengers:
+            if pax.has_us_address is False:
+                missing_address.append(
+                    {
+                        "Passenger": _format_passenger_name(pax),
+                        "Flag": "Missing US destination address",
+                        "Tail": leg.get("tail"),
+                        "Flight": _build_flight_label(leg),
+                        "Departure (UTC)": dep_time_label,
+                        "Booking": leg.get("bookingIdentifier") or leg.get("bookingReference"),
+                        "Flight ID": str(flight_id),
+                        "Nationality": pax.nationality_iso3,
+                    }
+                )
+
             missing_fields = _missing_passport_fields(pax)
             if missing_fields:
                 missing.append(
@@ -308,7 +345,7 @@ def _collect_flagged_passports(
                 }
             )
 
-    return expiring, missing, errors
+    return expiring, missing, missing_address, errors
 
 
 api_settings = st.secrets.get("fl3xx_api", {})
@@ -319,8 +356,8 @@ if not api_settings:
 settings_digest = _settings_digest(api_settings)
 
 start_default = date.today()
-end_default = start_default + timedelta(days=7)
 future_presets = _future_date_presets(start_default)
+end_default = start_default + timedelta(days=7)
 
 expiry_mode = st.radio(
     "Passport expiry rule",
@@ -333,13 +370,13 @@ with st.form("passport_scan"):
     selected_preset = st.selectbox(
         "Choose a date range",
         preset_labels,
-        index=1,
+        index=1 if WEEKEND_PRESET in preset_labels else 0,
         key=DATE_PRESET_KEY,
     )
     if selected_preset != CUSTOM_DATE_PRESET:
         st.session_state[DATE_RANGE_KEY] = future_presets[selected_preset]
     elif DATE_RANGE_KEY not in st.session_state:
-        st.session_state[DATE_RANGE_KEY] = (start_default, end_default)
+        st.session_state[DATE_RANGE_KEY] = future_presets.get(WEEKEND_PRESET, (start_default, end_default))
 
     date_range = st.date_input(
         "Date range",
@@ -410,7 +447,7 @@ except Exception as exc:  # pragma: no cover - runtime fetch failures
 airport_lookup = load_airport_metadata_lookup()
 
 with st.spinner("Evaluating passport expirations…"):
-    expiring_passports, missing_passports, fetch_errors = _collect_flagged_passports(
+    expiring_passports, missing_passports, missing_addresses, fetch_errors = _collect_flagged_passports(
         legs,
         settings_digest=settings_digest,
         settings=dict(api_settings),
@@ -423,8 +460,16 @@ with st.spinner("Evaluating passport expirations…"):
 summary_cols = st.columns(4)
 summary_cols[0].metric("Legs fetched", fetch_metadata.get("legs_after_filter", 0))
 summary_cols[1].metric(
-    "Customs pax legs scanned",
-    len([leg for leg in legs if is_customs_leg(leg, airport_lookup) and _is_pax_leg(leg)]),
+    "US-arrival customs pax legs scanned",
+    len(
+        [
+            leg
+            for leg in legs
+            if is_customs_leg(leg, airport_lookup)
+            and _arrives_in_us(leg, airport_lookup)
+            and _is_pax_leg(leg)
+        ]
+    ),
 )
 summary_cols[2].metric("Expiring before cutoff", len(expiring_passports))
 summary_cols[3].metric("Missing passport details", len(missing_passports))
@@ -432,14 +477,14 @@ summary_cols[3].metric("Missing passport details", len(missing_passports))
 if fetch_errors:
     st.warning("\n".join(fetch_errors))
 
-if not expiring_passports and not missing_passports:
+if not expiring_passports and not missing_passports and not missing_addresses:
     if expiry_mode == EXPIRY_MODE_DAYS:
         cutoff_label = f"within {expiry_window_days} days of the flight"
     else:
         cutoff_label = f"before {_format_display_date(expiry_soon_cutoff)}"
     st.success(
-        f"No passports expiring {cutoff_label} or after 1 Jan 2036 "
-        "matched the alert thresholds in the selected window."
+        f"No passports expiring {cutoff_label} or after 1 Jan 2036, "
+        "and no missing US addresses, matched the alert thresholds in the selected window."
     )
 else:
     if expiring_passports:
@@ -452,6 +497,10 @@ else:
         st.subheader("Missing passport details")
         st.dataframe(missing_passports, use_container_width=True, hide_index=True)
 
+    if missing_addresses:
+        st.subheader("Missing US destination addresses")
+        st.dataframe(missing_addresses, use_container_width=True, hide_index=True)
+
 if expiry_mode == EXPIRY_MODE_DAYS:
     expiry_caption = f"Passports expiring within {expiry_window_days} days of the flight are flagged."
 else:
@@ -460,5 +509,6 @@ else:
     )
 st.caption(
     f"Flights were retrieved in {CHUNK_DAYS}-day chunks to cover the full date range without API limits. "
-    f"{expiry_caption} Passports expiring after 1 Jan 2036 are flagged."
+    f"{expiry_caption} Passports expiring after 1 Jan 2036 are flagged. "
+    "US arrivals without destination addresses are flagged."
 )
