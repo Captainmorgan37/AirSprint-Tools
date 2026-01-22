@@ -215,6 +215,20 @@ st.markdown(
     .taf-highlight--blue {color:#38bdf8;}
     .tail-header {font-size:1.2rem; margin:0.5rem 0 0.4rem 0; padding-left:0.1rem; color:#e0f2fe;}
     .section-divider {border-bottom:1px solid rgba(148,163,184,0.25); margin:0.75rem 0 1.1rem 0;}
+    .flight-card__rsc {display:inline-block;}
+    .flight-card__rsc summary {cursor:pointer; display:inline-flex; align-items:center; padding:0.18rem 0.55rem;
+                               border-radius:999px; font-size:0.7rem; font-weight:700; letter-spacing:0.04em;
+                               text-transform:uppercase; list-style:none;}
+    .flight-card__rsc summary::-webkit-details-marker {display:none;}
+    .flight-card__rsc--green summary {background:rgba(34,197,94,0.22); color:#bbf7d0;
+                                      border:1px solid rgba(34,197,94,0.55);}
+    .flight-card__rsc--yellow summary {background:rgba(250,204,21,0.2); color:#fef9c3;
+                                       border:1px solid rgba(250,204,21,0.5);}
+    .flight-card__rsc--red summary {background:rgba(248,113,113,0.22); color:#fecaca;
+                                    border:1px solid rgba(248,113,113,0.55);}
+    .flight-card__rsc-body {margin-top:0.4rem; font-size:0.78rem; color:#e2e8f0;}
+    .flight-card__rsc-body ul {margin:0.2rem 0 0.4rem 1.05rem;}
+    .flight-card__rsc-note {font-style:italic; color:#facc15;}
     </style>
     """,
     unsafe_allow_html=True,
@@ -516,6 +530,117 @@ def _is_tailwind_direction(
     if start <= end:
         return start <= wind_dir <= end
     return wind_dir >= start or wind_dir <= end
+
+
+_RSC_LINE_REGEX = re.compile(
+    r"(?:^|\n)\s*(?:E\)\s*)?(RSC\s+\d{2}.*?\.)",
+    re.IGNORECASE | re.DOTALL,
+)
+_RSC_VALUE_REGEX = re.compile(
+    r"RSC\s+\d{2}[LRC]?\s+(\d)\s*(?:/|\s)\s*(\d)\s*(?:/|\s)\s*(\d)",
+    re.IGNORECASE,
+)
+
+
+def _strip_french_translation(notam_text: str) -> str:
+    if not notam_text:
+        return notam_text
+
+    lines = notam_text.splitlines()
+    for idx, line in enumerate(lines):
+        stripped = line.strip()
+        if re.match(r"^FR\s*:", stripped, re.IGNORECASE):
+            return "\n".join(lines[:idx]).rstrip()
+    return notam_text
+
+
+def _extract_rsc_lines(notam_text: str) -> List[str]:
+    matches = []
+    for match in _RSC_LINE_REGEX.finditer(notam_text):
+        cleaned = " ".join(match.group(1).split())
+        if cleaned:
+            matches.append(cleaned)
+    return matches
+
+
+def _summarize_rsc(lines: Sequence[str]) -> Tuple[str, List[str], str]:
+    if not lines:
+        return "yellow", [], "No RSC NOTAMs found."
+
+    has_value = False
+    has_low_digit = False
+    for line in lines:
+        match = _RSC_VALUE_REGEX.search(line)
+        if not match:
+            continue
+        has_value = True
+        digits = [int(value) for value in match.groups()]
+        if any(value < 6 for value in digits):
+            has_low_digit = True
+            break
+
+    if has_low_digit:
+        return "red", list(lines), "RSC below 6/6/6."
+    if has_value:
+        return "green", list(lines), "All RSC values are 6/6/6."
+    return "yellow", list(lines), "RSC NOTAM detected, but format was unexpected."
+
+
+def _arrival_within_rsc_window(
+    arrival_dt: Optional[datetime],
+    now_utc: datetime,
+    *,
+    window_hours: int = 5,
+) -> bool:
+    arrival_utc = _ensure_utc(arrival_dt)
+    if arrival_utc is None:
+        return False
+    return now_utc <= arrival_utc <= now_utc + timedelta(hours=window_hours)
+
+
+@st.cache_data(show_spinner=False, ttl=300)
+def load_cfps_notams(codes: Tuple[str, ...]) -> Tuple[Dict[str, List[str]], List[str]]:
+    results: Dict[str, List[str]] = {}
+    errors: List[str] = []
+    for icao in codes:
+        if not icao or not icao.startswith("C"):
+            continue
+        try:
+            url = "https://plan.navcanada.ca/weather/api/alpha/"
+            params = {
+                "site": icao,
+                "alpha": ["notam"],
+                "notam_choice": "default",
+            }
+            query_params = []
+            for key, value in params.items():
+                if isinstance(value, list):
+                    for entry in value:
+                        query_params.append((key, entry))
+                else:
+                    query_params.append((key, value))
+
+            response = requests.get(url, params=query_params, timeout=20)
+            response.raise_for_status()
+            data = response.json()
+            notams: List[str] = []
+            for entry in data.get("data", []):
+                if entry.get("type") != "notam":
+                    continue
+                text = entry.get("text") or ""
+                try:
+                    notam_json = json.loads(text)
+                    notam_text = notam_json.get("raw", text)
+                except json.JSONDecodeError:
+                    notam_text = text
+                notam_text = _strip_french_translation(notam_text)
+                if notam_text:
+                    notams.append(notam_text)
+            results[icao] = notams
+        except requests.RequestException as exc:
+            results[icao] = []
+            errors.append(f"{icao}: {exc}")
+    return results, errors
 
 
 def _summarise_period(
@@ -973,11 +1098,35 @@ def _build_flight_card(flight: Dict[str, Any], taf_html: str) -> str:
     if flight.get("pax") not in (None, ""):
         badges.append(f"PAX {html.escape(str(flight['pax']))}")
 
+    rsc_status = flight.get("rsc_status")
+    rsc_summary = flight.get("rsc_summary")
+    rsc_lines = flight.get("rsc_lines") or []
+    rsc_note = flight.get("rsc_note") or "No RSC details available."
+    rsc_html = ""
+    if rsc_status:
+        if rsc_lines:
+            rsc_body = (
+                "<ul>"
+                + "".join(f"<li>{html.escape(line)}</li>" for line in rsc_lines)
+                + "</ul>"
+            )
+        else:
+            rsc_body = f"<div class='flight-card__rsc-note'>{html.escape(rsc_note)}</div>"
+        summary_text = f"RSC {rsc_summary}" if rsc_summary else "RSC"
+        rsc_html = (
+            "<details class='flight-card__rsc flight-card__rsc--"
+            f"{html.escape(rsc_status)}'>"
+            f"<summary>{html.escape(summary_text)}</summary>"
+            f"<div class='flight-card__rsc-body'>{rsc_body}</div>"
+            "</details>"
+        )
+
     badge_html = ""
-    if badges:
-        badge_html = "<div class='badge-strip'>" + "".join(
-            f"<span class='badge'>{badge}</span>" for badge in badges
-        ) + "</div>"
+    badge_items: List[str] = [f"<span class='badge'>{badge}</span>" for badge in badges]
+    if rsc_html:
+        badge_items.append(rsc_html)
+    if badge_items:
+        badge_html = "<div class='badge-strip'>" + "".join(badge_items) + "</div>"
 
     runway_html = ""
     longest_runway = flight.get("longest_runway_ft")
@@ -1121,6 +1270,24 @@ except Exception as exc:
     st.warning(f"Unexpected error retrieving TAF data: {exc}")
     taf_reports = {}
 
+now_utc = datetime.now(timezone.utc)
+rsc_airports = sorted(
+    {
+        flight["arrival_airport"]
+        for flight in processed_flights
+        if flight.get("arrival_airport")
+        and str(flight["arrival_airport"]).startswith("C")
+        and _arrival_within_rsc_window(flight.get("arr_dt_utc"), now_utc)
+    }
+)
+
+rsc_notams: Dict[str, List[str]] = {}
+if rsc_airports:
+    rsc_notams, rsc_errors = load_cfps_notams(tuple(rsc_airports))
+    if rsc_errors:
+        for message in rsc_errors:
+            st.warning(f"RSC NOTAM fetch failed: {message}")
+
 for flight in processed_flights:
     station_reports = taf_reports.get(flight["arrival_airport"], []) if flight["arrival_airport"] else []
     report, period = _select_forecast_period(station_reports, flight["arr_dt_utc"])
@@ -1131,6 +1298,34 @@ for flight in processed_flights:
         prior_dt = flight["arr_dt_utc"] - timedelta(hours=1)
         _, prior_period = _select_forecast_period(station_reports, prior_dt)
     flight["taf_prior_period"] = prior_period
+
+    arrival_airport = flight.get("arrival_airport")
+    if arrival_airport and str(arrival_airport).startswith("C"):
+        if _arrival_within_rsc_window(flight.get("arr_dt_utc"), now_utc):
+            notam_texts = rsc_notams.get(arrival_airport, [])
+            rsc_lines: List[str] = []
+            seen = set()
+            for text in notam_texts:
+                for line in _extract_rsc_lines(text):
+                    if line in seen:
+                        continue
+                    seen.add(line)
+                    rsc_lines.append(line)
+            status, lines, note = _summarize_rsc(rsc_lines)
+        else:
+            status = "yellow"
+            lines = []
+            note = "RSC check runs within 5 hours of arrival."
+        if status == "green":
+            summary = "6/6/6"
+        elif status == "red":
+            summary = "<6"
+        else:
+            summary = "?"
+        flight["rsc_status"] = status
+        flight["rsc_lines"] = lines
+        flight["rsc_note"] = note
+        flight["rsc_summary"] = summary
 
 processed_flights.sort(
     key=lambda item: (
