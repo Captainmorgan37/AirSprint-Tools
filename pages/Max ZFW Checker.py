@@ -13,8 +13,6 @@ render_sidebar()
 # --------------------------
 if "aircraft" not in st.session_state:
     st.session_state.aircraft = "CJ2"
-if "season" not in st.session_state:
-    st.session_state.season = "Summer"
 if "pax_override" not in st.session_state:
     st.session_state.pax_override = False
 if "cargo_override" not in st.session_state:
@@ -78,13 +76,21 @@ with cols_top[1]:
     st.caption(f"Auto-detected season from month: **{auto_season}**")
 
 with cols_top[2]:
+    def _mark_season_manual() -> None:
+        st.session_state.season_source = "manual"
+
+    if "season_source" not in st.session_state:
+        st.session_state.season_source = "auto"
+    if st.session_state.season_source == "auto":
+        st.session_state.season = auto_season
+
     # Manual override (default still comes from auto_season)
     season = st.radio(
         "Season (manual override)",
         ["Summer", "Winter"],
-        index=["Summer", "Winter"].index(auto_season),
         horizontal=True,
-        key="season"
+        key="season",
+        on_change=_mark_season_manual,
     )
 
 
@@ -228,7 +234,6 @@ else:
 
 # Footer note
 st.caption("Note: This tool checks pax + cargo against your planning maxima for each tail type and season. It does not compute full ZFW or CG.")
-
 
 
 
