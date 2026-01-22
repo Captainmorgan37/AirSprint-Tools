@@ -493,6 +493,7 @@ with tabs[0]:
         (EXPIRY_MODE_DATE, EXPIRY_MODE_DAYS),
         help="Choose whether to flag based on a fixed cutoff date or days from the flight.",
         key="passport_expiry_mode",
+        index=1,
     )
     with st.form("passport_scan"):
         future_presets = _future_date_presets(start_default)
@@ -599,6 +600,7 @@ with tabs[1]:
         (EXPIRY_MODE_DATE, EXPIRY_MODE_DAYS),
         help="Choose whether to flag based on a fixed cutoff date or days from the flight.",
         key="us_customs_expiry_mode",
+        index=1,
     )
     with st.form("us_customs_scan"):
         us_presets = _future_date_presets(start_default, include_weekend=True)
