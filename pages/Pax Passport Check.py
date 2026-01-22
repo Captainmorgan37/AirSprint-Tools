@@ -501,6 +501,12 @@ def _select_date_range(
         key=date_range_key,
         min_value=start_default,
     )
+    if (
+        selected_preset != CUSTOM_DATE_PRESET
+        and date_range_key in st.session_state
+        and st.session_state[date_range_key] != presets[selected_preset]
+    ):
+        st.session_state[preset_key] = CUSTOM_DATE_PRESET
     if isinstance(date_range, Sequence) and len(date_range) == 2:
         return date_range
     if isinstance(date_range, date):
@@ -561,10 +567,14 @@ def _render_results(
         if missing_passports:
             st.subheader("Missing passport details")
             st.dataframe(missing_passports, use_container_width=True, hide_index=True)
+        else:
+            st.info("No missing passport details were detected in the selected window.")
 
         if missing_addresses:
             st.subheader("Missing US destination addresses")
             st.dataframe(missing_addresses, use_container_width=True, hide_index=True)
+        elif include_us_focus:
+            st.info("No missing US destination addresses were detected in the selected window.")
 
     if expiry_mode == EXPIRY_MODE_DAYS:
         expiry_caption = f"Passports expiring within {expiry_window_days} days of the flight are flagged."
@@ -870,7 +880,7 @@ with tabs[2]:
             date_range_key=CUSTOMS_DATE_RANGE_KEY,
             preset_key=CUSTOMS_DATE_PRESET_KEY,
             presets=customs_presets,
-            default_preset_index=1,
+            default_preset_index=0,
         )
         submitted = st.form_submit_button("Run customs status scan")
 
