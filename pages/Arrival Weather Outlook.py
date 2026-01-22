@@ -1350,9 +1350,13 @@ for flight in processed_flights:
                     seen.add(line)
                     rsc_lines.append(line)
             status, lines, note = _summarize_rsc(rsc_lines)
-            if not within_standard_window and _rsc_has_critical_digits(rsc_lines):
-                status = "critical"
-                note = "RSC includes 0/1 values."
+            if not within_standard_window:
+                if _rsc_has_critical_digits(rsc_lines):
+                    status = "critical"
+                    note = "RSC includes 0/1 values."
+                else:
+                    status = "neutral"
+                    note = "RSC lookahead only highlights 0/1 values."
         else:
             status = "neutral"
             lines = []
