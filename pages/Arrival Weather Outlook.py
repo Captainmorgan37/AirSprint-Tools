@@ -226,6 +226,8 @@ st.markdown(
                                        border:1px solid rgba(250,204,21,0.5);}
     .flight-card__rsc--red summary {background:rgba(248,113,113,0.22); color:#fecaca;
                                     border:1px solid rgba(248,113,113,0.55);}
+    .flight-card__rsc--neutral summary {background:rgba(148,163,184,0.18); color:#e2e8f0;
+                                        border:1px solid rgba(148,163,184,0.35);}
     .flight-card__rsc-body {margin-top:0.4rem; font-size:0.78rem; color:#e2e8f0;}
     .flight-card__rsc-body ul {margin:0.2rem 0 0.4rem 1.05rem;}
     .flight-card__rsc-note {font-style:italic; color:#facc15;}
@@ -1301,7 +1303,12 @@ for flight in processed_flights:
 
     arrival_airport = flight.get("arrival_airport")
     if arrival_airport and str(arrival_airport).startswith("C"):
-        if _arrival_within_rsc_window(flight.get("arr_dt_utc"), now_utc):
+        arrival_actual = _ensure_utc(flight.get("arr_actual_dt_utc"))
+        if arrival_actual is not None and arrival_actual <= now_utc:
+            status = "neutral"
+            lines = []
+            note = "Arrival already landed."
+        elif _arrival_within_rsc_window(flight.get("arr_dt_utc"), now_utc):
             notam_texts = rsc_notams.get(arrival_airport, [])
             rsc_lines: List[str] = []
             seen = set()
@@ -1313,7 +1320,7 @@ for flight in processed_flights:
                     rsc_lines.append(line)
             status, lines, note = _summarize_rsc(rsc_lines)
         else:
-            status = "yellow"
+            status = "neutral"
             lines = []
             note = "RSC check runs within 5 hours of arrival."
         if status == "green":
@@ -1321,7 +1328,7 @@ for flight in processed_flights:
         elif status == "red":
             summary = "<6"
         else:
-            summary = "?"
+            summary = ""
         flight["rsc_status"] = status
         flight["rsc_lines"] = lines
         flight["rsc_note"] = note
