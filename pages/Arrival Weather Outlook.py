@@ -226,6 +226,10 @@ st.markdown(
                                        border:1px solid rgba(250,204,21,0.5);}
     .flight-card__rsc--red summary {background:rgba(248,113,113,0.22); color:#fecaca;
                                     border:1px solid rgba(248,113,113,0.55);}
+    .flight-card__rsc--critical summary {background:rgba(190,18,60,0.3); color:#ffe4e6;
+                                         border:1px solid rgba(251,113,133,0.75);
+                                         box-shadow:0 0 0 2px rgba(251,113,133,0.45),
+                                                    0 6px 18px rgba(190,18,60,0.35);}
     .flight-card__rsc--neutral summary {background:rgba(148,163,184,0.18); color:#e2e8f0;
                                         border:1px solid rgba(148,163,184,0.35);}
     .flight-card__rsc-body {margin-top:0.4rem; font-size:0.78rem; color:#e2e8f0;}
@@ -586,6 +590,17 @@ def _summarize_rsc(lines: Sequence[str]) -> Tuple[str, List[str], str]:
     if has_value:
         return "green", list(lines), "All RSC values are 6/6/6."
     return "yellow", list(lines), "RSC NOTAM detected, but format was unexpected."
+
+
+def _rsc_has_critical_digits(lines: Sequence[str]) -> bool:
+    for line in lines:
+        match = _RSC_VALUE_REGEX.search(line)
+        if not match:
+            continue
+        digits = [int(value) for value in match.groups()]
+        if any(value in {0, 1} for value in digits):
+            return True
+    return False
 
 
 def _arrival_within_rsc_window(
@@ -1273,13 +1288,19 @@ except Exception as exc:
     taf_reports = {}
 
 now_utc = datetime.now(timezone.utc)
+RSC_STANDARD_WINDOW_HOURS = 5
+RSC_LOOKAHEAD_HOURS = 24
 rsc_airports = sorted(
     {
         flight["arrival_airport"]
         for flight in processed_flights
         if flight.get("arrival_airport")
         and str(flight["arrival_airport"]).startswith("C")
-        and _arrival_within_rsc_window(flight.get("arr_dt_utc"), now_utc)
+        and _arrival_within_rsc_window(
+            flight.get("arr_dt_utc"),
+            now_utc,
+            window_hours=RSC_LOOKAHEAD_HOURS,
+        )
     }
 )
 
@@ -1304,11 +1325,21 @@ for flight in processed_flights:
     arrival_airport = flight.get("arrival_airport")
     if arrival_airport and str(arrival_airport).startswith("C"):
         arrival_actual = _ensure_utc(flight.get("arr_actual_dt_utc"))
+        within_standard_window = _arrival_within_rsc_window(
+            flight.get("arr_dt_utc"),
+            now_utc,
+            window_hours=RSC_STANDARD_WINDOW_HOURS,
+        )
+        within_lookahead_window = _arrival_within_rsc_window(
+            flight.get("arr_dt_utc"),
+            now_utc,
+            window_hours=RSC_LOOKAHEAD_HOURS,
+        )
         if arrival_actual is not None and arrival_actual <= now_utc:
             status = "neutral"
             lines = []
             note = "Arrival already landed."
-        elif _arrival_within_rsc_window(flight.get("arr_dt_utc"), now_utc):
+        elif within_standard_window or within_lookahead_window:
             notam_texts = rsc_notams.get(arrival_airport, [])
             rsc_lines: List[str] = []
             seen = set()
@@ -1319,12 +1350,21 @@ for flight in processed_flights:
                     seen.add(line)
                     rsc_lines.append(line)
             status, lines, note = _summarize_rsc(rsc_lines)
+            if not within_standard_window:
+                if _rsc_has_critical_digits(rsc_lines):
+                    status = "critical"
+                    note = "RSC includes 0/1 values."
+                else:
+                    status = "neutral"
+                    note = "RSC lookahead only highlights 0/1 values."
         else:
             status = "neutral"
             lines = []
-            note = "RSC check runs within 5 hours of arrival."
+            note = "RSC check runs within 24 hours of arrival."
         if status == "green":
             summary = "6/6/6"
+        elif status == "critical":
+            summary = "0/1"
         elif status == "red":
             summary = "<6"
         else:
