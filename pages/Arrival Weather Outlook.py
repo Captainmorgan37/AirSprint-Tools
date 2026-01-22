@@ -537,7 +537,7 @@ _RSC_LINE_REGEX = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 _RSC_VALUE_REGEX = re.compile(
-    r"RSC\s+\d{2}\s+(\d)\s*/\s*(\d)\s*/\s*(\d)",
+    r"RSC\s+\d{2}[LRC]?\s+(\d)\s*(?:/|\s)\s*(\d)\s*(?:/|\s)\s*(\d)",
     re.IGNORECASE,
 )
 
