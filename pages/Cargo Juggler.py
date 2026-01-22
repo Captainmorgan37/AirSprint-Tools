@@ -19,6 +19,13 @@ render_sidebar()
 st.title("Aircraft Cargo Fit Checker")
 
 st.markdown(
+    "ℹ️ This tool is meant for determining available space in the cargo hold for baggage. "
+    "It is not measuring weight capacity. For ZFW calculations with baggage weight see the "
+    "Max ZFW Checker app."
+)
+st.page_link("pages/Max ZFW Checker.py", label="Max ZFW Checker", icon="🧮")
+
+st.markdown(
     "⚠️ **Disclaimer:** This tool provides an *estimated* packing feasibility only. "
     "Actual results may vary depending on actual baggage size, materials, fullness, and shape. "
     )
