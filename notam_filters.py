@@ -26,6 +26,11 @@ _RUNWAY_KEYWORDS: tuple[str, ...] = (
     "RUNWAYS",
 )
 
+# Keywords that indicate runway surface condition (RSC) data is present.
+_RSC_KEYWORDS: tuple[str, ...] = (
+    "RSC",
+)
+
 
 _CLOSURE_RANGE_RE = re.compile(r"closed[^0-9]*?(\d{3,4})[-–](\d{3,4})", re.IGNORECASE)
 
@@ -78,8 +83,10 @@ def is_taxiway_only_notam(notam_text: str | None) -> bool:
     """Return ``True`` when a NOTAM only contains taxiway information.
 
     A NOTAM is considered taxiway-only when at least one taxiway keyword is
-    present and no runway keywords are found.  Empty or ``None`` values are
-    treated as not taxiway-only so they remain visible by default.
+    present and no runway keywords are found. RSC (runway surface condition)
+    NOTAMs are always retained even if taxiway keywords appear. Empty or
+    ``None`` values are treated as not taxiway-only so they remain visible by
+    default.
     """
 
     if not notam_text:
@@ -89,6 +96,10 @@ def is_taxiway_only_notam(notam_text: str | None) -> bool:
 
     has_taxiway_reference = _contains_any(text_upper, _TAXIWAY_KEYWORDS)
     if not has_taxiway_reference:
+        return False
+
+    has_rsc_reference = _contains_any(text_upper, _RSC_KEYWORDS)
+    if has_rsc_reference:
         return False
 
     has_runway_reference = _contains_any(text_upper, _RUNWAY_KEYWORDS)
