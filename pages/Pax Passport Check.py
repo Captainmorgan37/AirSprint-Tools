@@ -14,6 +14,7 @@ from fl3xx_api import (
     extract_passengers_from_pax_details,
     fetch_flights,
     fetch_flight_pax_details,
+    fetch_preflight,
     backfill_missing_passenger_passports,
 )
 from flight_leg_utils import (
@@ -54,6 +55,10 @@ WEEKEND_PRESET = "Upcoming Saturday through Monday"
 US_COUNTRY_CODES = {"US", "USA", "UNITED STATES", "UNITED STATES OF AMERICA"}
 US_DATE_RANGE_KEY = "passport_check_us_date_range"
 US_DATE_PRESET_KEY = "passport_check_us_date_preset"
+CUSTOMS_DATE_RANGE_KEY = "passport_check_customs_date_range"
+CUSTOMS_DATE_PRESET_KEY = "passport_check_customs_date_preset"
+CUSTOMS_OK_STATUSES = {"OK", "NR"}
+CUSTOMS_ACCOUNT_KEYS = ("accountName", "account", "account_name")
 
 
 def _upcoming_weekend_range(start: date) -> Tuple[date, date]:
@@ -220,6 +225,17 @@ def _load_passengers(
     return passengers
 
 
+@st.cache_data(show_spinner=False, ttl=300, hash_funcs={dict: lambda _: "0"})
+def _load_preflight(
+    settings_digest: str,
+    settings: Dict[str, Any],
+    flight_id: str,
+) -> Mapping[str, Any]:
+    _ = settings_digest
+    config = build_fl3xx_api_config(settings)
+    return fetch_preflight(config, flight_id)
+
+
 def _extract_dep_time(leg: Mapping[str, Any]) -> Optional[datetime]:
     dep_raw = leg.get("dep_time") or leg.get("departureDate") or leg.get("departureDateUTC")
     if not dep_raw:
@@ -237,6 +253,104 @@ def _build_flight_label(leg: Mapping[str, Any]) -> str:
     dep = str(leg.get("departure_airport") or "?").upper()
     arr = str(leg.get("arrival_airport") or "?").upper()
     return f"{dep} → {arr}"
+
+
+def _find_mapping_by_key(payload: Any, key: str) -> Optional[Mapping[str, Any]]:
+    if isinstance(payload, Mapping):
+        value = payload.get(key)
+        if isinstance(value, Mapping):
+            return value
+        for entry in payload.values():
+            found = _find_mapping_by_key(entry, key)
+            if found is not None:
+                return found
+    elif isinstance(payload, Sequence) and not isinstance(payload, (str, bytes)):
+        for entry in payload:
+            found = _find_mapping_by_key(entry, key)
+            if found is not None:
+                return found
+    return None
+
+
+def _extract_account_label(leg: Mapping[str, Any]) -> str:
+    for key in CUSTOMS_ACCOUNT_KEYS:
+        value = leg.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        if isinstance(value, Mapping):
+            nested_value = value.get("name") or value.get("accountName") or value.get("account")
+            if isinstance(nested_value, str) and nested_value.strip():
+                return nested_value.strip()
+    return "—"
+
+
+def _extract_customs_status(payload: Any, detail_keys: Sequence[str]) -> Optional[str]:
+    for key in detail_keys:
+        details = _find_mapping_by_key(payload, key)
+        if details is None:
+            continue
+        services = details.get("hndlgAndSvcs")
+        if not isinstance(services, Mapping):
+            return None
+        status = services.get("cstm")
+        if status is None:
+            return None
+        return str(status)
+    return None
+
+
+def _is_customs_status_ok(status: Optional[str]) -> bool:
+    return status in CUSTOMS_OK_STATUSES
+
+
+def _collect_customs_statuses(
+    legs: Iterable[Mapping[str, Any]],
+    *,
+    settings_digest: str,
+    settings: Dict[str, Any],
+    airport_lookup: Mapping[str, Mapping[str, Optional[Any]]],
+) -> Tuple[List[Dict[str, Any]], List[str]]:
+    rows: list[dict[str, Any]] = []
+    errors: list[str] = []
+
+    for leg in legs:
+        if not (is_customs_leg(leg, airport_lookup) and _is_pax_leg(leg)):
+            continue
+
+        flight_id = leg.get("flightId") or leg.get("flight_id") or leg.get("id")
+        if not flight_id:
+            errors.append(f"Missing flight ID for {leg.get('tail', 'Unknown tail')} { _build_flight_label(leg)}")
+            continue
+
+        try:
+            preflight_payload = _load_preflight(settings_digest, settings, str(flight_id))
+        except Exception as exc:  # pragma: no cover - runtime fetch failures
+            errors.append(f"Unable to load preflight for flight {flight_id}: {exc}")
+            continue
+
+        dep_dt = _extract_dep_time(leg)
+        dep_time_label = dep_dt.isoformat().replace("+00:00", "Z") if dep_dt else "Unknown"
+        base_row = {
+            "Account": _extract_account_label(leg),
+            "Tail": leg.get("tail"),
+            "Flight": _build_flight_label(leg),
+            "Departure (UTC)": dep_time_label,
+            "Booking": leg.get("bookingIdentifier") or leg.get("bookingReference"),
+            "Flight ID": str(flight_id),
+        }
+
+        departure_status = _extract_customs_status(preflight_payload, ("details", "detailsDeparture"))
+        arrival_status = _extract_customs_status(preflight_payload, ("detailsArrival",))
+        if not _is_customs_status_ok(departure_status) or not _is_customs_status_ok(arrival_status):
+            rows.append(
+                {
+                    **base_row,
+                    "Departure customs status": departure_status or "Missing",
+                    "Arrival customs status": arrival_status or "Missing",
+                }
+            )
+
+    return rows, errors
 
 
 def _collect_flagged_passports(
@@ -387,6 +501,12 @@ def _select_date_range(
         key=date_range_key,
         min_value=start_default,
     )
+    if (
+        selected_preset != CUSTOM_DATE_PRESET
+        and date_range_key in st.session_state
+        and st.session_state[date_range_key] != presets[selected_preset]
+    ):
+        st.session_state[preset_key] = CUSTOM_DATE_PRESET
     if isinstance(date_range, Sequence) and len(date_range) == 2:
         return date_range
     if isinstance(date_range, date):
@@ -447,10 +567,14 @@ def _render_results(
         if missing_passports:
             st.subheader("Missing passport details")
             st.dataframe(missing_passports, use_container_width=True, hide_index=True)
+        else:
+            st.info("No missing passport details were detected in the selected window.")
 
         if missing_addresses:
             st.subheader("Missing US destination addresses")
             st.dataframe(missing_addresses, use_container_width=True, hide_index=True)
+        elif include_us_focus:
+            st.info("No missing US destination addresses were detected in the selected window.")
 
     if expiry_mode == EXPIRY_MODE_DAYS:
         expiry_caption = f"Passports expiring within {expiry_window_days} days of the flight are flagged."
@@ -474,7 +598,7 @@ if not api_settings:
 
 settings_digest = _settings_digest(api_settings)
 
-tabs = st.tabs(["Passport expirations", "US customs readiness"])
+tabs = st.tabs(["Passport expirations", "US customs readiness", "Customs tab status"])
 start_default = date.today()
 end_default = start_default + timedelta(days=7)
 
@@ -737,4 +861,82 @@ with tabs[1]:
                     expiry_mode=expiry_mode,
                     expiry_soon_cutoff=expiry_soon_cutoff,
                     expiry_window_days=expiry_window_days,
+                )
+
+with tabs[2]:
+    st.subheader("Customs tab status")
+    st.write(
+        """
+        Review FL3XX preflight customs checklist statuses for international passenger legs.
+        Each flight is evaluated for departure and arrival customs readiness, and any status
+        that is not **OK** or **NR** will be flagged for attention.
+        """
+    )
+    with st.form("customs_tab_scan"):
+        customs_presets = _future_date_presets(start_default)
+        start_date, end_date = _select_date_range(
+            start_default=start_default,
+            end_default=start_default + timedelta(days=3),
+            date_range_key=CUSTOMS_DATE_RANGE_KEY,
+            preset_key=CUSTOMS_DATE_PRESET_KEY,
+            presets=customs_presets,
+            default_preset_index=0,
+        )
+        submitted = st.form_submit_button("Run customs status scan")
+
+    if not submitted:
+        st.info("Choose a date range and run the scan to check customs statuses.")
+    else:
+        if start_date is None or end_date is None:
+            st.error("Please choose a valid start and end date.")
+        elif start_date > end_date:
+            st.error("The start date must be on or before the end date.")
+        else:
+            try:
+                with st.spinner("Fetching flights…"):
+                    legs, fetch_metadata = _load_legs(
+                        settings_digest,
+                        dict(api_settings),
+                        from_date=start_date,
+                        to_date=end_date,
+                    )
+            except FlightDataError as exc:
+                st.error(str(exc))
+            except Exception as exc:  # pragma: no cover - runtime fetch failures
+                st.error(f"Unable to load flights: {exc}")
+            else:
+                airport_lookup = load_airport_metadata_lookup()
+                international_legs = [
+                    leg
+                    for leg in legs
+                    if is_customs_leg(leg, airport_lookup) and _is_pax_leg(leg)
+                ]
+                with st.spinner("Evaluating customs status…"):
+                    customs_rows, errors = _collect_customs_statuses(
+                        international_legs,
+                        settings_digest=settings_digest,
+                        settings=dict(api_settings),
+                        airport_lookup=airport_lookup,
+                    )
+                summary_cols = st.columns(4)
+                summary_cols[0].metric("Legs fetched", fetch_metadata.get("legs_after_filter", 0))
+                summary_cols[1].metric("International pax legs scanned", len(international_legs))
+                summary_cols[2].metric("Flights flagged", len(customs_rows))
+                summary_cols[3].metric(
+                    "Flights cleared",
+                    max(len(international_legs) - len(customs_rows), 0),
+                )
+
+                if errors:
+                    st.warning("\n".join(errors))
+
+                st.subheader("Customs status (departure + arrival)")
+                if customs_rows:
+                    st.dataframe(customs_rows, use_container_width=True, hide_index=True)
+                else:
+                    st.success("No customs statuses require attention.")
+
+                st.caption(
+                    "Customs statuses are pulled from each flight's preflight checklist. "
+                    "Only statuses marked OK or NR are treated as cleared; all others are flagged."
                 )
