@@ -174,6 +174,23 @@ def test_prefers_booking_reference_over_identifier():
     assert result.rows[0]["booking_reference"] == "BOOK-5"
 
 
+def test_upgrade_validation_formatted_output_filters_actionable_rows():
+    report = MorningReportResult(
+        code="16.1.9",
+        title="Upgrade Workflow Validation Report",
+        header_label="Legacy Upgrade Workflow Validation",
+        rows=[
+            {"line": "MATCH-1", "workflow_matches_upgrade": True},
+            {"line": "MATCH-2", "workflow_matches_upgrade": False},
+        ],
+    )
+
+    output = report.formatted_output()
+
+    assert "MATCH-2" in output
+    assert "MATCH-1" not in output
+
+
 def test_warns_when_booking_reference_missing():
     dep = dt.datetime(2024, 9, 1, 12, 0)
     row = _leg(dep=dep, booking_reference=None, aircraft_category="E545")

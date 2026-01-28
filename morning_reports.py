@@ -67,10 +67,6 @@ class MorningReportResult:
         return self.match_count > 0
 
     def formatted_output(self) -> str:
-        if not self.has_matches:
-            lines = ["No Results Found"]
-            return "\n".join(lines)
-
         if self.code == "16.1.10":
             return _format_upgraded_flights_block(self)
         if self.code == "16.1.6":
@@ -81,6 +77,12 @@ class MorningReportResult:
             return _format_hub_duty_start_block(self)
         if self.code == "16.1.11":
             return _format_fbo_disconnect_block(self)
+        if self.code == "16.1.9":
+            return _format_upgrade_validation_block(self)
+
+        if not self.has_matches:
+            lines = ["No Results Found"]
+            return "\n".join(lines)
 
         lines = ["Results Found:", self.header_label]
         lines.extend(row.get("line", "") for row in self.rows)
@@ -193,6 +195,17 @@ def _format_fbo_disconnect_block(report: MorningReportResult) -> str:
         handler_missing_rows,
     )
 
+    return "\n".join(lines)
+
+
+def _format_upgrade_validation_block(report: MorningReportResult) -> str:
+    actionable_rows = [
+        row for row in report.rows if not row.get("workflow_matches_upgrade")
+    ]
+    if not actionable_rows:
+        return "No Results Found"
+    lines = ["Results Found:", report.header_label]
+    lines.extend(row.get("line", "") for row in actionable_rows)
     return "\n".join(lines)
 
 
