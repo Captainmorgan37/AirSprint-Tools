@@ -625,7 +625,7 @@ def _extract_ficon_lines(notam_text: str) -> List[str]:
 
 def _summarize_ficon(lines: Sequence[str]) -> Tuple[str, List[str], str]:
     if not lines:
-        return "yellow", [], "No FICON NOTAMs found."
+        return "neutral", [], "No FICON NOTAMs found."
 
     has_value = False
     has_low_digit = False
