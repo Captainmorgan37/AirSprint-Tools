@@ -67,10 +67,6 @@ class MorningReportResult:
         return self.match_count > 0
 
     def formatted_output(self) -> str:
-        if not self.has_matches:
-            lines = ["No Results Found"]
-            return "\n".join(lines)
-
         if self.code == "16.1.10":
             return _format_upgraded_flights_block(self)
         if self.code == "16.1.6":
@@ -81,6 +77,12 @@ class MorningReportResult:
             return _format_hub_duty_start_block(self)
         if self.code == "16.1.11":
             return _format_fbo_disconnect_block(self)
+        if self.code == "16.1.9":
+            return _format_upgrade_validation_block(self)
+
+        if not self.has_matches:
+            lines = ["No Results Found"]
+            return "\n".join(lines)
 
         lines = ["Results Found:", self.header_label]
         lines.extend(row.get("line", "") for row in self.rows)
@@ -98,6 +100,7 @@ class MorningReportRun:
     leg_count: int
     metadata: Dict[str, Any] = field(default_factory=dict)
     normalization_stats: Dict[str, Any] = field(default_factory=dict)
+    normalized_rows: List[Mapping[str, Any]] = field(default_factory=list)
 
     def report_map(self) -> Dict[str, MorningReportResult]:
         return {report.code: report for report in self.reports}
@@ -192,6 +195,17 @@ def _format_fbo_disconnect_block(report: MorningReportResult) -> str:
         handler_missing_rows,
     )
 
+    return "\n".join(lines)
+
+
+def _format_upgrade_validation_block(report: MorningReportResult) -> str:
+    actionable_rows = [
+        row for row in report.rows if not row.get("workflow_matches_upgrade")
+    ]
+    if not actionable_rows:
+        return "No Results Found"
+    lines = ["Results Found:", report.header_label]
+    lines.extend(row.get("line", "") for row in actionable_rows)
     return "\n".join(lines)
 
 
@@ -576,6 +590,7 @@ _EXPECTED_EMPTY_LEG_ACCOUNT = "AIRSPRINT INC."
 _OCS_ACCOUNT_NAME = "AIRSPRINT INC."
 
 _LEGACY_AIRCRAFT_CATEGORIES = {"E550", "E545"}
+_LEGACY_AIRCRAFT_TOKENS = ("E550", "E545", "LEGACY", "PRAETOR", "EMB", "EMBRAER")
 
 _RUNWAY_ALERT_THRESHOLD_FT = 4900
 
@@ -749,6 +764,7 @@ def run_morning_reports(
         leg_count=len(normalized_rows),
         metadata=metadata,
         normalization_stats=normalization_stats,
+        normalized_rows=normalized_rows,
     )
 
 
@@ -1746,7 +1762,7 @@ def _build_upgrade_workflow_validation_report(
     try:
         for row in _sort_rows(rows):
             aircraft_category = _extract_aircraft_category(row)
-            if not aircraft_category or aircraft_category.upper() not in _LEGACY_AIRCRAFT_CATEGORIES:
+            if not _is_legacy_aircraft_category(aircraft_category):
                 continue
 
             booking_reference = _extract_booking_reference(row)
@@ -2528,7 +2544,6 @@ def _row_priority_info(row: Mapping[str, Any]) -> Tuple[bool, Optional[str]]:
 
 def _extract_booking_reference(row: Mapping[str, Any]) -> Optional[str]:
     for key in (
-        "bookingIdentifier",
         "bookingReference",
         "bookingCode",
         "bookingNumber",
@@ -2536,6 +2551,7 @@ def _extract_booking_reference(row: Mapping[str, Any]) -> Optional[str]:
         "booking_id",
         "bookingID",
         "bookingRef",
+        "bookingIdentifier",
         "booking",
         "salesOrderNumber",
         "salesOrder",
@@ -2978,6 +2994,15 @@ def _extract_aircraft_category(row: Mapping[str, Any]) -> Optional[str]:
     return None
 
 
+def _is_legacy_aircraft_category(category: Optional[str]) -> bool:
+    if not category:
+        return False
+    normalized = category.upper()
+    if normalized in _LEGACY_AIRCRAFT_CATEGORIES:
+        return True
+    return any(token in normalized for token in _LEGACY_AIRCRAFT_TOKENS)
+
+
 def _extract_assigned_aircraft_type(row: Mapping[str, Any]) -> Optional[str]:
     for key in (
         "assignedAircraftType",
@@ -3270,7 +3295,7 @@ _NON_CJ2_REQUEST_PATTERNS = tuple(
 
 _CJ_REQUEST_PATTERNS = (
     re.compile(
-        rf"\bREQUESTING\b{_REQUEST_ARTICLE_PATTERN}[^A-Z0-9]*(CJ(?:[-\s]?\d)?\+?)",
+        rf"\bREQUESTING\b{_REQUEST_ARTICLE_PATTERN}[^A-Z0-9]*(CJ\s+FLEET|CJ(?:[-\s]?\d)?\+?)",
         re.IGNORECASE,
     ),
     re.compile(
@@ -3309,6 +3334,8 @@ def _planning_note_cj_request_label(note: Optional[str]) -> Optional[str]:
             continue
         cleaned = re.sub(r"[^A-Z0-9]+", "", group.upper())
         if cleaned.startswith("CJ"):
+            if "FLEET" in cleaned:
+                return "CJ Fleet"
             if len(cleaned) > 2:
                 return cleaned
             return "CJ"
