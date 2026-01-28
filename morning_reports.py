@@ -98,6 +98,7 @@ class MorningReportRun:
     leg_count: int
     metadata: Dict[str, Any] = field(default_factory=dict)
     normalization_stats: Dict[str, Any] = field(default_factory=dict)
+    normalized_rows: List[Mapping[str, Any]] = field(default_factory=list)
 
     def report_map(self) -> Dict[str, MorningReportResult]:
         return {report.code: report for report in self.reports}
@@ -750,6 +751,7 @@ def run_morning_reports(
         leg_count=len(normalized_rows),
         metadata=metadata,
         normalization_stats=normalization_stats,
+        normalized_rows=normalized_rows,
     )
 
 
