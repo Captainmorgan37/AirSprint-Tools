@@ -343,8 +343,8 @@ def _build_upgrade_line(row: Mapping[str, Any]) -> str:
     tail_value = row.get("tail") or "Unknown Tail"
     tail = str(tail_value).strip() or "Unknown Tail"
     booking = (
-        row.get("booking_reference")
-        or row.get("booking_identifier")
+        row.get("booking_identifier")
+        or row.get("booking_reference")
         or row.get("quote_id")
         or "Unknown Booking"
     )
@@ -881,8 +881,8 @@ def _build_ocs_pax_report(
 
             base_parts = [
                 formatted.get("date") or "Unknown Date",
-                formatted.get("booking_reference")
-                or formatted.get("bookingIdentifier")
+                formatted.get("bookingIdentifier")
+                or formatted.get("booking_reference")
                 or formatted.get("leg_id")
                 or "Unknown Flight",
                 formatted.get("account_name") or "Unknown Account",
@@ -2544,6 +2544,7 @@ def _row_priority_info(row: Mapping[str, Any]) -> Tuple[bool, Optional[str]]:
 
 def _extract_booking_reference(row: Mapping[str, Any]) -> Optional[str]:
     for key in (
+        "bookingIdentifier",
         "bookingReference",
         "bookingCode",
         "bookingNumber",
@@ -2551,7 +2552,6 @@ def _extract_booking_reference(row: Mapping[str, Any]) -> Optional[str]:
         "booking_id",
         "bookingID",
         "bookingRef",
-        "bookingIdentifier",
         "booking",
         "salesOrderNumber",
         "salesOrder",
