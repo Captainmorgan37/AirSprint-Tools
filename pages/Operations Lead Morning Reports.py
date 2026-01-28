@@ -71,6 +71,55 @@ def _build_expected_reports(
     return ordered_reports, missing_codes
 
 
+def _matches_any_value(value: Optional[str], *candidates: Optional[object]) -> bool:
+    if not value:
+        return False
+    needle = value.strip().lower()
+    return any(
+        candidate is not None and str(candidate).strip().lower() == needle
+        for candidate in candidates
+    )
+
+
+def _filter_normalized_rows(
+    rows: Sequence[Mapping[str, object]],
+    *,
+    flight_id: Optional[str],
+    booking_reference: Optional[str],
+    tail: Optional[str],
+) -> List[Mapping[str, object]]:
+    if not any([flight_id, booking_reference, tail]):
+        return []
+
+    matches: List[Mapping[str, object]] = []
+    for row in rows:
+        if flight_id and not _matches_any_value(
+            flight_id,
+            row.get("flightId"),
+            row.get("flight_id"),
+            row.get("flightID"),
+            row.get("flightid"),
+        ):
+            continue
+        if booking_reference and not _matches_any_value(
+            booking_reference,
+            row.get("bookingReference"),
+            row.get("booking_reference"),
+            row.get("bookingRef"),
+            row.get("booking_reference_id"),
+        ):
+            continue
+        if tail and not _matches_any_value(
+            tail,
+            row.get("tail"),
+            row.get("registrationNumber"),
+            row.get("aircraft"),
+        ):
+            continue
+        matches.append(row)
+    return matches
+
+
 st.title("📋 Operations Lead Morning Reports")
 
 
@@ -265,6 +314,28 @@ def _render_results():
 
     with st.expander("Fetch metadata", expanded=False):
         st.json(metadata_payload)
+
+    with st.expander("Debug normalized rows", expanded=False):
+        st.caption(
+            "Filter the normalized FL3XX rows by flight ID, booking reference, "
+            "or tail to troubleshoot why a leg did not appear in a report."
+        )
+        flight_id = st.text_input("Flight ID", value="")
+        booking_reference = st.text_input("Booking Reference / Quote ID", value="")
+        tail = st.text_input("Tail / Registration", value="")
+        filtered_rows = _filter_normalized_rows(
+            run.normalized_rows,
+            flight_id=flight_id or None,
+            booking_reference=booking_reference or None,
+            tail=tail or None,
+        )
+        if not any([flight_id, booking_reference, tail]):
+            st.info("Enter a flight ID, booking reference, or tail to show matches.")
+        elif not filtered_rows:
+            st.warning("No normalized rows matched the filters provided.")
+        else:
+            st.success(f"Matched {len(filtered_rows)} normalized row(s).")
+            st.json(filtered_rows)
 
     report_tabs = st.tabs([report.title for report in display_reports])
     for tab, report in zip(report_tabs, display_reports):
