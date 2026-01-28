@@ -2531,7 +2531,6 @@ def _row_priority_info(row: Mapping[str, Any]) -> Tuple[bool, Optional[str]]:
 
 def _extract_booking_reference(row: Mapping[str, Any]) -> Optional[str]:
     for key in (
-        "bookingIdentifier",
         "bookingReference",
         "bookingCode",
         "bookingNumber",
@@ -2539,6 +2538,7 @@ def _extract_booking_reference(row: Mapping[str, Any]) -> Optional[str]:
         "booking_id",
         "bookingID",
         "bookingRef",
+        "bookingIdentifier",
         "booking",
         "salesOrderNumber",
         "salesOrder",

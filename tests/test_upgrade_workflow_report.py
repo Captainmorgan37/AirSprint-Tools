@@ -152,6 +152,28 @@ def test_detects_cj_fleet_request_label():
     assert result.rows[0]["request_label"] == "CJ Fleet"
 
 
+def test_prefers_booking_reference_over_identifier():
+    dep = dt.datetime(2024, 8, 14, 9, 0)
+    row = _leg(dep=dep, booking_reference="BOOK-5", aircraft_category="E545")
+    row["bookingIdentifier"] = "KORUM"
+
+    payload_map = {
+        "BOOK-5": {
+            "planningNotes": "24-hour Infinity Embraer owner requesting CJ Fleet",
+            "departureDateUTC": iso(dep),
+        }
+    }
+
+    result = _build_upgrade_workflow_validation_report(
+        [row],
+        Fl3xxApiConfig(),
+        fetch_leg_details_fn=_stub_fetch(payload_map),
+    )
+
+    assert result.metadata["match_count"] == 1
+    assert result.rows[0]["booking_reference"] == "BOOK-5"
+
+
 def test_warns_when_booking_reference_missing():
     dep = dt.datetime(2024, 9, 1, 12, 0)
     row = _leg(dep=dep, booking_reference=None, aircraft_category="E545")
