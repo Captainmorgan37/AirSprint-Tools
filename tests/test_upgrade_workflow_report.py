@@ -125,6 +125,33 @@ def test_includes_praetor_aircraft_category():
     assert result.rows[0]["request_label"] == "CJ3"
 
 
+def test_detects_cj_fleet_request_label():
+    dep = dt.datetime(2024, 8, 12, 11, 0)
+    row = _leg(dep=dep, booking_reference="BOOK-4", aircraft_category="E545")
+
+    payload_map = {
+        "BOOK-4": {
+            "planningNotes": "24-hour Infinity Embraer owner requesting CJ Fleet",
+            "departureDateUTC": iso(dep),
+        }
+    }
+
+    result = _build_upgrade_workflow_validation_report(
+        [row],
+        Fl3xxApiConfig(),
+        fetch_leg_details_fn=_stub_fetch(payload_map),
+    )
+
+    assert result.metadata == {
+        "match_count": 1,
+        "inspected_legs": 1,
+        "flagged_requests": 1,
+    }
+    assert len(result.rows) == 1
+    assert result.rows[0]["booking_reference"] == "BOOK-4"
+    assert result.rows[0]["request_label"] == "CJ Fleet"
+
+
 def test_warns_when_booking_reference_missing():
     dep = dt.datetime(2024, 9, 1, 12, 0)
     row = _leg(dep=dep, booking_reference=None, aircraft_category="E545")

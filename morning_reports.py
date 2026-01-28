@@ -3280,7 +3280,7 @@ _NON_CJ2_REQUEST_PATTERNS = tuple(
 
 _CJ_REQUEST_PATTERNS = (
     re.compile(
-        rf"\bREQUESTING\b{_REQUEST_ARTICLE_PATTERN}[^A-Z0-9]*(CJ(?:[-\s]?\d)?\+?)",
+        rf"\bREQUESTING\b{_REQUEST_ARTICLE_PATTERN}[^A-Z0-9]*(CJ\s+FLEET|CJ(?:[-\s]?\d)?\+?)",
         re.IGNORECASE,
     ),
     re.compile(
@@ -3319,6 +3319,8 @@ def _planning_note_cj_request_label(note: Optional[str]) -> Optional[str]:
             continue
         cleaned = re.sub(r"[^A-Z0-9]+", "", group.upper())
         if cleaned.startswith("CJ"):
+            if "FLEET" in cleaned:
+                return "CJ Fleet"
             if len(cleaned) > 2:
                 return cleaned
             return "CJ"
