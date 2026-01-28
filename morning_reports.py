@@ -2570,6 +2570,7 @@ def _row_priority_info(row: Mapping[str, Any]) -> Tuple[bool, Optional[str]]:
 
 def _extract_booking_reference(row: Mapping[str, Any]) -> Optional[str]:
     for key in (
+        "bookingIdentifier",
         "bookingReference",
         "bookingCode",
         "bookingNumber",
