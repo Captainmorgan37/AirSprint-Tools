@@ -1766,9 +1766,12 @@ def _build_upgrade_workflow_validation_report(
                 continue
 
             booking_reference = _extract_booking_reference(row)
-            if not booking_reference:
+            quote_id = _extract_quote_identifier(row)
+            lookup_id = quote_id or booking_reference
+            if not lookup_id:
                 warnings.append(
-                    "Skipping upgrade workflow validation due to missing booking reference "
+                    "Skipping upgrade workflow validation due to missing quote identifier "
+                    "or booking reference "
                     f"for leg {_extract_leg_id(row) or 'unknown'}"
                 )
                 continue
@@ -1778,20 +1781,20 @@ def _build_upgrade_workflow_validation_report(
             if session is None:
                 session = requests.Session()
 
-            if booking_reference not in detail_cache:
+            if lookup_id not in detail_cache:
                 try:
-                    payload = fetch_leg_details_fn(
-                        config, booking_reference, session=session
-                    )
+                    payload = fetch_leg_details_fn(config, lookup_id, session=session)
                 except Exception as exc:  # pragma: no cover - defensive path
                     warnings.append(
-                        f"Failed to fetch leg details for booking {booking_reference}: {exc}"
+                        f"Failed to fetch leg details for booking {lookup_id}: {exc}"
                     )
-                    detail_cache[booking_reference] = None
+                    detail_cache[lookup_id] = None
                 else:
-                    detail_cache[booking_reference] = payload
+                    detail_cache[lookup_id] = payload
 
-            detail = _select_leg_detail(detail_cache.get(booking_reference), row)
+            detail = _select_leg_detail(detail_cache.get(lookup_id), row)
+            if detail and booking_reference is None:
+                booking_reference = _extract_booking_reference(detail)
             planning_note = _extract_planning_note(detail)
             request_label = _planning_note_cj_request_label(planning_note)
 
@@ -1807,7 +1810,14 @@ def _build_upgrade_workflow_validation_report(
             )
 
             tail = formatted.get("tail")
-            booking_id = formatted.get("bookingIdentifier") or booking_reference
+            booking_identifier = (
+                formatted.get("bookingIdentifier")
+                or _extract_booking_identifier(row)
+                or _extract_booking_identifier(detail or {})
+                or booking_reference
+                or quote_id
+            )
+            booking_id = booking_identifier
             account_name = formatted.get("account_name")
             workflow = formatted.get("workflow") or _extract_workflow(row)
             assigned_type = _extract_assigned_aircraft_type(row) or _extract_assigned_aircraft_type(detail or {})
