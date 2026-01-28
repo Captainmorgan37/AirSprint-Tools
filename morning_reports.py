@@ -343,8 +343,8 @@ def _build_upgrade_line(row: Mapping[str, Any]) -> str:
     tail_value = row.get("tail") or "Unknown Tail"
     tail = str(tail_value).strip() or "Unknown Tail"
     booking = (
-        row.get("booking_reference")
-        or row.get("booking_identifier")
+        row.get("booking_identifier")
+        or row.get("booking_reference")
         or row.get("quote_id")
         or "Unknown Booking"
     )
@@ -540,7 +540,7 @@ def _build_priority_line(row: Mapping[str, Any]) -> str:
     tail_value = row.get("tail") or "Unknown Tail"
     tail = str(tail_value).strip() or "Unknown Tail"
     booking_value = (
-        row.get("booking_reference") or row.get("booking_identifier") or "Unknown Booking"
+        row.get("booking_identifier") or row.get("booking_reference") or "Unknown Booking"
     )
     account_value = row.get("account_name") or "Unknown Account"
     has_issue = bool(row.get("has_issue"))
@@ -881,8 +881,8 @@ def _build_ocs_pax_report(
 
             base_parts = [
                 formatted.get("date") or "Unknown Date",
-                formatted.get("booking_reference")
-                or formatted.get("bookingIdentifier")
+                formatted.get("bookingIdentifier")
+                or formatted.get("booking_reference")
                 or formatted.get("leg_id")
                 or "Unknown Flight",
                 formatted.get("account_name") or "Unknown Account",
@@ -1133,9 +1133,9 @@ def _build_cj3_owners_on_cj2_report(
             date_component = _format_mountain_date_component(dep_dt) or "Unknown Date"
 
             formatted_stub = {"leg_id": _extract_leg_id(row)}
-            booking_identifier = _extract_booking_reference(row)
+            booking_identifier = _extract_booking_identifier(row) or _extract_booking_reference(row)
             if not booking_identifier and detail:
-                booking_identifier = _extract_booking_reference(detail)
+                booking_identifier = _extract_booking_identifier(detail) or _extract_booking_reference(detail)
 
             flight_identifier = _extract_flight_identifier(row, formatted_stub)
             display_identifier = (
@@ -1766,9 +1766,12 @@ def _build_upgrade_workflow_validation_report(
                 continue
 
             booking_reference = _extract_booking_reference(row)
-            if not booking_reference:
+            quote_id = _extract_quote_identifier(row)
+            lookup_id = quote_id or booking_reference
+            if not lookup_id:
                 warnings.append(
-                    "Skipping upgrade workflow validation due to missing booking reference "
+                    "Skipping upgrade workflow validation due to missing quote identifier "
+                    "or booking reference "
                     f"for leg {_extract_leg_id(row) or 'unknown'}"
                 )
                 continue
@@ -1778,20 +1781,20 @@ def _build_upgrade_workflow_validation_report(
             if session is None:
                 session = requests.Session()
 
-            if booking_reference not in detail_cache:
+            if lookup_id not in detail_cache:
                 try:
-                    payload = fetch_leg_details_fn(
-                        config, booking_reference, session=session
-                    )
+                    payload = fetch_leg_details_fn(config, lookup_id, session=session)
                 except Exception as exc:  # pragma: no cover - defensive path
                     warnings.append(
-                        f"Failed to fetch leg details for booking {booking_reference}: {exc}"
+                        f"Failed to fetch leg details for booking {lookup_id}: {exc}"
                     )
-                    detail_cache[booking_reference] = None
+                    detail_cache[lookup_id] = None
                 else:
-                    detail_cache[booking_reference] = payload
+                    detail_cache[lookup_id] = payload
 
-            detail = _select_leg_detail(detail_cache.get(booking_reference), row)
+            detail = _select_leg_detail(detail_cache.get(lookup_id), row)
+            if detail and booking_reference is None:
+                booking_reference = _extract_booking_reference(detail)
             planning_note = _extract_planning_note(detail)
             request_label = _planning_note_cj_request_label(planning_note)
 
@@ -1807,7 +1810,14 @@ def _build_upgrade_workflow_validation_report(
             )
 
             tail = formatted.get("tail")
-            booking_id = formatted.get("booking_reference") or booking_reference
+            booking_identifier = (
+                formatted.get("bookingIdentifier")
+                or _extract_booking_identifier(row)
+                or _extract_booking_identifier(detail or {})
+                or booking_reference
+                or quote_id
+            )
+            booking_id = booking_identifier
             account_name = formatted.get("account_name")
             workflow = formatted.get("workflow") or _extract_workflow(row)
             assigned_type = _extract_assigned_aircraft_type(row) or _extract_assigned_aircraft_type(detail or {})
@@ -1900,6 +1910,11 @@ def _build_upgrade_flights_report(
                 formatted.get("booking_reference")
                 or _extract_booking_reference(row)
             )
+            booking_identifier = (
+                formatted.get("bookingIdentifier")
+                or _extract_booking_identifier(row)
+                or booking_reference
+            )
             quote_id = _extract_quote_identifier(row)
             assigned_type = _extract_assigned_aircraft_type(row)
             requested_type = _extract_requested_aircraft_type(row)
@@ -1933,6 +1948,11 @@ def _build_upgrade_flights_report(
                 if detail:
                     if booking_reference is None:
                         booking_reference = _extract_booking_reference(detail)
+                    if booking_identifier is None:
+                        booking_identifier = (
+                            _extract_booking_identifier(detail)
+                            or booking_reference
+                        )
                     if assigned_type is None:
                         assigned_type = _extract_assigned_aircraft_type(detail)
                     if requested_type is None:
@@ -1949,7 +1969,12 @@ def _build_upgrade_flights_report(
                     f"{_extract_leg_id(row) or 'unknown'}"
                 )
 
-            identifier = booking_reference or quote_id or formatted.get("leg_id")
+            identifier = (
+                booking_identifier
+                or booking_reference
+                or quote_id
+                or formatted.get("leg_id")
+            )
 
             transition_label: Optional[str] = None
             if requested_type or assigned_type:
@@ -2228,12 +2253,13 @@ def _format_report_row(
 
     date_component = _format_mountain_date_component(dep_dt) or "Unknown Date"
     booking_reference = _extract_booking_reference(row)
+    booking_identifier = _extract_booking_identifier(row) or booking_reference
     account_name = _extract_account_name(row)
     tail = _extract_tail(row) if include_tail else None
 
     parts = [
         date_component,
-        booking_reference or "Unknown Booking",
+        booking_identifier or "Unknown Booking",
         account_name or "Unknown Account",
     ]
     if include_tail:
@@ -2244,7 +2270,7 @@ def _format_report_row(
         "date": date_component,
         "departure_time": dep_dt.isoformat() if dep_dt else None,
         "booking_reference": booking_reference,
-        "bookingIdentifier": booking_reference,
+        "bookingIdentifier": booking_identifier,
         "account_name": account_name,
         "tail": tail,
         "workflow": _extract_workflow(row),
@@ -2544,6 +2570,7 @@ def _row_priority_info(row: Mapping[str, Any]) -> Tuple[bool, Optional[str]]:
 
 def _extract_booking_reference(row: Mapping[str, Any]) -> Optional[str]:
     for key in (
+        "bookingIdentifier",
         "bookingReference",
         "bookingCode",
         "bookingNumber",
@@ -2551,13 +2578,20 @@ def _extract_booking_reference(row: Mapping[str, Any]) -> Optional[str]:
         "booking_id",
         "bookingID",
         "bookingRef",
-        "bookingIdentifier",
         "booking",
         "salesOrderNumber",
         "salesOrder",
         "reservationNumber",
         "reservationId",
     ):
+        value = _normalize_str(row.get(key))
+        if value:
+            return value
+    return None
+
+
+def _extract_booking_identifier(row: Mapping[str, Any]) -> Optional[str]:
+    for key in ("bookingIdentifier", "booking_identifier"):
         value = _normalize_str(row.get(key))
         if value:
             return value
