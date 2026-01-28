@@ -546,6 +546,14 @@ _RSC_VALUE_REGEX = re.compile(
     r"RSC\s+\d{2}[LRC]?\s+(\d)\s*(?:/|\s)\s*(\d)\s*(?:/|\s)\s*(\d)",
     re.IGNORECASE,
 )
+_FICON_LINE_REGEX = re.compile(
+    r"(?:^|\n)\s*(?:E\)\s*)?((?:RWY|RUNWAY)\b.*?\bFICON\b.*?\.)",
+    re.IGNORECASE | re.DOTALL,
+)
+_FICON_VALUE_REGEX = re.compile(
+    r"FICON\s+(\d)\s*(?:/|\s)\s*(\d)\s*(?:/|\s)\s*(\d)",
+    re.IGNORECASE,
+)
 
 
 def _strip_french_translation(notam_text: str) -> str:
@@ -595,6 +603,52 @@ def _summarize_rsc(lines: Sequence[str]) -> Tuple[str, List[str], str]:
 def _rsc_has_critical_digits(lines: Sequence[str]) -> bool:
     for line in lines:
         match = _RSC_VALUE_REGEX.search(line)
+        if not match:
+            continue
+        digits = [int(value) for value in match.groups()]
+        if any(value in {0, 1} for value in digits):
+            return True
+    return False
+
+
+def _extract_ficon_lines(notam_text: str) -> List[str]:
+    matches = []
+    for match in _FICON_LINE_REGEX.finditer(notam_text):
+        cleaned = " ".join(match.group(1).split())
+        if not cleaned:
+            continue
+        if re.search(r"\b(TAXIWAY|TWY|APRON|RAMP)\b", cleaned, re.IGNORECASE):
+            continue
+        matches.append(cleaned)
+    return matches
+
+
+def _summarize_ficon(lines: Sequence[str]) -> Tuple[str, List[str], str]:
+    if not lines:
+        return "yellow", [], "No FICON NOTAMs found."
+
+    has_value = False
+    has_low_digit = False
+    for line in lines:
+        match = _FICON_VALUE_REGEX.search(line)
+        if not match:
+            continue
+        has_value = True
+        digits = [int(value) for value in match.groups()]
+        if any(value < 5 for value in digits):
+            has_low_digit = True
+            break
+
+    if has_low_digit:
+        return "red", list(lines), "FICON below 5/5/5."
+    if has_value:
+        return "green", list(lines), "All FICON values are 5/5/5."
+    return "yellow", list(lines), "FICON NOTAM detected, but format was unexpected."
+
+
+def _ficon_has_critical_digits(lines: Sequence[str]) -> bool:
+    for line in lines:
+        match = _FICON_VALUE_REGEX.search(line)
         if not match:
             continue
         digits = [int(value) for value in match.groups()]
@@ -653,6 +707,69 @@ def load_cfps_notams(codes: Tuple[str, ...]) -> Tuple[Dict[str, List[str]], List
                 notam_text = _strip_french_translation(notam_text)
                 if notam_text:
                     notams.append(notam_text)
+            results[icao] = notams
+        except requests.RequestException as exc:
+            results[icao] = []
+            errors.append(f"{icao}: {exc}")
+    return results, errors
+
+
+@st.cache_data(show_spinner=False, ttl=300)
+def load_faa_notams(
+    codes: Tuple[str, ...],
+    client_id: str,
+    client_secret: str,
+) -> Tuple[Dict[str, List[str]], List[str]]:
+    results: Dict[str, List[str]] = {}
+    errors: List[str] = []
+    for icao in codes:
+        if not icao or not icao.startswith("K"):
+            continue
+        try:
+            url = "https://external-api.faa.gov/notamapi/v1/notams"
+            headers = {
+                "client_id": client_id,
+                "client_secret": client_secret,
+            }
+            params = {
+                "icaoLocation": icao.upper(),
+                "responseFormat": "geoJson",
+                "pageSize": 200,
+            }
+            items: List[Dict[str, Any]] = []
+            page_cursor = None
+            while True:
+                if page_cursor:
+                    params["pageCursor"] = page_cursor
+                response = requests.get(url, headers=headers, params=params, timeout=20)
+                response.raise_for_status()
+                data = response.json()
+                page_items = data.get("items", [])
+                if isinstance(page_items, list):
+                    items.extend(page_items)
+                page_cursor = data.get("nextPageCursor")
+                if not page_cursor:
+                    break
+
+            notams: List[str] = []
+            for feature in items:
+                props = feature.get("properties", {})
+                core = props.get("coreNOTAMData", {})
+                notam_data = core.get("notam", {})
+                translations = core.get("notamTranslation", [])
+                simple_text = None
+                for translation in translations:
+                    if translation.get("type") == "LOCAL_FORMAT":
+                        simple_text = translation.get("simpleText")
+                if simple_text:
+                    normalized_simple = simple_text.strip().upper()
+                    if normalized_simple == "NOT AVAILABLE" or normalized_simple.endswith(" NOT AVAILABLE"):
+                        continue
+                text_to_use = simple_text or notam_data.get("text", "")
+                if not simple_text:
+                    continue
+                if text_to_use:
+                    notams.append(text_to_use)
             results[icao] = notams
         except requests.RequestException as exc:
             results[icao] = []
@@ -1138,10 +1255,35 @@ def _build_flight_card(flight: Dict[str, Any], taf_html: str) -> str:
             "</details>"
         )
 
+    ficon_status = flight.get("ficon_status")
+    ficon_summary = flight.get("ficon_summary")
+    ficon_lines = flight.get("ficon_lines") or []
+    ficon_note = flight.get("ficon_note") or "No FICON details available."
+    ficon_html = ""
+    if ficon_status:
+        if ficon_lines:
+            ficon_body = (
+                "<ul>"
+                + "".join(f"<li>{html.escape(line)}</li>" for line in ficon_lines)
+                + "</ul>"
+            )
+        else:
+            ficon_body = f"<div class='flight-card__rsc-note'>{html.escape(ficon_note)}</div>"
+        summary_text = f"FICON {ficon_summary}" if ficon_summary else "FICON"
+        ficon_html = (
+            "<details class='flight-card__rsc flight-card__rsc--"
+            f"{html.escape(ficon_status)}'>"
+            f"<summary>{html.escape(summary_text)}</summary>"
+            f"<div class='flight-card__rsc-body'>{ficon_body}</div>"
+            "</details>"
+        )
+
     badge_html = ""
     badge_items: List[str] = [f"<span class='badge'>{badge}</span>" for badge in badges]
     if rsc_html:
         badge_items.append(rsc_html)
+    if ficon_html:
+        badge_items.append(ficon_html)
     if badge_items:
         badge_html = "<div class='badge-strip'>" + "".join(badge_items) + "</div>"
 
@@ -1290,6 +1432,8 @@ except Exception as exc:
 now_utc = datetime.now(timezone.utc)
 RSC_STANDARD_WINDOW_HOURS = 5
 RSC_LOOKAHEAD_HOURS = 24
+FAA_CLIENT_ID = st.secrets.get("FAA_CLIENT_ID")
+FAA_CLIENT_SECRET = st.secrets.get("FAA_CLIENT_SECRET")
 rsc_airports = sorted(
     {
         flight["arrival_airport"]
@@ -1310,6 +1454,34 @@ if rsc_airports:
     if rsc_errors:
         for message in rsc_errors:
             st.warning(f"RSC NOTAM fetch failed: {message}")
+
+ficon_airports = sorted(
+    {
+        flight["arrival_airport"]
+        for flight in processed_flights
+        if flight.get("arrival_airport")
+        and str(flight["arrival_airport"]).startswith("K")
+        and _arrival_within_rsc_window(
+            flight.get("arr_dt_utc"),
+            now_utc,
+            window_hours=RSC_LOOKAHEAD_HOURS,
+        )
+    }
+)
+
+ficon_notams: Dict[str, List[str]] = {}
+if ficon_airports:
+    if not FAA_CLIENT_ID or not FAA_CLIENT_SECRET:
+        st.warning("FAA NOTAM credentials missing; FICON status unavailable.")
+    else:
+        ficon_notams, ficon_errors = load_faa_notams(
+            tuple(ficon_airports),
+            FAA_CLIENT_ID,
+            FAA_CLIENT_SECRET,
+        )
+        if ficon_errors:
+            for message in ficon_errors:
+                st.warning(f"FICON NOTAM fetch failed: {message}")
 
 for flight in processed_flights:
     station_reports = taf_reports.get(flight["arrival_airport"], []) if flight["arrival_airport"] else []
@@ -1373,6 +1545,56 @@ for flight in processed_flights:
         flight["rsc_lines"] = lines
         flight["rsc_note"] = note
         flight["rsc_summary"] = summary
+    elif arrival_airport and str(arrival_airport).startswith("K"):
+        arrival_actual = _ensure_utc(flight.get("arr_actual_dt_utc"))
+        within_standard_window = _arrival_within_rsc_window(
+            flight.get("arr_dt_utc"),
+            now_utc,
+            window_hours=RSC_STANDARD_WINDOW_HOURS,
+        )
+        within_lookahead_window = _arrival_within_rsc_window(
+            flight.get("arr_dt_utc"),
+            now_utc,
+            window_hours=RSC_LOOKAHEAD_HOURS,
+        )
+        if arrival_actual is not None and arrival_actual <= now_utc:
+            status = "neutral"
+            lines = []
+            note = "Arrival already landed."
+        elif within_standard_window or within_lookahead_window:
+            notam_texts = ficon_notams.get(arrival_airport, [])
+            ficon_lines: List[str] = []
+            seen = set()
+            for text in notam_texts:
+                for line in _extract_ficon_lines(text):
+                    if line in seen:
+                        continue
+                    seen.add(line)
+                    ficon_lines.append(line)
+            status, lines, note = _summarize_ficon(ficon_lines)
+            if not within_standard_window:
+                if _ficon_has_critical_digits(ficon_lines):
+                    status = "critical"
+                    note = "FICON includes 0/1 values."
+                else:
+                    status = "neutral"
+                    note = "FICON lookahead only highlights 0/1 values."
+        else:
+            status = "neutral"
+            lines = []
+            note = "FICON check runs within 24 hours of arrival."
+        if status == "green":
+            summary = "5/5/5"
+        elif status == "critical":
+            summary = "0/1"
+        elif status == "red":
+            summary = "<5"
+        else:
+            summary = ""
+        flight["ficon_status"] = status
+        flight["ficon_lines"] = lines
+        flight["ficon_note"] = note
+        flight["ficon_summary"] = summary
 
 processed_flights.sort(
     key=lambda item: (
