@@ -98,6 +98,33 @@ def test_skips_when_note_not_requesting_cj():
     assert result.rows == []
 
 
+def test_includes_praetor_aircraft_category():
+    dep = dt.datetime(2024, 8, 10, 9, 0)
+    row = _leg(dep=dep, booking_reference="BOOK-3", aircraft_category="Praetor 500")
+
+    payload_map = {
+        "BOOK-3": {
+            "planningNotes": "24HR CLUB CJ3 OWNER REQUESTING CJ3",
+            "departureDateUTC": iso(dep),
+        }
+    }
+
+    result = _build_upgrade_workflow_validation_report(
+        [row],
+        Fl3xxApiConfig(),
+        fetch_leg_details_fn=_stub_fetch(payload_map),
+    )
+
+    assert result.metadata == {
+        "match_count": 1,
+        "inspected_legs": 1,
+        "flagged_requests": 1,
+    }
+    assert len(result.rows) == 1
+    assert result.rows[0]["booking_reference"] == "BOOK-3"
+    assert result.rows[0]["request_label"] == "CJ3"
+
+
 def test_warns_when_booking_reference_missing():
     dep = dt.datetime(2024, 9, 1, 12, 0)
     row = _leg(dep=dep, booking_reference=None, aircraft_category="E545")
