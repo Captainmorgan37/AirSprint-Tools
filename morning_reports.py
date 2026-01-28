@@ -576,6 +576,7 @@ _EXPECTED_EMPTY_LEG_ACCOUNT = "AIRSPRINT INC."
 _OCS_ACCOUNT_NAME = "AIRSPRINT INC."
 
 _LEGACY_AIRCRAFT_CATEGORIES = {"E550", "E545"}
+_LEGACY_AIRCRAFT_TOKENS = ("E550", "E545", "LEGACY", "PRAETOR", "EMB", "EMBRAER")
 
 _RUNWAY_ALERT_THRESHOLD_FT = 4900
 
@@ -1746,7 +1747,7 @@ def _build_upgrade_workflow_validation_report(
     try:
         for row in _sort_rows(rows):
             aircraft_category = _extract_aircraft_category(row)
-            if not aircraft_category or aircraft_category.upper() not in _LEGACY_AIRCRAFT_CATEGORIES:
+            if not _is_legacy_aircraft_category(aircraft_category):
                 continue
 
             booking_reference = _extract_booking_reference(row)
@@ -2978,6 +2979,15 @@ def _extract_aircraft_category(row: Mapping[str, Any]) -> Optional[str]:
     return None
 
 
+def _is_legacy_aircraft_category(category: Optional[str]) -> bool:
+    if not category:
+        return False
+    normalized = category.upper()
+    if normalized in _LEGACY_AIRCRAFT_CATEGORIES:
+        return True
+    return any(token in normalized for token in _LEGACY_AIRCRAFT_TOKENS)
+
+
 def _extract_assigned_aircraft_type(row: Mapping[str, Any]) -> Optional[str]:
     for key in (
         "assignedAircraftType",
@@ -3270,7 +3280,7 @@ _NON_CJ2_REQUEST_PATTERNS = tuple(
 
 _CJ_REQUEST_PATTERNS = (
     re.compile(
-        rf"\bREQUESTING\b{_REQUEST_ARTICLE_PATTERN}[^A-Z0-9]*(CJ(?:[-\s]?\d)?\+?)",
+        rf"\bREQUESTING\b{_REQUEST_ARTICLE_PATTERN}[^A-Z0-9]*(CJ\s+FLEET|CJ(?:[-\s]?\d)?\+?)",
         re.IGNORECASE,
     ),
     re.compile(
@@ -3309,6 +3319,8 @@ def _planning_note_cj_request_label(note: Optional[str]) -> Optional[str]:
             continue
         cleaned = re.sub(r"[^A-Z0-9]+", "", group.upper())
         if cleaned.startswith("CJ"):
+            if "FLEET" in cleaned:
+                return "CJ Fleet"
             if len(cleaned) > 2:
                 return cleaned
             return "CJ"
