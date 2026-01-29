@@ -1101,6 +1101,21 @@ def _parse_pilot_blocks(postflight_payload: Any) -> List[DutyStartPilotSnapshot]
                 pilots.append(snapshot)
 
     if not pilots:
+        crew_block = postflight_payload.get("crew")
+        if isinstance(crew_block, list):
+            for index, member in enumerate(crew_block):
+                if not isinstance(member, Mapping):
+                    continue
+                default_seat = "PIC" if index == 0 else "SIC"
+                seat_hint = member.get("jobTitle") or member.get("role")
+                snapshot = _pilot_snapshot_from_block(
+                    member,
+                    default_seat=_normalise_seat(seat_hint or default_seat),
+                )
+                if snapshot:
+                    pilots.append(snapshot)
+
+    if not pilots:
         deice_block = postflight_payload.get("deice")
         if isinstance(deice_block, Mapping):
             crew_list = deice_block.get("crew")
