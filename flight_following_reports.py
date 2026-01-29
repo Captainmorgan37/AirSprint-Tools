@@ -1094,11 +1094,17 @@ def _parse_pilot_blocks(postflight_payload: Any) -> List[DutyStartPilotSnapshot]
         if snapshot:
             pilots.append(snapshot)
 
-    if not pilots and time_block:
+    time_snapshots: List[DutyStartPilotSnapshot] = []
+    if time_block:
         for key, seat in (("cmd", "PIC"), ("fo", "SIC")):
             snapshot = _pilot_snapshot_from_block(time_block.get(key), default_seat=seat)
             if snapshot:
-                pilots.append(snapshot)
+                time_snapshots.append(snapshot)
+
+    if not pilots and time_snapshots:
+        pilots = list(time_snapshots)
+    elif time_snapshots:
+        _merge_pilot_names_from_crew(pilots, time_snapshots)
 
     crew_block = postflight_payload.get("crew")
     crew_snapshots: List[DutyStartPilotSnapshot] = []
@@ -1120,12 +1126,12 @@ def _parse_pilot_blocks(postflight_payload: Any) -> List[DutyStartPilotSnapshot]
     elif crew_snapshots:
         _merge_pilot_names_from_crew(pilots, crew_snapshots)
 
-    if not pilots:
-        crew_block = postflight_payload.get("crew")
-        if isinstance(crew_block, list):
-            for index, member in enumerate(crew_block):
-                if not isinstance(member, Mapping):
-                    continue
+    deice_snapshots: List[DutyStartPilotSnapshot] = []
+    deice_block = postflight_payload.get("deice")
+    if isinstance(deice_block, Mapping):
+        crew_list = deice_block.get("crew")
+        if isinstance(crew_list, list):
+            for index, member in enumerate(crew_list):
                 default_seat = "PIC" if index == 0 else "SIC"
                 seat_hint = member.get("jobTitle") or member.get("role")
                 snapshot = _pilot_snapshot_from_block(
@@ -1133,22 +1139,12 @@ def _parse_pilot_blocks(postflight_payload: Any) -> List[DutyStartPilotSnapshot]
                     default_seat=_normalise_seat(seat_hint or default_seat),
                 )
                 if snapshot:
-                    pilots.append(snapshot)
+                    deice_snapshots.append(snapshot)
 
-    if not pilots:
-        deice_block = postflight_payload.get("deice")
-        if isinstance(deice_block, Mapping):
-            crew_list = deice_block.get("crew")
-            if isinstance(crew_list, list):
-                for index, member in enumerate(crew_list):
-                    default_seat = "PIC" if index == 0 else "SIC"
-                    seat_hint = member.get("jobTitle") or member.get("role")
-                    snapshot = _pilot_snapshot_from_block(
-                        member,
-                        default_seat=_normalise_seat(seat_hint or default_seat),
-                    )
-                    if snapshot:
-                        pilots.append(snapshot)
+    if not pilots and deice_snapshots:
+        pilots = list(deice_snapshots)
+    elif deice_snapshots:
+        _merge_pilot_names_from_crew(pilots, deice_snapshots)
 
     return pilots
 
