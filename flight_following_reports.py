@@ -1094,26 +1094,57 @@ def _parse_pilot_blocks(postflight_payload: Any) -> List[DutyStartPilotSnapshot]
         if snapshot:
             pilots.append(snapshot)
 
-    if not pilots and time_block:
+    time_snapshots: List[DutyStartPilotSnapshot] = []
+    if time_block:
         for key, seat in (("cmd", "PIC"), ("fo", "SIC")):
             snapshot = _pilot_snapshot_from_block(time_block.get(key), default_seat=seat)
             if snapshot:
-                pilots.append(snapshot)
+                time_snapshots.append(snapshot)
 
-    if not pilots:
-        deice_block = postflight_payload.get("deice")
-        if isinstance(deice_block, Mapping):
-            crew_list = deice_block.get("crew")
-            if isinstance(crew_list, list):
-                for index, member in enumerate(crew_list):
-                    default_seat = "PIC" if index == 0 else "SIC"
-                    seat_hint = member.get("jobTitle") or member.get("role")
-                    snapshot = _pilot_snapshot_from_block(
-                        member,
-                        default_seat=_normalise_seat(seat_hint or default_seat),
-                    )
-                    if snapshot:
-                        pilots.append(snapshot)
+    if not pilots and time_snapshots:
+        pilots = list(time_snapshots)
+    elif time_snapshots:
+        _merge_pilot_names_from_crew(pilots, time_snapshots)
+
+    crew_block = postflight_payload.get("crew")
+    crew_snapshots: List[DutyStartPilotSnapshot] = []
+    if isinstance(crew_block, list):
+        for index, member in enumerate(crew_block):
+            if not isinstance(member, Mapping):
+                continue
+            default_seat = "PIC" if index == 0 else "SIC"
+            seat_hint = member.get("jobTitle") or member.get("role")
+            snapshot = _pilot_snapshot_from_block(
+                member,
+                default_seat=_normalise_seat(seat_hint or default_seat),
+            )
+            if snapshot:
+                crew_snapshots.append(snapshot)
+
+    if not pilots and crew_snapshots:
+        pilots = list(crew_snapshots)
+    elif crew_snapshots:
+        _merge_pilot_names_from_crew(pilots, crew_snapshots)
+
+    deice_snapshots: List[DutyStartPilotSnapshot] = []
+    deice_block = postflight_payload.get("deice")
+    if isinstance(deice_block, Mapping):
+        crew_list = deice_block.get("crew")
+        if isinstance(crew_list, list):
+            for index, member in enumerate(crew_list):
+                default_seat = "PIC" if index == 0 else "SIC"
+                seat_hint = member.get("jobTitle") or member.get("role")
+                snapshot = _pilot_snapshot_from_block(
+                    member,
+                    default_seat=_normalise_seat(seat_hint or default_seat),
+                )
+                if snapshot:
+                    deice_snapshots.append(snapshot)
+
+    if not pilots and deice_snapshots:
+        pilots = list(deice_snapshots)
+    elif deice_snapshots:
+        _merge_pilot_names_from_crew(pilots, deice_snapshots)
 
     return pilots
 
@@ -1155,6 +1186,37 @@ def _merge_split_duty_information(
 
         if match.rest_before_required_min and not pilot.rest_before_required_min:
             pilot.rest_before_required_min = match.rest_before_required_min
+
+
+def _merge_pilot_names_from_crew(
+    pilots: List[DutyStartPilotSnapshot],
+    crew_snapshots: Sequence[DutyStartPilotSnapshot],
+) -> None:
+    if not pilots or not crew_snapshots:
+        return
+
+    crew_by_identifier: Dict[str, DutyStartPilotSnapshot] = {}
+    crew_by_seat: Dict[str, List[DutyStartPilotSnapshot]] = {}
+    for crew_member in crew_snapshots:
+        identifier = _select_identifier(crew_member)
+        if identifier:
+            crew_by_identifier[identifier] = crew_member
+        seat = _normalise_seat(crew_member.seat)
+        crew_by_seat.setdefault(seat, []).append(crew_member)
+
+    for pilot in pilots:
+        if pilot.name:
+            continue
+        identifier = _select_identifier(pilot)
+        match = None
+        if identifier:
+            match = crew_by_identifier.get(identifier)
+        if match is None:
+            seat_matches = crew_by_seat.get(_normalise_seat(pilot.seat), [])
+            if len(seat_matches) == 1:
+                match = seat_matches[0]
+        if match and match.name:
+            pilot.name = match.name
 
 
 def _find_matching_pilot(
@@ -1295,7 +1357,7 @@ def _normalise_seat(role: Any) -> str:
 
 def _derive_name(pilot_block: Mapping[str, Any]) -> str:
     parts: List[str] = []
-    for key in ("firstName", "middleName", "lastName"):
+    for key in ("firstName", "middleName", "lastName", "first_name", "middle_name", "last_name"):
         value = _clean_str(pilot_block.get(key))
         if value:
             parts.append(value)
@@ -1545,6 +1607,30 @@ def _format_seat_display(seats: Iterable[str]) -> str:
     return "+".join(ordered)
 
 
+def _format_seat_name_display(pilots: Iterable[DutyStartPilotSnapshot]) -> str:
+    pilot_list = list(pilots)
+    entries: List[Tuple[str, str]] = []
+    for pilot in pilot_list:
+        seat = (pilot.seat or "PIC").upper()
+        name = (pilot.name or "").strip()
+        if not name:
+            continue
+        entries.append((seat, name))
+    if not entries:
+        return _format_seat_display(pilot.seat for pilot in pilot_list)
+
+    ordered_entries = sorted(entries, key=lambda item: _seat_sort_key(item[0]))
+    seen = set()
+    parts = []
+    for seat, name in ordered_entries:
+        key = (seat, name)
+        if key in seen:
+            continue
+        seen.add(key)
+        parts.append(f"{seat} ({name})")
+    return "/".join(parts) if parts else "Crew"
+
+
 def summarize_split_duty_days(
     collection: Iterable[DutyStartSnapshot] | DutyStartCollection,
 ) -> List[str]:
@@ -1563,7 +1649,7 @@ def summarize_split_duty_days(
         if not split_pilots:
             continue
 
-        seats_display = _format_seat_display(pilot.seat for pilot in split_pilots)
+        seats_display = _format_seat_name_display(split_pilots)
 
         duty_display: Optional[str] = None
         break_display: Optional[str] = None
@@ -1618,7 +1704,7 @@ def summarize_long_duty_days(
     else:
         snapshots = collection
 
-    tail_entries: Dict[str, List[Tuple[str, float, str]]] = {}
+    tail_entries: Dict[str, List[Tuple[str, float, str, str]]] = {}
 
     for snapshot in snapshots:
         tail = snapshot.tail or "UNKNOWN"
@@ -1638,7 +1724,9 @@ def summarize_long_duty_days(
             if not display:
                 display = f"{actual} min"
 
-            tail_entries.setdefault(tail, []).append((seat, utilisation, display))
+            tail_entries.setdefault(tail, []).append(
+                (seat, utilisation, display, pilot.name or "")
+            )
 
     lines: List[str] = []
     for tail in sorted(tail_entries):
@@ -1646,11 +1734,19 @@ def summarize_long_duty_days(
         if not entries:
             continue
 
-        ordered_entries = sorted(entries, key=lambda item: (_seat_sort_key(item[0]), -item[1]))
+        ordered_entries = sorted(
+            entries, key=lambda item: (_seat_sort_key(item[0]), -item[1])
+        )
         seats = [entry[0] for entry in ordered_entries]
         displays = [entry[2] for entry in ordered_entries]
+        names = [entry[3] for entry in ordered_entries]
 
-        seat_display = _format_seat_display(seats)
+        pilots = [
+            DutyStartPilotSnapshot(seat=seat, name=name or "")
+            for seat, name in zip(seats, names)
+        ]
+
+        seat_display = _format_seat_name_display(pilots)
         if not seat_display:
             seat_display = "Crew"
 
@@ -1737,7 +1833,7 @@ def summarize_tight_turnarounds(
     else:
         snapshots = collection
 
-    tail_map: Dict[str, Dict[str, Tuple[int, str]]] = {}
+    tail_map: Dict[str, Dict[str, Tuple[int, str, str]]] = {}
 
     for snapshot in snapshots:
         tail = snapshot.tail or "UNKNOWN"
@@ -1770,11 +1866,11 @@ def summarize_tight_turnarounds(
                     continue
 
             existing = seat_map.get(seat)
-            candidate = (rest_minutes, rest_display)
+            candidate = (rest_minutes, rest_display, pilot.name or "")
             if existing is None:
                 seat_map[seat] = candidate
             else:
-                existing_minutes, existing_display = existing
+                existing_minutes, _, _ = existing
                 if rest_minutes < existing_minutes:
                     seat_map[seat] = candidate
 
@@ -1794,7 +1890,11 @@ def summarize_tight_turnarounds(
         if not seats:
             continue
 
-        seat_display = _format_seat_display(seats)
+        pilots = [
+            DutyStartPilotSnapshot(seat=seat, name=value[2] or "")
+            for seat, value in sorted_entries
+        ]
+        seat_display = _format_seat_name_display(pilots)
         rest_display = rest_values[0] if len(set(rest_values)) == 1 else "/".join(rest_values)
         lines.append(
             f"{tail} – {rest_display} rest before next duty ({seat_display})"
