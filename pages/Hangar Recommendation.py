@@ -138,6 +138,7 @@ CJ_BLANKET_TAILS = {
     "CFASR",
     "CFASW",
     "CFIAS",
+    "CFSEF",
     "CGASR",
     "CGZAS",
     "CFSQX",
