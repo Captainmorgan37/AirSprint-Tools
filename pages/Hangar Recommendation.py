@@ -126,6 +126,34 @@ def _render_bullet(text: str, *, highlight: bool = False) -> None:
         st.markdown(f"<div>• {safe_text}</div>", unsafe_allow_html=True)
 
 
+def _normalize_tail_id(tail: str | None) -> str | None:
+    if not tail:
+        return None
+    compact = "".join(ch for ch in str(tail).upper() if ch.isalnum())
+    return compact or None
+
+
+CJ_BLANKET_TAILS = {
+    "CFASP",
+    "CFASR",
+    "CFASW",
+    "CFIAS",
+    "CGASR",
+    "CGZAS",
+    "CFSQX",
+    "CGASW",
+    "CGAAS",
+    "CGNAS",
+    "CGFSX",
+    "CFSFO",
+    "CFNAS",
+    "CFASY",
+    "CFSDN",
+    "CFSNP",
+}
+CJ_BLANKET_THRESHOLD_C = -18.0
+
+
 # ============================================================
 # Data Loading
 # ============================================================
@@ -285,12 +313,20 @@ for entry in overnight_rows:
     aircraft_category = entry.get("aircraft_category")
     client_departure = bool(entry.get("client_departure"))
     deice_status = resolve_deice_status(airport)
+    tail_id = _normalize_tail_id(tail)
+    cj_without_blanket = bool(
+        tail_id
+        and tail_id not in CJ_BLANKET_TAILS
+        and (aircraft_category or "").upper() == "CJ"
+    )
     assessment = evaluate_hangar_need(
         taf_data,
         metar_data,
         aircraft_category=aircraft_category,
         client_departure=client_departure,
         deice_status=deice_status,
+        cj_without_blanket=cj_without_blanket,
+        cj_blanket_temp_threshold=CJ_BLANKET_THRESHOLD_C,
     )
     assessed_entries.append(
         {
