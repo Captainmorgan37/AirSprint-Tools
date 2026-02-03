@@ -1764,7 +1764,7 @@ def summarize_long_duty_days(
     return lines
 
 
-_REST_THRESHOLD_MINUTES = 11 * 60
+_REST_THRESHOLD_MINUTES = 12 * 60
 _REST_MATCH_TOLERANCE_MINUTES = 5
 
 
@@ -1953,7 +1953,7 @@ def build_flight_following_report(
         section_builders = (
             ("Long Duty Days", summarize_long_duty_days),
             ("Split Duty Days", summarize_split_duty_days),
-            ("Tight Turnarounds (<11h Before Next Duty)", summarize_tight_turnarounds),
+            ("Tight Turnarounds (<12h Before Next Duty)", summarize_tight_turnarounds),
             ("", summarize_cyyz_night_operations),
         )
 
