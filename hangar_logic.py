@@ -354,6 +354,8 @@ def evaluate_hangar_need(
     aircraft_category: str | None = None,
     client_departure: bool = False,
     deice_status: Mapping[str, Any] | None = None,
+    cj_without_blanket: bool = False,
+    cj_blanket_temp_threshold: float | None = None,
 ) -> dict[str, Any]:
     assessment: dict[str, Any] = {
         "needs_hangar": False,
@@ -373,6 +375,13 @@ def evaluate_hangar_need(
         assessment["notes"].append(f"Aircraft category: {normalized_category.title()}")
     if client_departure:
         assessment["notes"].append("Next leg is client-occupied.")
+    if cj_without_blanket:
+        if cj_blanket_temp_threshold is not None:
+            assessment["notes"].append(
+                f"CJ without battery blanket: hangar needed below {cj_blanket_temp_threshold:.0f}°C."
+            )
+        else:
+            assessment["notes"].append("CJ without battery blanket.")
 
     limited_deice = False
     if deice_status:
@@ -497,8 +506,30 @@ def evaluate_hangar_need(
                     "Client departure on CJ with forecast ≤ -10°C"
                 )
 
+        if (
+            cj_without_blanket
+            and cj_blanket_temp_threshold is not None
+            and temp_for_thresholds <= cj_blanket_temp_threshold
+        ):
+            triggers.append(
+                f"CJ without battery blanket and forecast ≤ {cj_blanket_temp_threshold:.0f}°C"
+            )
+            cold_triggered = True
+
     if not cold_triggered and metar_temp is not None and metar_temp <= -20:
         triggers.append("Current METAR temperature ≤ -20°C — hangar required")
+        cold_triggered = True
+
+    if (
+        not cold_triggered
+        and cj_without_blanket
+        and cj_blanket_temp_threshold is not None
+        and metar_temp is not None
+        and metar_temp <= cj_blanket_temp_threshold
+    ):
+        triggers.append(
+            f"CJ without battery blanket and current temp ≤ {cj_blanket_temp_threshold:.0f}°C"
+        )
         cold_triggered = True
 
     frost_conditions: list[str] = []
@@ -679,4 +710,3 @@ def evaluate_hangar_need(
 
     assessment["needs_hangar"] = bool(triggers)
     return assessment
-
