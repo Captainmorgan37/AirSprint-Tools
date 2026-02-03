@@ -109,6 +109,35 @@ def _display_report(state: Dict[str, Any]) -> None:
     _render_metadata(summary)
 
 
+def _display_single_report(state: Dict[str, Any]) -> None:
+    sections = state.get("sections", [])
+    if not sections:
+        st.info("Generate a report to view individual sections.")
+        return
+
+    labeled_sections = []
+    for title, lines in sections:
+        display_title = title or "CYYZ Night Operations"
+        labeled_sections.append((display_title, lines))
+
+    titles = [title for title, _lines in labeled_sections]
+    default_index = 0
+    for index, title in enumerate(titles):
+        if "Tight Turnarounds" in title:
+            default_index = index
+            break
+
+    selected_title = st.selectbox(
+        "Select a report section",
+        titles,
+        index=default_index,
+    )
+    selected_lines = next(
+        lines for title, lines in labeled_sections if title == selected_title
+    )
+    _display_sections([(selected_title, selected_lines)])
+
+
 configure_page(page_title="Flight Following Reports")
 password_gate()
 render_sidebar()
@@ -192,7 +221,7 @@ if submitted:
                 section_builders=(
                     ("Long Duty Days", summarize_long_duty_days),
                     ("Split Duty Days", summarize_split_duty_days),
-                    ("Tight Turnarounds (<11h Before Next Duty)", tight_turns_builder),
+                    ("Tight Turnarounds (<12h Before Next Duty)", tight_turns_builder),
                     ("Short Turns (<45 min)", short_turn_section),
                     ("", summarize_cyyz_night_operations),
                 ),
@@ -216,11 +245,19 @@ if submitted:
                 "short_turn_count": short_turn_capture.get("count", 0),
             }
             _store_state(state)
-            _display_report(state)
+            combined_tab, single_tab = st.tabs(["Combined view", "Single report"])
+            with combined_tab:
+                _display_report(state)
+            with single_tab:
+                _display_single_report(state)
 else:
     stored_state = _load_state()
     if stored_state:
-        _display_report(stored_state)
+        combined_tab, single_tab = st.tabs(["Combined view", "Single report"])
+        with combined_tab:
+            _display_report(stored_state)
+        with single_tab:
+            _display_single_report(stored_state)
     elif not fl3xx_settings:
         st.warning(
             "Add your FL3XX credentials to `.streamlit/secrets.toml` under `[fl3xx_api]` to enable live fetching."
