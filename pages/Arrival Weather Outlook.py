@@ -100,6 +100,8 @@ TAIL_DISPLAY_ORDER: Sequence[str] = (
     "C-FSUP",
     "C-FSRY",
     "C-GFSJ",
+    "C-GIAS",
+    "C-FSVP",
     "ADD EMB WEST",
     "ADD EMB EAST",
     "ADD CJ2+ WEST",
