@@ -45,6 +45,14 @@ containers = {
             "tunnel": {"depth": 24, "width": 84}
         }
     },
+    "Sprinter Van (Rear)": {
+        "door": {"width": 68, "height": 46, "diag": math.hypot(68, 46)},
+        "interior": {
+            "height": 46,
+            "depth": 33,
+            "width": 68
+        }
+    },
     "Legacy": {
         "door": {"width": 34, "height": 22, "diag": 38},
         "interior": {
@@ -175,6 +183,15 @@ def fits_inside(box_dims, interior, container_type, flex=1.0, allow_diagonal=Fal
                 space_diag = box_diagonal(interior["depth"], width_limit, interior["height"])
                 if bl <= space_diag and bw <= width_limit and bh <= interior["height"]:
                     return True, True
+        else:
+            if bh <= interior["height"] and bl <= interior["depth"] and bw <= interior["width"]:
+                return True, False
+            if allow_diagonal and bh <= interior["height"]:
+                if can_fit_rotated_in_plane(bl, bw, interior["depth"], interior["width"]):
+                    return True, True
+                space_diag = box_diagonal(interior["depth"], interior["width"], interior["height"])
+                if bl <= space_diag and bw <= interior["width"] and bh <= interior["height"]:
+                    return True, True
     return False, False
 
 def bag_volume(dims):
@@ -187,9 +204,10 @@ def cargo_volume(interior, container_type):
         restricted = interior["restricted"]
         restricted_vol = restricted["depth"] * restricted["width"] * interior["height"]
         return max(0.0, main_vol - restricted_vol)
-    else:
+    if container_type == "Legacy":
         # approximate trapezoidal cross-section (average width)
         return interior["depth"] * ((interior["width_min"] + interior["width_max"]) / 2) * interior["height"]
+    return interior["depth"] * interior["width"] * interior["height"]
 
 # ============================================================
 # Free-Space 3D Packing (with CJ Tunnel specialization)
@@ -270,13 +288,24 @@ def initial_spaces(container_type, interior):
         })
         return [s for s in spaces if s["L"] > 0 and s["W"] > 0 and s["H"] > 0]
 
-    # Legacy (tapered) - use max width with taper checks on placement
+    if container_type == "Legacy":
+        # Legacy (tapered) - use max width with taper checks on placement
+        return [{
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0,
+            "L": interior["depth"],
+            "W": interior["width_max"],
+            "H": interior["height"],
+            "Section": "Main"
+        }]
+
     return [{
         "x": 0.0,
         "y": 0.0,
         "z": 0.0,
         "L": interior["depth"],
-        "W": interior["width_max"],
+        "W": interior["width"],
         "H": interior["height"],
         "Section": "Main"
     }]
@@ -579,9 +608,8 @@ def plot_cargo(cargo_dims, placements, container_type=None, interior=None):
                 line=dict(color='rgba(0,0,0,0.4)', width=2),
                 showlegend=False
             ))
-
-    # ---- Legacy: tapered hold ----
-    if container_type == "Legacy":
+    elif container_type == "Legacy":
+        # ---- Legacy: tapered hold ----
         d = interior["depth"]
         wmin, wmax = interior["width_min"], interior["width_max"]
         h = interior["height"]
@@ -597,6 +625,20 @@ def plot_cargo(cargo_dims, placements, container_type=None, interior=None):
         fig.add_trace(go.Mesh3d(x=x, y=y, z=z, i=i, j=j, k=k,
                                 color='lightblue', opacity=0.15,
                                 name='Legacy Hold'))
+    else:
+        # ---- Rectangular hold (e.g., Sprinter) ----
+        corners = [
+            (0,0,0), (cargo_L,0,0), (cargo_L,cargo_W,0), (0,cargo_W,0),
+            (0,0,cargo_H), (cargo_L,0,cargo_H), (cargo_L,cargo_W,cargo_H), (0,cargo_W,cargo_H)
+        ]
+        edges = [(0,1),(1,2),(2,3),(3,0),(4,5),(5,6),(6,7),(7,4),(0,4),(1,5),(2,6),(3,7)]
+        for e in edges:
+            x = [corners[e[0]][0], corners[e[1]][0]]
+            y = [corners[e[0]][1], corners[e[1]][1]]
+            z = [corners[e[0]][2], corners[e[1]][2]]
+            fig.add_trace(go.Scatter3d(x=x, y=y, z=z, mode='lines',
+                                       line=dict(color='black', width=3),
+                                       showlegend=False))
 
     # ---- Baggage meshes ----
     colors = ['red','green','blue','orange','purple','cyan','magenta','yellow','lime','pink']
@@ -811,9 +853,13 @@ if st.session_state["baggage_list"]:
                 cargo_dims = (container["interior"]["depth"],
                               container["interior"]["width"],
                               container["interior"]["height"])
-            else:
+            elif container_choice == "Legacy":
                 cargo_dims = (container["interior"]["depth"],
                               container["interior"]["width_max"],
+                              container["interior"]["height"])
+            else:
+                cargo_dims = (container["interior"]["depth"],
+                              container["interior"]["width"],
                               container["interior"]["height"])
             fig = plot_cargo(cargo_dims, placements, container_choice, container["interior"])
             st.plotly_chart(fig, width="stretch")
