@@ -50,7 +50,13 @@ containers = {
         "interior": {
             "height": 46,
             "depth": 33,
-            "width": 68
+            "width": 68,
+            "depth_profile": {
+                "slope_start": 13,
+                "slope_end": 40,
+                "depth_max": 33,
+                "depth_min": 20
+            }
         }
     },
     "Legacy": {
@@ -106,6 +112,22 @@ def legacy_width_at_height(interior, z):
     h = interior["height"]
     wmin, wmax = interior["width_min"], interior["width_max"]
     return wmin + (wmax - wmin) * (z / h)
+
+def depth_at_height(interior, z):
+    """Return available depth at height z for sloped holds."""
+    profile = interior.get("depth_profile")
+    if not profile:
+        return interior["depth"]
+    slope_start = profile["slope_start"]
+    slope_end = profile["slope_end"]
+    depth_max = profile["depth_max"]
+    depth_min = profile["depth_min"]
+    if z <= slope_start:
+        return depth_max
+    if z >= slope_end:
+        return depth_min
+    slope = (depth_min - depth_max) / (slope_end - slope_start)
+    return depth_max + slope * (z - slope_start)
 
 def apply_flex(dims, flex):
     """Apply flexibility/squish factor (for fit checks only)."""
@@ -184,12 +206,13 @@ def fits_inside(box_dims, interior, container_type, flex=1.0, allow_diagonal=Fal
                 if bl <= space_diag and bw <= width_limit and bh <= interior["height"]:
                     return True, True
         else:
-            if bh <= interior["height"] and bl <= interior["depth"] and bw <= interior["width"]:
+            depth_limit = depth_at_height(interior, bh)
+            if bh <= interior["height"] and bl <= depth_limit and bw <= interior["width"]:
                 return True, False
             if allow_diagonal and bh <= interior["height"]:
-                if can_fit_rotated_in_plane(bl, bw, interior["depth"], interior["width"]):
+                if can_fit_rotated_in_plane(bl, bw, depth_limit, interior["width"]):
                     return True, True
-                space_diag = box_diagonal(interior["depth"], interior["width"], interior["height"])
+                space_diag = box_diagonal(depth_limit, interior["width"], interior["height"])
                 if bl <= space_diag and bw <= interior["width"] and bh <= interior["height"]:
                     return True, True
     return False, False
@@ -207,6 +230,19 @@ def cargo_volume(interior, container_type):
     if container_type == "Legacy":
         # approximate trapezoidal cross-section (average width)
         return interior["depth"] * ((interior["width_min"] + interior["width_max"]) / 2) * interior["height"]
+    if "depth_profile" in interior:
+        profile = interior["depth_profile"]
+        slope_start = profile["slope_start"]
+        slope_end = profile["slope_end"]
+        depth_max = profile["depth_max"]
+        depth_min = profile["depth_min"]
+        height = interior["height"]
+        width = interior["width"]
+        lower_vol = depth_max * slope_start
+        middle_height = max(0.0, slope_end - slope_start)
+        middle_vol = ((depth_max + depth_min) / 2) * middle_height
+        upper_vol = depth_min * max(0.0, height - slope_end)
+        return width * (lower_vol + middle_vol + upper_vol)
     return interior["depth"] * interior["width"] * interior["height"]
 
 # ============================================================
@@ -419,6 +455,8 @@ def greedy_3d_packing(
             x1, y1, z1 = x0 + l, y0 + w, z0 + h
 
             if container_type == "Legacy" and not legacy_width_ok(interior, y1, z0, z1):
+                continue
+            if "depth_profile" in interior and x1 > depth_at_height(interior, z1):
                 continue
 
             leftover = space_volume(space) - (l * w * h)
@@ -639,6 +677,29 @@ def plot_cargo(cargo_dims, placements, container_type=None, interior=None):
             fig.add_trace(go.Scatter3d(x=x, y=y, z=z, mode='lines',
                                        line=dict(color='black', width=3),
                                        showlegend=False))
+        if interior.get("depth_profile"):
+            slope_start = interior["depth_profile"]["slope_start"]
+            slope_end = interior["depth_profile"]["slope_end"]
+            depth_max = interior["depth_profile"]["depth_max"]
+            depth_min = interior["depth_profile"]["depth_min"]
+            boundary_edges = [
+                ((depth_max, 0, slope_start), (depth_max, cargo_W, slope_start)),
+                ((depth_min, 0, slope_end), (depth_min, cargo_W, slope_end)),
+                ((depth_min, 0, cargo_H), (depth_min, cargo_W, cargo_H)),
+                ((depth_max, 0, slope_start), (depth_min, 0, slope_end)),
+                ((depth_max, cargo_W, slope_start), (depth_min, cargo_W, slope_end)),
+                ((depth_min, 0, slope_end), (depth_min, 0, cargo_H)),
+                ((depth_min, cargo_W, slope_end), (depth_min, cargo_W, cargo_H)),
+            ]
+            for start, end in boundary_edges:
+                fig.add_trace(go.Scatter3d(
+                    x=[start[0], end[0]],
+                    y=[start[1], end[1]],
+                    z=[start[2], end[2]],
+                    mode='lines',
+                    line=dict(color='rgba(120,120,120,0.8)', width=3),
+                    showlegend=False
+                ))
 
     # ---- Baggage meshes ----
     colors = ['red','green','blue','orange','purple','cyan','magenta','yellow','lime','pink']
