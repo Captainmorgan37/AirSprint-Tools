@@ -184,6 +184,12 @@ if submitted:
                     )
                 except Exception:  # pragma: no cover - network/runtime issues
                     next_day_collection = None
+                try:
+                    following_day_collection = collect_duty_start_snapshots(
+                        config, target_date + timedelta(days=2)
+                    )
+                except Exception:  # pragma: no cover - network/runtime issues
+                    following_day_collection = None
 
             if next_day_collection is None:
                 next_day_rest_index = None
@@ -192,10 +198,27 @@ if submitted:
                 )
             else:
                 next_day_rest_index = build_rest_before_index(next_day_collection)
+            if next_day_collection is not None and following_day_collection is None:
+                following_day_rest_index = None
+                st.warning(
+                    "Following-day rest data could not be retrieved. Tomorrow positioning notes will be omitted.",
+                )
+            elif following_day_collection is not None:
+                following_day_rest_index = build_rest_before_index(following_day_collection)
+            else:
+                following_day_rest_index = None
             tight_turns_builder = partial(
                 summarize_tight_turnarounds,
                 next_day_rest_index=next_day_rest_index,
             )
+
+            def tomorrow_tight_turns(_collection_input):
+                if next_day_collection is None:
+                    return []
+                return summarize_tight_turnarounds(
+                    next_day_collection,
+                    next_day_rest_index=following_day_rest_index,
+                )
             report_metadata: Dict[str, Any] = {}
             short_turn_capture: Dict[str, Any] = {
                 "text": "",
@@ -221,7 +244,14 @@ if submitted:
                 section_builders=(
                     ("Long Duty Days", summarize_long_duty_days),
                     ("Split Duty Days", summarize_split_duty_days),
-                    ("Tight Turnarounds (<12h Before Next Duty)", tight_turns_builder),
+                    (
+                        "Tonights Tight Turnarounds (<12h Before Next Duty)",
+                        tight_turns_builder,
+                    ),
+                    (
+                        "Tomorrows Tight Turnarounds (<12h Before Next Duty)",
+                        tomorrow_tight_turns,
+                    ),
                     ("Short Turns (<45 min)", short_turn_section),
                     ("", summarize_cyyz_night_operations),
                 ),
