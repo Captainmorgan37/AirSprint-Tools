@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import csv
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Tuple
+from urllib.parse import urlsplit
 
 import requests
 
 from fl3xx_api import (
+    DEFAULT_FL3XX_BASE_URL,
     Fl3xxApiConfig,
     fetch_flight_pax_details,
     fetch_flights,
@@ -30,6 +32,27 @@ _NOTE_KEYS: Tuple[str, ...] = (
     "booking",
     "notes",
 )
+
+
+def _clean_text(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    return " ".join(text.split())
+
+
+def _derive_api_root(base_url: str) -> str:
+    parsed = urlsplit(base_url)
+    if not parsed.scheme or not parsed.netloc:
+        parsed = urlsplit(DEFAULT_FL3XX_BASE_URL)
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def _build_hold_items_url(config: Fl3xxApiConfig, tail: str) -> str:
+    base_root = _derive_api_root(config.base_url)
+    return f"{base_root}/api/external/aircraft/{tail}/holditems"
 
 
 def _minutes(hours: int, minutes: int) -> int:
@@ -212,6 +235,38 @@ class MaxFlightTimeAlert:
             "booking_note": self.booking_note,
             "booking_note_present": self.booking_note_present,
             "booking_note_confirms_fpl": self.booking_note_confirms_fpl,
+        }
+
+
+@dataclass(frozen=True)
+class MelHoldItem:
+    """Data describing a MEL hold item entry."""
+
+    tail: str
+    item_id: Any
+    description: Optional[str]
+    limitations: Optional[str]
+    limitations_description: Optional[str]
+    report_date: Optional[str]
+    due_date: Optional[str]
+    source: Optional[str]
+    has_description: bool
+    has_limitation: bool
+    has_client_impact: bool
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {
+            "tail": self.tail,
+            "item_id": self.item_id,
+            "description": self.description,
+            "limitations": self.limitations,
+            "limitations_description": self.limitations_description,
+            "report_date": self.report_date,
+            "due_date": self.due_date,
+            "source": self.source,
+            "has_description": self.has_description,
+            "has_limitation": self.has_limitation,
+            "has_client_impact": self.has_client_impact,
         }
 
 
@@ -1284,8 +1339,133 @@ def evaluate_flights_for_runway_length(
     return items, metadata, diagnostics
 
 
+def _format_epoch_millis(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    try:
+        millis = int(value)
+    except (TypeError, ValueError):
+        return None
+    if millis <= 0:
+        return None
+    timestamp = millis / 1000.0
+    return datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def evaluate_mel_hold_items(
+    config: Fl3xxApiConfig,
+    *,
+    tails: Iterable[str],
+    from_date: date,
+    to_date: date,
+    session: Optional[requests.Session] = None,
+) -> Tuple[List[MelHoldItem], Dict[str, Any], Dict[str, Any]]:
+    """Return MEL hold items for the provided tails."""
+
+    if to_date < from_date:
+        raise FlightDataError("The end date must be on or after the start date for the MEL report window.")
+
+    headers = config.build_headers()
+    params = {
+        "from": from_date.isoformat(),
+        "to": to_date.isoformat(),
+        "dateSearchType": "ALL",
+    }
+
+    diagnostics: Dict[str, Any] = {
+        "tails_requested": 0,
+        "items_returned": 0,
+        "items_with_description": 0,
+        "items_with_limitation": 0,
+        "items_with_both": 0,
+        "tail_errors": 0,
+        "tail_error_messages": [],
+    }
+
+    items: List[MelHoldItem] = []
+
+    http = session or requests.Session()
+    try:
+        for tail in tails:
+            tail_value = str(tail).strip()
+            if not tail_value:
+                continue
+            diagnostics["tails_requested"] += 1
+            url = _build_hold_items_url(config, tail_value)
+            try:
+                response = http.get(
+                    url,
+                    params=params,
+                    headers=headers,
+                    timeout=config.timeout,
+                    verify=config.verify_ssl,
+                )
+                response.raise_for_status()
+                payload = response.json()
+            except Exception as exc:  # pragma: no cover - network/runtime issues
+                diagnostics["tail_errors"] += 1
+                diagnostics["tail_error_messages"].append(f"{tail_value}: {exc}")
+                continue
+
+            if not isinstance(payload, list):
+                continue
+
+            for entry in payload:
+                if not isinstance(entry, Mapping):
+                    continue
+                description = _clean_text(entry.get("description"))
+                limitations = _clean_text(entry.get("limitations"))
+                limitations_description = _clean_text(entry.get("limitationsDescription"))
+                has_description = bool(description)
+                has_limitation = bool(limitations_description)
+                has_client_impact = bool(
+                    limitations_description
+                    and "client impact" in limitations_description.lower()
+                )
+
+                if has_description:
+                    diagnostics["items_with_description"] += 1
+                if has_limitation:
+                    diagnostics["items_with_limitation"] += 1
+                if has_description and has_limitation:
+                    diagnostics["items_with_both"] += 1
+
+                item = MelHoldItem(
+                    tail=tail_value,
+                    item_id=entry.get("id"),
+                    description=description,
+                    limitations=limitations,
+                    limitations_description=limitations_description,
+                    report_date=_format_epoch_millis(entry.get("reportDate")),
+                    due_date=_format_epoch_millis(entry.get("dueDate")),
+                    source=_clean_text(entry.get("source")),
+                    has_description=has_description,
+                    has_limitation=has_limitation,
+                    has_client_impact=has_client_impact,
+                )
+                items.append(item)
+                diagnostics["items_returned"] += 1
+    finally:
+        if session is None:
+            try:
+                http.close()
+            except AttributeError:  # pragma: no cover - defensive cleanup
+                pass
+
+    metadata = {
+        "from_date": from_date.isoformat(),
+        "to_date": to_date.isoformat(),
+        "request_params": params,
+    }
+
+    items.sort(key=lambda item: (item.tail, item.report_date or ""))
+
+    return items, metadata, diagnostics
+
+
 __all__ = [
     "MaxFlightTimeAlert",
+    "MelHoldItem",
     "ZfwFlightCheck",
     "HighPaxWeightAlert",
     "RunwayLengthCheck",
@@ -1293,7 +1473,7 @@ __all__ = [
     "evaluate_flights_for_high_pax_weight",
     "evaluate_flights_for_zfw_check",
     "evaluate_flights_for_runway_length",
+    "evaluate_mel_hold_items",
     "format_duration_label",
     "_format_pax_breakdown",
 ]
-
