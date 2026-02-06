@@ -171,6 +171,43 @@ def _build_tail_flight_lookup(flights: list[dict[str, Any]]) -> set[str]:
     return tails
 
 
+def _extract_workflow_label(row: Mapping[str, Any]) -> Optional[str]:
+    for key in (
+        "workflowCustomName",
+        "workflow_custom_name",
+        "workflowCustomLabel",
+        "workflow_custom_label",
+        "workflowLabel",
+        "workflow_label",
+        "workflowName",
+        "workflow_name",
+        "workflow",
+    ):
+        value = row.get(key)
+        if isinstance(value, Mapping):
+            nested = value.get("customName") or value.get("customLabel") or value.get("label") or value.get("name")
+            if nested:
+                return str(nested)
+        text = str(value).strip() if value is not None else ""
+        if text:
+            return text
+    return None
+
+
+def _build_tail_priority_lookup(flights: list[dict[str, Any]]) -> set[str]:
+    priority_tails: set[str] = set()
+    for flight in flights:
+        workflow = _extract_workflow_label(flight)
+        if not workflow:
+            continue
+        if "priority" not in workflow.lower():
+            continue
+        tail = _format_tail_for_api(flight.get("registrationNumber", ""))
+        if tail:
+            priority_tails.add(tail)
+    return priority_tails
+
+
 def _parse_iso_date(value: Any) -> Optional[date]:
     if isinstance(value, str):
         try:
@@ -839,6 +876,9 @@ def _render_mel_results(state: Mapping[str, Any]) -> None:
     scheduled_tails = {
         _format_tail_for_api(tail) for tail in mel_state.get("scheduled_tails", [])
     }
+    priority_tails = {
+        _format_tail_for_api(tail) for tail in mel_state.get("scheduled_priority_tails", [])
+    }
     scheduled_lookup_error = mel_state.get("scheduled_flights_error")
 
     primary_df = df[df["has_description"] & df["has_limitation"]].copy()
@@ -864,9 +904,13 @@ def _render_mel_results(state: Mapping[str, Any]) -> None:
     if not primary_df.empty:
         if scheduled_lookup_error:
             primary_df["Upcoming flights (next 5 days)"] = "Unavailable"
+            primary_df["Priority workflow (next 5 days)"] = "Unavailable"
         else:
             primary_df["Upcoming flights (next 5 days)"] = primary_df["tail"].map(
                 lambda tail: "Yes" if tail in scheduled_tails else "No"
+            )
+            primary_df["Priority workflow (next 5 days)"] = primary_df["tail"].map(
+                lambda tail: "Yes" if tail in priority_tails else "No"
             )
         primary_display = primary_df[
             [
@@ -875,6 +919,7 @@ def _render_mel_results(state: Mapping[str, Any]) -> None:
                 "limitations",
                 "limitations_description",
                 "Upcoming flights (next 5 days)",
+                "Priority workflow (next 5 days)",
             ]
         ].rename(
             columns={
@@ -883,6 +928,7 @@ def _render_mel_results(state: Mapping[str, Any]) -> None:
                 "limitations": "Limitations",
                 "limitations_description": "Limitations Description",
                 "Upcoming flights (next 5 days)": "Upcoming flights (next 5 days)",
+                "Priority workflow (next 5 days)": "Priority workflow (next 5 days)",
             }
         )
 
@@ -895,9 +941,13 @@ def _render_mel_results(state: Mapping[str, Any]) -> None:
     else:
         if scheduled_lookup_error:
             secondary_df["Upcoming flights (next 5 days)"] = "Unavailable"
+            secondary_df["Priority workflow (next 5 days)"] = "Unavailable"
         else:
             secondary_df["Upcoming flights (next 5 days)"] = secondary_df["tail"].map(
                 lambda tail: "Yes" if tail in scheduled_tails else "No"
+            )
+            secondary_df["Priority workflow (next 5 days)"] = secondary_df["tail"].map(
+                lambda tail: "Yes" if tail in priority_tails else "No"
             )
         secondary_display = secondary_df[
             [
@@ -906,6 +956,7 @@ def _render_mel_results(state: Mapping[str, Any]) -> None:
                 "limitations",
                 "limitations_description",
                 "Upcoming flights (next 5 days)",
+                "Priority workflow (next 5 days)",
             ]
         ].rename(
             columns={
@@ -914,6 +965,7 @@ def _render_mel_results(state: Mapping[str, Any]) -> None:
                 "limitations": "Limitations",
                 "limitations_description": "Limitations Description",
                 "Upcoming flights (next 5 days)": "Upcoming flights (next 5 days)",
+                "Priority workflow (next 5 days)": "Priority workflow (next 5 days)",
             }
         )
         st.dataframe(secondary_display, width="stretch")
@@ -1227,6 +1279,7 @@ with mel_tab:
                         }
                         scheduled_flights_error = None
                         scheduled_tails: list[str] = []
+                        scheduled_priority_tails: list[str] = []
                         scheduled_metadata: Dict[str, Any] = {}
                         scheduled_diagnostics: Dict[str, Any] = {}
                         try:
@@ -1242,9 +1295,14 @@ with mel_tab:
                                     _build_tail_flight_lookup(flights),
                                     key=_tail_order_key,
                                 )
+                                scheduled_priority_tails = sorted(
+                                    _build_tail_priority_lookup(flights),
+                                    key=_tail_order_key,
+                                )
                                 scheduled_diagnostics = {
                                     "total_flights": len(flights),
                                     "tails_with_flights": len(scheduled_tails),
+                                    "tails_with_priority_workflows": len(scheduled_priority_tails),
                                     "from_date": scheduled_start.isoformat(),
                                     "to_date": scheduled_end.isoformat(),
                                 }
@@ -1252,6 +1310,7 @@ with mel_tab:
                             scheduled_flights_error = str(exc)
 
                         mel_state["scheduled_tails"] = scheduled_tails
+                        mel_state["scheduled_priority_tails"] = scheduled_priority_tails
                         mel_state["scheduled_metadata"] = scheduled_metadata
                         mel_state["scheduled_diagnostics"] = scheduled_diagnostics
                         mel_state["scheduled_flights_error"] = scheduled_flights_error
