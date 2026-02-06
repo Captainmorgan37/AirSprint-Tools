@@ -1417,7 +1417,7 @@ def evaluate_mel_hold_items(
                 limitations = _clean_text(entry.get("limitations"))
                 limitations_description = _clean_text(entry.get("limitationsDescription"))
                 has_description = bool(description)
-                has_limitation = bool(limitations_description) or (limitations or "").upper() == "YES"
+                has_limitation = bool(limitations_description)
                 has_client_impact = bool(
                     limitations_description
                     and "client impact" in limitations_description.lower()

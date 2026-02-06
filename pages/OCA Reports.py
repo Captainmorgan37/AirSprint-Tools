@@ -859,23 +859,7 @@ def _render_mel_results(state: Mapping[str, Any]) -> None:
             }
         )
 
-        def _highlight_primary(row: pd.Series) -> list[str]:
-            has_limitation = bool(primary_df.at[row.name, "has_limitation"])
-            has_client_impact = bool(primary_df.at[row.name, "has_client_impact"])
-            styles: list[str] = []
-            for column in primary_display.columns:
-                if column == "Limitations" and has_limitation:
-                    styles.append("background-color: #fff1b8; font-weight: 600;")
-                elif column == "Limitations Description" and has_client_impact:
-                    styles.append("background-color: #ffd6d6; font-weight: 600;")
-                else:
-                    styles.append("")
-            return styles
-
-        st.dataframe(
-            primary_display.style.apply(_highlight_primary, axis=1),
-            width="stretch",
-        )
+        st.dataframe(primary_display, width="stretch")
 
     st.subheader("MELs with partial details")
     st.caption("Hold items that only include a description or a limitation.")
