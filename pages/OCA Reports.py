@@ -24,6 +24,7 @@ from oca_reports import (
     format_duration_label,
     _format_pax_breakdown,
 )
+from fl3xx_api import fetch_flights
 
 try:
     from zoneinfo import ZoneInfo
@@ -159,6 +160,52 @@ def _build_mel_report_text(items: pd.DataFrame) -> str:
             lines.append(f"{tail} - {description}")
         lines.append("")
     return "\n".join(lines).strip()
+
+
+def _build_tail_flight_lookup(flights: list[dict[str, Any]]) -> set[str]:
+    tails: set[str] = set()
+    for flight in flights:
+        tail = _format_tail_for_api(flight.get("registrationNumber", ""))
+        if tail:
+            tails.add(tail)
+    return tails
+
+
+def _extract_workflow_label(row: Mapping[str, Any]) -> Optional[str]:
+    for key in (
+        "workflowCustomName",
+        "workflow_custom_name",
+        "workflowCustomLabel",
+        "workflow_custom_label",
+        "workflowLabel",
+        "workflow_label",
+        "workflowName",
+        "workflow_name",
+        "workflow",
+    ):
+        value = row.get(key)
+        if isinstance(value, Mapping):
+            nested = value.get("customName") or value.get("customLabel") or value.get("label") or value.get("name")
+            if nested:
+                return str(nested)
+        text = str(value).strip() if value is not None else ""
+        if text:
+            return text
+    return None
+
+
+def _build_tail_priority_lookup(flights: list[dict[str, Any]]) -> set[str]:
+    priority_tails: set[str] = set()
+    for flight in flights:
+        workflow = _extract_workflow_label(flight)
+        if not workflow:
+            continue
+        if "priority" not in workflow.lower():
+            continue
+        tail = _format_tail_for_api(flight.get("registrationNumber", ""))
+        if tail:
+            priority_tails.add(tail)
+    return priority_tails
 
 
 def _parse_iso_date(value: Any) -> Optional[date]:
@@ -826,6 +873,13 @@ def _render_mel_results(state: Mapping[str, Any]) -> None:
     df["has_limitation"] = df.get("has_limitation", False)
     df["has_client_impact"] = df.get("has_client_impact", False)
     df["tail"] = df["tail"].apply(_format_tail_for_api)
+    scheduled_tails = {
+        _format_tail_for_api(tail) for tail in mel_state.get("scheduled_tails", [])
+    }
+    priority_tails = {
+        _format_tail_for_api(tail) for tail in mel_state.get("scheduled_priority_tails", [])
+    }
+    scheduled_lookup_error = mel_state.get("scheduled_flights_error")
 
     primary_df = df[df["has_description"] & df["has_limitation"]].copy()
     secondary_df = df[~(df["has_description"] & df["has_limitation"])].copy()
@@ -848,14 +902,33 @@ def _render_mel_results(state: Mapping[str, Any]) -> None:
         st.info("No MEL hold items with both a description and limitation were found.")
 
     if not primary_df.empty:
+        if scheduled_lookup_error:
+            primary_df["Upcoming flights (next 5 days)"] = "Unavailable"
+            primary_df["Priority workflow (next 5 days)"] = "Unavailable"
+        else:
+            primary_df["Upcoming flights (next 5 days)"] = primary_df["tail"].map(
+                lambda tail: "Yes" if tail in scheduled_tails else "No"
+            )
+            primary_df["Priority workflow (next 5 days)"] = primary_df["tail"].map(
+                lambda tail: "Yes" if tail in priority_tails else "No"
+            )
         primary_display = primary_df[
-            ["tail", "description", "limitations", "limitations_description"]
+            [
+                "tail",
+                "description",
+                "limitations",
+                "limitations_description",
+                "Upcoming flights (next 5 days)",
+                "Priority workflow (next 5 days)",
+            ]
         ].rename(
             columns={
                 "tail": "Tail",
                 "description": "Description",
                 "limitations": "Limitations",
                 "limitations_description": "Limitations Description",
+                "Upcoming flights (next 5 days)": "Upcoming flights (next 5 days)",
+                "Priority workflow (next 5 days)": "Priority workflow (next 5 days)",
             }
         )
 
@@ -866,26 +939,59 @@ def _render_mel_results(state: Mapping[str, Any]) -> None:
     if secondary_df.empty:
         st.info("No MEL hold items with partial details were found.")
     else:
+        if scheduled_lookup_error:
+            secondary_df["Upcoming flights (next 5 days)"] = "Unavailable"
+            secondary_df["Priority workflow (next 5 days)"] = "Unavailable"
+        else:
+            secondary_df["Upcoming flights (next 5 days)"] = secondary_df["tail"].map(
+                lambda tail: "Yes" if tail in scheduled_tails else "No"
+            )
+            secondary_df["Priority workflow (next 5 days)"] = secondary_df["tail"].map(
+                lambda tail: "Yes" if tail in priority_tails else "No"
+            )
         secondary_display = secondary_df[
-            ["tail", "description", "limitations", "limitations_description"]
+            [
+                "tail",
+                "description",
+                "limitations",
+                "limitations_description",
+                "Upcoming flights (next 5 days)",
+                "Priority workflow (next 5 days)",
+            ]
         ].rename(
             columns={
                 "tail": "Tail",
                 "description": "Description",
                 "limitations": "Limitations",
                 "limitations_description": "Limitations Description",
+                "Upcoming flights (next 5 days)": "Upcoming flights (next 5 days)",
+                "Priority workflow (next 5 days)": "Priority workflow (next 5 days)",
             }
         )
         st.dataframe(secondary_display, width="stretch")
 
     metadata = mel_state.get("metadata", {})
     diagnostics = mel_state.get("diagnostics", {})
+    scheduled_metadata = mel_state.get("scheduled_metadata", {})
+    scheduled_diagnostics = mel_state.get("scheduled_diagnostics", {})
+    scheduled_error = mel_state.get("scheduled_flights_error")
 
     with st.expander("FL3XX request metadata", expanded=False):
-        st.json(metadata)
+        st.json(
+            {
+                "mel_report": metadata,
+                "upcoming_flights": scheduled_metadata,
+            }
+        )
 
     with st.expander("Diagnostics", expanded=False):
-        st.json(diagnostics)
+        st.json(
+            {
+                "mel_report": diagnostics,
+                "upcoming_flights": scheduled_diagnostics,
+                "upcoming_flights_error": scheduled_error,
+            }
+        )
 
 
 configure_page(page_title="OCA Reports")
@@ -1171,6 +1277,43 @@ with mel_tab:
                             "start_date": mel_start_date.isoformat(),
                             "end_date": mel_end_date.isoformat(),
                         }
+                        scheduled_flights_error = None
+                        scheduled_tails: list[str] = []
+                        scheduled_priority_tails: list[str] = []
+                        scheduled_metadata: Dict[str, Any] = {}
+                        scheduled_diagnostics: Dict[str, Any] = {}
+                        try:
+                            with st.spinner("Checking upcoming flights (next 5 days)..."):
+                                scheduled_start = _default_start_date()
+                                scheduled_end = scheduled_start + timedelta(days=5)
+                                flights, scheduled_metadata = fetch_flights(
+                                    config,
+                                    from_date=scheduled_start,
+                                    to_date=scheduled_end,
+                                )
+                                scheduled_tails = sorted(
+                                    _build_tail_flight_lookup(flights),
+                                    key=_tail_order_key,
+                                )
+                                scheduled_priority_tails = sorted(
+                                    _build_tail_priority_lookup(flights),
+                                    key=_tail_order_key,
+                                )
+                                scheduled_diagnostics = {
+                                    "total_flights": len(flights),
+                                    "tails_with_flights": len(scheduled_tails),
+                                    "tails_with_priority_workflows": len(scheduled_priority_tails),
+                                    "from_date": scheduled_start.isoformat(),
+                                    "to_date": scheduled_end.isoformat(),
+                                }
+                        except Exception as exc:  # pragma: no cover - defensive UI path
+                            scheduled_flights_error = str(exc)
+
+                        mel_state["scheduled_tails"] = scheduled_tails
+                        mel_state["scheduled_priority_tails"] = scheduled_priority_tails
+                        mel_state["scheduled_metadata"] = scheduled_metadata
+                        mel_state["scheduled_diagnostics"] = scheduled_diagnostics
+                        mel_state["scheduled_flights_error"] = scheduled_flights_error
 
                     _store_state({"mel": mel_state})
                     st.rerun()
