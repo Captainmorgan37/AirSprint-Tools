@@ -142,6 +142,7 @@ def _sidebar_links() -> list[dict[str, Any]]:
             "links": [
 
                 {"path": "pages/Owner Services Dashboard.py", "label": "Owner Services Dashboard"},
+                {"path": "pages/Catering GT Calculator.py", "label": "Catering/GT Calculator"},
                 {"path": "pages/Cargo Juggler.py", "label": "Cargo Juggler"},
             ],
         },
