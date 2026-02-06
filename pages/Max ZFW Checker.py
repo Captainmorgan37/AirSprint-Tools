@@ -23,9 +23,27 @@ if "cargo_override" not in st.session_state:
 # Config & helper functions
 # --------------------------
 MAX_PAX_CARGO = {
-    "CJ2":  {"Summer": 1086, "Winter": 1034},
     "CJ3":  {"Summer": 1602, "Winter": 1550},
     "Embraer": {"Summer": 2116, "Winter": 2104},
+}
+
+CJ2_TAIL_LIMITS = {
+    "Winter": {
+        "CGZAS": 1074,
+        "CFASP": 1169,
+        "CFIAS": 1164,
+        "CFASW": 1194,
+        "CGASR": 1198,
+        "CFASR": 1204,
+    },
+    "Summer": {
+        "CGZAS": 1114,
+        "CFASP": 1209,
+        "CFIAS": 1204,
+        "CFASW": 1234,
+        "CGASR": 1238,
+        "CFASR": 1274,
+    },
 }
 
 STD_WEIGHTS = {
@@ -181,9 +199,30 @@ else:
 st.markdown("---")
 st.subheader("Result")
 
-max_allowed = MAX_PAX_CARGO[aircraft][season]
 total_payload = pax_weight + cargo_weight
-margin = max_allowed - total_payload
+if aircraft == "CJ2":
+    tail_limits = CJ2_TAIL_LIMITS[season]
+    passing_tails = []
+    failing_tails = []
+    tail_rows = []
+    for tail, limit in tail_limits.items():
+        tail_margin = limit - total_payload
+        tail_rows.append(
+            {
+                "Tail": tail,
+                "Max pax + cargo (lb)": limit,
+                "Margin (lb)": f"{tail_margin:.0f}",
+                "Status": "Within limits" if tail_margin >= 0 else "Over limit",
+            }
+        )
+        if tail_margin >= 0:
+            passing_tails.append(tail)
+        else:
+            failing_tails.append(tail)
+    most_restrictive = min(tail_limits.values())
+else:
+    max_allowed = MAX_PAX_CARGO[aircraft][season]
+    margin = max_allowed - total_payload
 
 # Summary panel
 lcol, rcol = st.columns(2)
@@ -207,7 +246,11 @@ with rcol:
     st.markdown("**Limits**")
     st.write(f"Aircraft: {aircraft}")
     st.write(f"Season: {season}")
-    st.write(f"Max pax + cargo: **{max_allowed} lb**")
+    if aircraft == "CJ2":
+        st.write("Max pax + cargo: **Varies by tail**")
+        st.caption(f"Most restrictive CJ2 max: **{most_restrictive} lb**")
+    else:
+        st.write(f"Max pax + cargo: **{max_allowed} lb**")
 
 st.markdown("---")
 
@@ -215,18 +258,41 @@ st.markdown("---")
 if total_pax == 0 and cargo_weight == 0:
     st.info("Enter passengers and/or cargo to calculate.")
 else:
-    if margin >= 0:
-        st.markdown(color_text(f"WITHIN LIMITS by {margin:.0f} lb", color="green", bold=True, size_px=18), unsafe_allow_html=True)
+    if aircraft == "CJ2":
+        if not failing_tails:
+            st.markdown(
+                color_text("WITHIN LIMITS for all CJ2 tails", color="green", bold=True, size_px=18),
+                unsafe_allow_html=True,
+            )
+        elif not passing_tails:
+            st.markdown(
+                color_text("OVER LIMIT for all CJ2 tails", color="red", bold=True, size_px=18),
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                color_text("PARTIAL PASS: Some CJ2 tails are within limits", color="#c9a227", bold=True, size_px=18),
+                unsafe_allow_html=True,
+            )
+            st.markdown(f"**Works on:** {', '.join(passing_tails)}")
+            st.markdown(f"**Does not work on:** {', '.join(failing_tails)}")
     else:
-        st.markdown(color_text(f"OVER LIMIT by {-margin:.0f} lb", color="red", bold=True, size_px=18), unsafe_allow_html=True)
+        if margin >= 0:
+            st.markdown(color_text(f"WITHIN LIMITS by {margin:.0f} lb", color="green", bold=True, size_px=18), unsafe_allow_html=True)
+        else:
+            st.markdown(color_text(f"OVER LIMIT by {-margin:.0f} lb", color="red", bold=True, size_px=18), unsafe_allow_html=True)
 
     # Details
     st.markdown(
         f"- Pax weight: **{pax_weight:.0f} lb**  \n"
         f"- Cargo weight: **{cargo_weight:.0f} lb**  \n"
-        f"- Total pax + cargo: **{total_payload:.0f} lb**  \n"
-        f"- Max allowed: **{max_allowed} lb**"
+        f"- Total pax + cargo: **{total_payload:.0f} lb**"
     )
+    if aircraft == "CJ2":
+        st.markdown("**CJ2 tail limits (current season):**")
+        st.table(tail_rows)
+    else:
+        st.markdown(f"- Max allowed: **{max_allowed} lb**")
     if additive_weight > 0:
         st.caption(
             f"Passenger weight includes {additive_weight} lb regulatory additive (18 lb per voluntary passenger weight)."
@@ -234,7 +300,6 @@ else:
 
 # Footer note
 st.caption("Note: This tool checks pax + cargo against your planning maxima for each tail type and season. It does not compute full ZFW or CG.")
-
 
 
 
