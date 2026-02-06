@@ -321,6 +321,18 @@ catering_tab, gt_tab = st.tabs(["Catering", "GT"])
 with catering_tab:
     st.subheader("Catering Calculator")
 
+    region = st.selectbox(
+        "Region",
+        ["Canada", "US/International"],
+        key="catering_region_selector",
+    )
+    if st.session_state.get("catering_region_last") != region:
+        st.session_state.catering_region_last = region
+        st.session_state.pop("catering_airport_code", None)
+        st.session_state.pop("catering_tax_selection", None)
+        st.session_state.pop("catering_tax_auto", None)
+        st.session_state.pop("catering_province_code", None)
+
     if st.button("Add catering row"):
         st.session_state.catering_items = pd.concat(
             [st.session_state.catering_items, _default_catering_rows().iloc[:1]],
@@ -328,7 +340,6 @@ with catering_tab:
         )
 
     with st.form("catering_form"):
-        region = st.selectbox("Region", ["Canada", "US/International"], key="catering_region")
         items_df = _ensure_dataframe(
             st.session_state.catering_items,
             ["Item", "Unit Price", "Qty"],
@@ -352,17 +363,21 @@ with catering_tab:
             if airport_code and not province_code:
                 st.warning("Province not found for that airport code. Please select the tax rate manually.")
             if province_code:
+                if st.session_state.get("catering_province_code") != province_code:
+                    st.session_state.catering_province_code = province_code
+                    st.session_state.catering_tax_auto = PROVINCE_TAX_RATES[province_code]
                 st.caption(f"Province detected: {province_code}")
                 tax_rate = st.number_input(
                     "Tax Rate (%)",
-                    value=PROVINCE_TAX_RATES[province_code],
+                    value=st.session_state.get("catering_tax_auto", PROVINCE_TAX_RATES[province_code]),
                     disabled=True,
                     key="catering_tax_auto",
                 )
             else:
                 tax_selection = st.selectbox(
                     "Tax Rate (%)",
-                    options=_tax_rate_options(),
+                    options=["Select province..."] + _tax_rate_options(),
+                    index=0,
                     key="catering_tax_selection",
                 )
                 tax_rate = _tax_rate_from_selection(tax_selection)
@@ -435,6 +450,18 @@ with catering_tab:
 with gt_tab:
     st.subheader("GT Calculator")
 
+    region = st.selectbox(
+        "Region",
+        ["Canada", "US/International"],
+        key="gt_region_selector",
+    )
+    if st.session_state.get("gt_region_last") != region:
+        st.session_state.gt_region_last = region
+        st.session_state.pop("gt_airport_code", None)
+        st.session_state.pop("gt_tax_selection", None)
+        st.session_state.pop("gt_tax_auto", None)
+        st.session_state.pop("gt_province_code", None)
+
     if st.button("Add charge"):
         st.session_state.gt_additional = pd.concat(
             [st.session_state.gt_additional, _default_additional_rows().iloc[:1]],
@@ -442,7 +469,6 @@ with gt_tab:
         )
 
     with st.form("gt_form"):
-        region = st.selectbox("Region", ["Canada", "US/International"], key="gt_region")
         base_cost = st.number_input("Base GT Cost ($)", min_value=0.0, step=0.01, key="gt_base")
         cc_rate = st.number_input("Credit Card Fee (%)", min_value=0.0, max_value=100.0, step=0.01, key="gt_cc")
 
@@ -452,17 +478,21 @@ with gt_tab:
             if airport_code and not province_code:
                 st.warning("Province not found for that airport code. Please select the tax rate manually.")
             if province_code:
+                if st.session_state.get("gt_province_code") != province_code:
+                    st.session_state.gt_province_code = province_code
+                    st.session_state.gt_tax_auto = PROVINCE_TAX_RATES[province_code]
                 st.caption(f"Province detected: {province_code}")
                 tax_rate = st.number_input(
                     "Tax Rate (%)",
-                    value=PROVINCE_TAX_RATES[province_code],
+                    value=st.session_state.get("gt_tax_auto", PROVINCE_TAX_RATES[province_code]),
                     disabled=True,
                     key="gt_tax_auto",
                 )
             else:
                 tax_selection = st.selectbox(
                     "Tax Rate (%)",
-                    options=_tax_rate_options(),
+                    options=["Select province..."] + _tax_rate_options(),
+                    index=0,
                     key="gt_tax_selection",
                 )
                 tax_rate = _tax_rate_from_selection(tax_selection)
