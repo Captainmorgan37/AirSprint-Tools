@@ -12,6 +12,51 @@ from Home import configure_page, password_gate, render_sidebar
 FEE_RATE = 0.10
 DEFAULT_CATERING_ROWS = 6
 DEFAULT_ADDITIONAL_ROWS = 3
+PROVINCE_TAX_RATES: Dict[str, float] = {
+    "AB": 5.0,
+    "NT": 5.0,
+    "NU": 5.0,
+    "YT": 5.0,
+    "SK": 11.0,
+    "BC": 12.0,
+    "MB": 12.0,
+    "ON": 13.0,
+    "QC": 14.975,
+    "NS": 15.0,
+    "NB": 15.0,
+    "NL": 15.0,
+    "PE": 15.0,
+}
+PROVINCE_TAX_LABELS: Dict[str, str] = {
+    "AB": "GST 5%",
+    "NT": "GST 5%",
+    "NU": "GST 5%",
+    "YT": "GST 5%",
+    "SK": "GST 5% + PST 6% = 11%",
+    "BC": "GST 5% + PST 7% = 12%",
+    "MB": "GST 5% + PST 7% = 12%",
+    "ON": "HST 13%",
+    "QC": "GST + QST 14.975%",
+    "NS": "HST 15%",
+    "NB": "HST 15%",
+    "NL": "HST 15%",
+    "PE": "HST 15%",
+}
+PROVINCE_NAME_TO_CODE: Dict[str, str] = {
+    "Alberta": "AB",
+    "Northwest Territories": "NT",
+    "Nunavut": "NU",
+    "Yukon": "YT",
+    "Saskatchewan": "SK",
+    "British Columbia": "BC",
+    "Manitoba": "MB",
+    "Ontario": "ON",
+    "Quebec": "QC",
+    "Nova Scotia": "NS",
+    "New Brunswick": "NB",
+    "Newfoundland and Labrador": "NL",
+    "Prince Edward Island": "PE",
+}
 
 
 @dataclass
@@ -78,6 +123,41 @@ def _calculate_items_total(items: pd.DataFrame) -> float:
     unit_price = _coerce_numeric(items.get("Unit Price", pd.Series(dtype=float)))
     qty = _coerce_numeric(items.get("Qty", pd.Series(dtype=float)))
     return float((unit_price * qty).sum())
+
+
+@st.cache_data
+def _load_canadian_airport_provinces() -> Dict[str, str]:
+    df = pd.read_csv("Airport TZ.txt")
+    df = df[df["country"] == "CA"]
+    mapping: Dict[str, str] = {}
+    for _, row in df.iterrows():
+        province_name = str(row.get("subd", "")).strip()
+        province_code = PROVINCE_NAME_TO_CODE.get(province_name)
+        if not province_code:
+            continue
+        for key in ("icao", "iata"):
+            value = str(row.get(key, "")).strip().upper()
+            if value and value != "NAN":
+                mapping[value] = province_code
+    return mapping
+
+
+def _lookup_province_code(airport_code: str) -> str | None:
+    airport_code = airport_code.strip().upper()
+    if not airport_code:
+        return None
+    return _load_canadian_airport_provinces().get(airport_code)
+
+
+def _tax_rate_from_selection(selection: str) -> float:
+    for code, label in PROVINCE_TAX_LABELS.items():
+        if selection.startswith(code):
+            return PROVINCE_TAX_RATES[code]
+    return 0.0
+
+
+def _tax_rate_options() -> List[str]:
+    return [f"{code} - {PROVINCE_TAX_LABELS[code]}" for code in PROVINCE_TAX_LABELS]
 
 
 def compute_catering_canada(
@@ -241,6 +321,18 @@ catering_tab, gt_tab = st.tabs(["Catering", "GT"])
 with catering_tab:
     st.subheader("Catering Calculator")
 
+    region = st.selectbox(
+        "Region",
+        ["Canada", "US/International"],
+        key="catering_region_selector",
+    )
+    if st.session_state.get("catering_region_last") != region:
+        st.session_state.catering_region_last = region
+        st.session_state.pop("catering_airport_code", None)
+        st.session_state.pop("catering_tax_selection", None)
+        st.session_state.pop("catering_tax_auto", None)
+        st.session_state.pop("catering_province_code", None)
+
     if st.button("Add catering row"):
         st.session_state.catering_items = pd.concat(
             [st.session_state.catering_items, _default_catering_rows().iloc[:1]],
@@ -248,7 +340,6 @@ with catering_tab:
         )
 
     with st.form("catering_form"):
-        region = st.selectbox("Region", ["Canada", "US/International"], key="catering_region")
         items_df = _ensure_dataframe(
             st.session_state.catering_items,
             ["Item", "Unit Price", "Qty"],
@@ -267,7 +358,29 @@ with catering_tab:
 
         if region == "Canada":
             delivery_fees = st.number_input("Delivery Fees ($)", min_value=0.0, step=0.01, key="catering_delivery")
-            tax_rate = st.number_input("Tax Rate (%)", min_value=0.0, step=0.01, key="catering_tax")
+            airport_code = st.text_input("Airport (ICAO/IATA)", key="catering_airport_code")
+            province_code = _lookup_province_code(airport_code)
+            if airport_code and not province_code:
+                st.warning("Province not found for that airport code. Please select the tax rate manually.")
+            if province_code:
+                if st.session_state.get("catering_province_code") != province_code:
+                    st.session_state.catering_province_code = province_code
+                    st.session_state.catering_tax_auto = PROVINCE_TAX_RATES[province_code]
+                st.caption(f"Province detected: {province_code}")
+                tax_rate = st.number_input(
+                    "Tax Rate (%)",
+                    value=st.session_state.get("catering_tax_auto", PROVINCE_TAX_RATES[province_code]),
+                    disabled=True,
+                    key="catering_tax_auto",
+                )
+            else:
+                tax_selection = st.selectbox(
+                    "Tax Rate (%)",
+                    options=["Select province..."] + _tax_rate_options(),
+                    index=0,
+                    key="catering_tax_selection",
+                )
+                tax_rate = _tax_rate_from_selection(tax_selection)
             airport_fee_rate = st.number_input(
                 "Airport Fee Rate (%)", min_value=0.0, step=0.01, key="catering_airport_fee"
             )
@@ -337,6 +450,18 @@ with catering_tab:
 with gt_tab:
     st.subheader("GT Calculator")
 
+    region = st.selectbox(
+        "Region",
+        ["Canada", "US/International"],
+        key="gt_region_selector",
+    )
+    if st.session_state.get("gt_region_last") != region:
+        st.session_state.gt_region_last = region
+        st.session_state.pop("gt_airport_code", None)
+        st.session_state.pop("gt_tax_selection", None)
+        st.session_state.pop("gt_tax_auto", None)
+        st.session_state.pop("gt_province_code", None)
+
     if st.button("Add charge"):
         st.session_state.gt_additional = pd.concat(
             [st.session_state.gt_additional, _default_additional_rows().iloc[:1]],
@@ -344,12 +469,33 @@ with gt_tab:
         )
 
     with st.form("gt_form"):
-        region = st.selectbox("Region", ["Canada", "US/International"], key="gt_region")
         base_cost = st.number_input("Base GT Cost ($)", min_value=0.0, step=0.01, key="gt_base")
         cc_rate = st.number_input("Credit Card Fee (%)", min_value=0.0, max_value=100.0, step=0.01, key="gt_cc")
 
         if region == "Canada":
-            tax_rate = st.number_input("Tax Rate (%)", min_value=0.0, max_value=100.0, step=0.01, key="gt_tax")
+            airport_code = st.text_input("Airport (ICAO/IATA)", key="gt_airport_code")
+            province_code = _lookup_province_code(airport_code)
+            if airport_code and not province_code:
+                st.warning("Province not found for that airport code. Please select the tax rate manually.")
+            if province_code:
+                if st.session_state.get("gt_province_code") != province_code:
+                    st.session_state.gt_province_code = province_code
+                    st.session_state.gt_tax_auto = PROVINCE_TAX_RATES[province_code]
+                st.caption(f"Province detected: {province_code}")
+                tax_rate = st.number_input(
+                    "Tax Rate (%)",
+                    value=st.session_state.get("gt_tax_auto", PROVINCE_TAX_RATES[province_code]),
+                    disabled=True,
+                    key="gt_tax_auto",
+                )
+            else:
+                tax_selection = st.selectbox(
+                    "Tax Rate (%)",
+                    options=["Select province..."] + _tax_rate_options(),
+                    index=0,
+                    key="gt_tax_selection",
+                )
+                tax_rate = _tax_rate_from_selection(tax_selection)
             gratuity_rate = st.number_input(
                 "Gratuity (%)", min_value=0.0, max_value=100.0, step=0.01, value=20.0, key="gt_gratuity"
             )
