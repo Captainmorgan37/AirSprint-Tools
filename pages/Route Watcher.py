@@ -12,7 +12,7 @@ from Home import configure_page, get_secret, password_gate, render_sidebar
 
 
 FORE_FLIGHT_BASE_URL = "https://public-api.foreflight.com/public/api/Flights/flights"
-ROUTE_TERMS = ("ROVMA",)
+ROUTE_TERMS = ("ROVMA", "KUGTC")
 
 
 @dataclass
