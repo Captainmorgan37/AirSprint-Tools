@@ -25,6 +25,8 @@ from flight_leg_utils import (
     FlightDataError,
     build_fl3xx_api_config,
     filter_out_subcharter_rows,
+    is_canadian_country,
+    load_airport_metadata_lookup,
     normalize_fl3xx_payload,
     safe_parse_dt,
     load_airport_tz_lookup,
@@ -121,6 +123,37 @@ def _normalise_identifier(value: Any) -> Optional[str]:
 
 
 _AIRPORT_TZ_LOOKUP = load_airport_tz_lookup()
+_AIRPORT_METADATA_LOOKUP = load_airport_metadata_lookup()
+
+
+def _lookup_airport_country(airport_code: str) -> Optional[str]:
+    if not airport_code:
+        return None
+    record = _AIRPORT_METADATA_LOOKUP.get(airport_code)
+    if not isinstance(record, Mapping):
+        return None
+    country = record.get("country")
+    if isinstance(country, str) and country.strip():
+        return country.strip()
+    return None
+
+
+def _should_include_missing_qualification(
+    qualification_name: str,
+    *,
+    departure_airport: str,
+    arrival_airport: str,
+) -> bool:
+    normalized = qualification_name.strip().upper()
+    if normalized.startswith("AQ-"):
+        return False
+    if "CANPASS" in normalized:
+        dep_country = _lookup_airport_country(departure_airport)
+        arr_country = _lookup_airport_country(arrival_airport)
+        if not dep_country or not arr_country:
+            return False
+        return is_canadian_country(arr_country) and not is_canadian_country(dep_country)
+    return True
 
 
 def _resolve_airport_timezone(airport_code: Optional[str], fallback: timezone) -> timezone:
@@ -348,6 +381,12 @@ try:
         display_identifier = booking_identifier or flight_id
 
         for alert in alerts:
+            if not _should_include_missing_qualification(
+                alert.qualification_name,
+                departure_airport=dep_airport or "",
+                arrival_airport=arr_airport or "",
+            ):
+                continue
             missing_rows.append(
                 {
                     "Booking Identifier": display_identifier,
