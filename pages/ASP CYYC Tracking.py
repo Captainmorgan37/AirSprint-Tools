@@ -35,7 +35,11 @@ LOCAL_TZ = ZoneInfo("America/Edmonton")
 
 HANGAR_ALIASES = {
     "McCall Hangar": {"McCall Hangar"},
-    "Palmer Hangar": {"Palmer Hangar", "600 Palmer Road Northeast, Calgary"},
+    "Palmer Hangar": {
+        "Palmer Hangar",
+        "600 Palmer Road Northeast, Calgary",
+        "Palmer Hanger 1 Replacement",
+    },
 }
 
 
