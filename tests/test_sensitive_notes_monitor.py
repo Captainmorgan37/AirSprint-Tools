@@ -62,3 +62,56 @@ def test_extract_service_notes_uses_api_notes_section_only():
         ("Owner service note – General", "Check passports before departure"),
         ("Owner service note", "Pets travelling – confirm documentation"),
     ]
+
+
+
+def test_extract_leg_note_blocks_includes_leg_and_planning_notes():
+    module = _load_dashboard_module()
+
+    payload = {
+        "notes": "Standard leg note",
+        "planningNotes": "There may be a special event fee at destination",
+    }
+
+    extracted = module._extract_leg_note_blocks(payload)
+
+    assert extracted == [
+        ("Leg notes", "Standard leg note"),
+        ("Planning notes", "There may be a special event fee at destination"),
+    ]
+
+
+def test_build_sensitive_notes_rows_flags_special_event_terms_from_planning_notes():
+    module = _load_dashboard_module()
+
+    def fake_fetch_leg_details(_config, _quote_id, *, session=None):
+        return {
+            "planningNotes": "Owner advised of special event fee on arrival.",
+        }
+
+    def fake_fetch_flight_services(_config, _flight_id, *, session=None):
+        return {"notes": []}
+
+    module.fetch_leg_details = fake_fetch_leg_details
+    module.fetch_flight_services = fake_fetch_flight_services
+
+    rows = [
+        {
+            "quoteId": "Q-100",
+            "flightId": "F-200",
+            "dep_time": "2025-04-07T13:00:00Z",
+            "tail": "C-GABC",
+            "departure_airport": "CYUL",
+            "arrival_airport": "CYYZ",
+        }
+    ]
+
+    class _DummyConfig:
+        pass
+
+    display_rows, warnings, stats = module._build_sensitive_notes_rows(rows, _DummyConfig())
+
+    assert warnings == []
+    assert len(display_rows) == 1
+    assert display_rows[0]["Matched Special Event Terms"] == "SPECIAL EVENT FEE"
+    assert stats["legs_with_special_event_terms"] == 1
