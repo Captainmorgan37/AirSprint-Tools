@@ -175,6 +175,13 @@ def _canonical_aircraft(name: str) -> str:
     return normalized
 
 
+def get_supported_endurance_aircraft_types() -> Tuple[str, ...]:
+    """Return canonical aircraft labels that have configured endurance limits."""
+
+    labels = set(_PASSENGER_PROFILES.keys()) | set(_ENDURANCE_LIMITS.keys())
+    return tuple(sorted(labels))
+
+
 def get_endurance_limit_minutes(aircraft_name: str, pax: Optional[int] = None) -> Optional[int]:
     """Return the configured endurance limit in minutes for an aircraft/pax pairing.
 

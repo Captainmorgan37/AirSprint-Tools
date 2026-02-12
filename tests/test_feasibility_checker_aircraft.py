@@ -123,3 +123,11 @@ def test_get_endurance_limit_minutes_uses_generic_limit_for_non_profile_aircraft
 def test_get_endurance_limit_minutes_returns_none_when_profile_pax_is_missing():
     limit = checker_aircraft.get_endurance_limit_minutes("CJ3+", pax=None)
     assert limit is None
+
+
+def test_get_supported_endurance_aircraft_types_contains_known_profiles_and_limits():
+    aircraft_types = checker_aircraft.get_supported_endurance_aircraft_types()
+    assert "PRAETOR 500" in aircraft_types
+    assert "LEGACY 450" in aircraft_types
+    assert "CITATION CJ4" in aircraft_types
+    assert "PILATUS PC-12" in aircraft_types

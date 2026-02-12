@@ -8,7 +8,10 @@ import pandas as pd
 import streamlit as st
 
 from Home import configure_page, password_gate, render_sidebar
-from feasibility.checker_aircraft import get_endurance_limit_minutes
+from feasibility.checker_aircraft import (
+    get_endurance_limit_minutes,
+    get_supported_endurance_aircraft_types,
+)
 
 
 DEFAULT_MAX_FLIGHT_TIME_BY_PAX_HOURS = (
@@ -159,11 +162,13 @@ with col2:
 with col3:
     pax_count = st.number_input("Passengers", min_value=1, max_value=50, value=6)
 
-aircraft_type = st.text_input(
-    "Aircraft type (optional)",
-    value="",
-    placeholder="e.g., Praetor 500, CJ2+, E545",
-    help="When provided, uses the same aircraft+pax endurance limits as feasibility checker.",
+SUPPORTED_AIRCRAFT_TYPES = get_supported_endurance_aircraft_types()
+
+aircraft_type = st.selectbox(
+    "Aircraft type",
+    options=SUPPORTED_AIRCRAFT_TYPES,
+    index=0,
+    help="Uses feasibility aircraft+pax endurance limits for stop-needed decisions.",
 )
 
 col4, col5, col6 = st.columns(3)
@@ -187,7 +192,7 @@ with col6:
     override_max = st.checkbox("Override max flight time", value=False)
 
 pax_count_int = int(pax_count)
-endurance_limit_minutes = get_endurance_limit_minutes(aircraft_type.strip(), pax_count_int)
+endurance_limit_minutes = get_endurance_limit_minutes(aircraft_type, pax_count_int)
 
 if endurance_limit_minutes is not None:
     max_flight_time_hours = endurance_limit_minutes / 60.0
@@ -209,6 +214,9 @@ else:
             f"**{max_flight_time_hours:.2f} hr** ({endurance_limit_minutes} min)."
         )
     else:
+        st.warning(
+            f"No feasibility endurance value is defined for {aircraft_type} at {pax_count_int} pax; using default pax bands."
+        )
         st.caption(
             "Max flight time derived from default pax bands: "
             f"**{max_flight_time_hours:.1f} hr**."
