@@ -665,6 +665,26 @@ def _extract_row_note_blocks(row: Mapping[str, Any]) -> List[tuple[str, str]]:
     return blocks
 
 
+def _extract_row_note_blocks(row: Mapping[str, Any]) -> List[tuple[str, str]]:
+    blocks: List[tuple[str, str]] = []
+    seen: set[str] = set()
+    fields: tuple[tuple[str, str], ...] = (
+        ("Leg notes", "notes"),
+        ("Planning notes", "planningNotes"),
+        ("Planning notes", "planningNote"),
+        ("Planning notes", "planning_notes"),
+    )
+    for label, field in fields:
+        value = row.get(field)
+        if isinstance(value, str):
+            text = value.strip()
+            if text and text not in seen:
+                seen.add(text)
+                blocks.append((label, text))
+
+    return blocks
+
+
 def _coerce_note_text(value: Any) -> Optional[str]:
     if value is None:
         return None
