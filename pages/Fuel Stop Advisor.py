@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from math import asin, cos, radians, sin, sqrt
 from typing import Any
 
@@ -152,6 +153,21 @@ def _max_flight_time_for_pax_default(pax: int) -> float:
     return DEFAULT_MAX_FLIGHT_TIME_BY_PAX_HOURS[-1][2]
 
 
+def _hours_to_hhmm(hours: float) -> str:
+    total_minutes = max(1, int(round(hours * 60)))
+    hh, mm = divmod(total_minutes, 60)
+    return f"{hh:02d}:{mm:02d}"
+
+
+def _parse_hhmm_to_hours(value: str) -> float | None:
+    text = value.strip()
+    try:
+        parsed = datetime.strptime(text, "%H:%M")
+    except ValueError:
+        return None
+    return (parsed.hour * 60 + parsed.minute) / 60.0
+
+
 st.subheader("Trip inputs")
 
 col1, col2, col3 = st.columns(3)
@@ -178,12 +194,10 @@ aircraft_type = st.selectbox(
 
 col4, col5, col6 = st.columns(3)
 with col4:
-    planned_time_hours = st.number_input(
-        "Planned direct flight time (hours)",
-        min_value=0.1,
-        max_value=20.0,
-        value=3.5,
-        step=0.1,
+    planned_time_hhmm = st.text_input(
+        "Planned direct flight time (HH:MM)",
+        value="03:30",
+        help="Use 24-hour HH:MM duration format (for example 03:30 or 04:15).",
     )
 with col5:
     detour_ratio = st.slider(
@@ -196,6 +210,11 @@ with col5:
 with col6:
     override_max = st.checkbox("Override max flight time", value=False)
 
+planned_time_hours = _parse_hhmm_to_hours(planned_time_hhmm)
+if planned_time_hours is None or not (0.1 <= planned_time_hours <= 20.0):
+    st.error("Planned direct flight time must be in HH:MM format between 00:06 and 20:00.")
+    st.stop()
+
 pax_count_int = int(pax_count)
 endurance_limit_minutes = get_endurance_limit_minutes(aircraft_type, pax_count_int)
 
@@ -205,13 +224,16 @@ else:
     max_flight_time_hours = _max_flight_time_for_pax_default(pax_count_int)
 
 if override_max:
-    max_flight_time_hours = st.number_input(
-        "Max flight time (hours)",
-        min_value=0.5,
-        max_value=20.0,
-        value=float(max_flight_time_hours),
-        step=0.1,
+    override_max_hhmm = st.text_input(
+        "Max flight time (HH:MM)",
+        value=_hours_to_hhmm(max_flight_time_hours),
+        help="Use 24-hour HH:MM duration format.",
     )
+    parsed_max = _parse_hhmm_to_hours(override_max_hhmm)
+    if parsed_max is None or not (0.5 <= parsed_max <= 20.0):
+        st.error("Max flight time must be in HH:MM format between 00:30 and 20:00.")
+        st.stop()
+    max_flight_time_hours = parsed_max
 else:
     if endurance_limit_minutes is not None:
         st.caption(
