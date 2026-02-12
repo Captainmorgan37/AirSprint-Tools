@@ -108,3 +108,18 @@ def test_generic_limit_lookup_uses_canonical_alias():
     )
     assert result.status == "FAIL"
     assert "exceeds endurance" in result.summary
+
+
+def test_get_endurance_limit_minutes_uses_profile_limit_for_aircraft_and_pax():
+    limit = checker_aircraft.get_endurance_limit_minutes("Praetor 500", pax=6)
+    assert limit == 405
+
+
+def test_get_endurance_limit_minutes_uses_generic_limit_for_non_profile_aircraft():
+    limit = checker_aircraft.get_endurance_limit_minutes("CJ4", pax=4)
+    assert limit == 230
+
+
+def test_get_endurance_limit_minutes_returns_none_when_profile_pax_is_missing():
+    limit = checker_aircraft.get_endurance_limit_minutes("CJ3+", pax=None)
+    assert limit is None
