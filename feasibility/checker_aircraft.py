@@ -175,6 +175,35 @@ def _canonical_aircraft(name: str) -> str:
     return normalized
 
 
+def get_supported_endurance_aircraft_types() -> Tuple[str, ...]:
+    """Return canonical aircraft labels that have configured endurance limits."""
+
+    labels = set(_PASSENGER_PROFILES.keys()) | set(_ENDURANCE_LIMITS.keys())
+    return tuple(sorted(labels))
+
+
+def get_endurance_limit_minutes(aircraft_name: str, pax: Optional[int] = None) -> Optional[int]:
+    """Return the configured endurance limit in minutes for an aircraft/pax pairing.
+
+    For aircraft with pax-specific profiles, ``pax`` is required and the profile value is
+    returned. For aircraft that use generic endurance caps, the generic value is returned.
+    ``None`` is returned when aircraft input is missing, pax is invalid for profile-backed
+    aircraft, or no limit is defined for the pax count.
+    """
+
+    if not aircraft_name:
+        return None
+
+    canonical = _canonical_aircraft(aircraft_name)
+    profile = _PASSENGER_PROFILES.get(canonical)
+    if profile is not None:
+        if pax is None or pax < 0:
+            return None
+        return profile.limits[pax] if pax < len(profile.limits) else None
+
+    return _ENDURANCE_LIMITS.get(canonical, _DEFAULT_ENDURANCE)
+
+
 def _extract_pax(flight: Mapping[str, Any]) -> Optional[int]:
     for key in _PAX_KEYS:
         value = extract_int(flight.get(key))
