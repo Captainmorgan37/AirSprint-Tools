@@ -26,6 +26,14 @@ PREFERRED_RUNWAY_LENGTH_FT = 7500
 MAX_RECOMMENDED_OPTIONS = 3
 MAX_EVENNESS_DEGRADATION_RATIO = 1.2
 MAX_EVENNESS_DEGRADATION_NM = 75
+MAX_CRUISE_SPEED_KTS_BY_AIRCRAFT = {
+    "CITATION CJ2+": 418,
+    "CITATION CJ3+": 416,
+    "CITATION CJ4": 451,
+    "LEGACY 450": 462,
+    "PILATUS PC-12": 290,
+    "PRAETOR 500": 466,
+}
 
 
 @dataclass(frozen=True)
@@ -223,8 +231,11 @@ col4, col5, col6 = st.columns(3)
 with col4:
     planned_time_hhmm = st.text_input(
         "Planned direct flight time (HH:MM)",
-        value="03:30",
-        help="Use 24-hour HH:MM duration format (for example 03:30 or 04:15).",
+        value="",
+        help=(
+            "Optional. Use 24-hour HH:MM duration format (for example 03:30 or 04:15). "
+            "If left blank, an estimated time is computed from great-circle distance and aircraft max cruise speed."
+        ),
     )
 with col5:
     detour_ratio = st.slider(
@@ -236,11 +247,6 @@ with col5:
     )
 with col6:
     override_max = st.checkbox("Override max flight time", value=False)
-
-planned_time_hours = _parse_hhmm_to_hours(planned_time_hhmm)
-if planned_time_hours is None or not (0.1 <= planned_time_hours <= 20.0):
-    st.error("Planned direct flight time must be in HH:MM format between 00:06 and 20:00.")
-    st.stop()
 
 pax_count_int = int(pax_count)
 endurance_limit_minutes = get_endurance_limit_minutes(aircraft_type, pax_count_int)
@@ -291,6 +297,31 @@ if departure_code and arrival_code:
         arrival.lat,
         arrival.lon,
     )
+    planned_time_hours: float | None
+    used_auto_planned_time = False
+    planned_time_hhmm_clean = planned_time_hhmm.strip()
+    if planned_time_hhmm_clean:
+        planned_time_hours = _parse_hhmm_to_hours(planned_time_hhmm_clean)
+        if planned_time_hours is None or not (0.1 <= planned_time_hours <= 20.0):
+            st.error("Planned direct flight time must be in HH:MM format between 00:06 and 20:00.")
+            st.stop()
+    else:
+        cruise_speed_kts = MAX_CRUISE_SPEED_KTS_BY_AIRCRAFT.get(aircraft_type)
+        if cruise_speed_kts is None:
+            st.error(
+                "No cruise speed is configured for this aircraft type. Enter a planned direct flight time to continue."
+            )
+            st.stop()
+        planned_time_hours = direct_distance_nm / cruise_speed_kts
+        used_auto_planned_time = True
+
+    if used_auto_planned_time:
+        st.caption(
+            "Estimated direct flight time from max cruise speed "
+            f"(**{cruise_speed_kts} kts**): **{_hours_to_hhmm(planned_time_hours)}**. "
+            "Enter a planned direct flight time above to override this estimate."
+        )
+
     speed_kts = direct_distance_nm / planned_time_hours
     max_leg_distance_nm = max_flight_time_hours * speed_kts
 
