@@ -89,6 +89,13 @@ _DEFAULT_SENSITIVE_KEYWORDS: tuple[str, ...] = (
     "cruise",
 )
 
+_SPECIAL_EVENT_PLANNING_TERMS: tuple[str, ...] = (
+    "special event fee",
+    "special",
+    "event",
+    "fee",
+)
+
 _SENSITIVE_TERMS_STATE_KEY = "owner_services_sensitive_terms"
 _SENSITIVE_ADD_INPUT_KEY = "owner_services_sensitive_add_term"
 _SENSITIVE_REMOVE_SELECT_KEY = "owner_services_sensitive_remove_terms"
@@ -618,6 +625,30 @@ def _extract_leg_notes(payload: Any) -> Optional[str]:
     return None
 
 
+def _extract_leg_note_blocks(payload: Any) -> List[tuple[str, str]]:
+    detail = _select_leg_detail(payload)
+    if not detail:
+        return []
+
+    blocks: List[tuple[str, str]] = []
+    seen: set[str] = set()
+    fields: tuple[tuple[str, str], ...] = (
+        ("Leg notes", "notes"),
+        ("Planning notes", "planningNotes"),
+        ("Planning notes", "planningNote"),
+        ("Planning notes", "planning_notes"),
+    )
+    for label, field in fields:
+        value = detail.get(field)
+        if isinstance(value, str):
+            text = value.strip()
+            if text and text not in seen:
+                seen.add(text)
+                blocks.append((label, text))
+
+    return blocks
+
+
 def _coerce_note_text(value: Any) -> Optional[str]:
     if value is None:
         return None
@@ -687,6 +718,18 @@ def _highlight_keywords(note_text: str) -> tuple[str, List[str]]:
     return normalized, [match.upper() for match in matches]
 
 
+@lru_cache(maxsize=1)
+def _get_special_event_pattern() -> re.Pattern[str]:
+    return _compile_keyword_pattern(_SPECIAL_EVENT_PLANNING_TERMS)
+
+
+def _highlight_special_event_terms(note_text: str) -> List[str]:
+    normalized = note_text.replace("\r\n", "\n").replace("\r", "\n")
+    pattern = _get_special_event_pattern()
+    matches = sorted({match.group(0).lower() for match in pattern.finditer(normalized)})
+    return [match.upper() for match in matches]
+
+
 def _build_sensitive_notes_rows(
     rows: List[Mapping[str, Any]],
     config: Fl3xxApiConfig,
@@ -700,8 +743,10 @@ def _build_sensitive_notes_rows(
         "detail_failures": 0,
         "legs_with_detail": 0,
         "legs_with_leg_notes": 0,
+        "legs_with_planning_notes": 0,
         "legs_with_notes": 0,
         "legs_flagged": 0,
+        "legs_with_special_event_terms": 0,
         "missing_flight_ids": 0,
         "service_requests": 0,
         "service_failures": 0,
@@ -738,10 +783,13 @@ def _build_sensitive_notes_rows(
                 payload = detail_cache.get(quote_id)
                 if payload is not None:
                     stats["legs_with_detail"] += 1
-                    note_text = _extract_leg_notes(payload)
-                    if note_text:
-                        stats["legs_with_leg_notes"] += 1
-                        note_blocks.append(("Leg notes", note_text))
+                    detail_note_blocks = _extract_leg_note_blocks(payload)
+                    for label, note_text in detail_note_blocks:
+                        if label == "Leg notes":
+                            stats["legs_with_leg_notes"] += 1
+                        elif label == "Planning notes":
+                            stats["legs_with_planning_notes"] += 1
+                        note_blocks.append((label, note_text))
 
             flight_id = leg.get("flightId") or leg.get("flight_id")
             services_payload: Optional[Any] = None
@@ -788,9 +836,12 @@ def _build_sensitive_notes_rows(
 
             rendered_blocks = []
             aggregated_matches: set[str] = set()
+            special_event_matches: set[str] = set()
             for label, text in note_blocks:
                 rendered_text, matched_keywords = _highlight_keywords(text)
                 aggregated_matches.update(matched_keywords)
+                if label == "Planning notes":
+                    special_event_matches.update(_highlight_special_event_terms(text))
                 rendered_blocks.append(
                     {
                         "label": label,
@@ -799,10 +850,12 @@ def _build_sensitive_notes_rows(
                     }
                 )
 
-            if not aggregated_matches:
+            if not aggregated_matches and not special_event_matches:
                 continue
 
             stats["legs_flagged"] += 1
+            if special_event_matches:
+                stats["legs_with_special_event_terms"] += 1
 
             departure_label, sort_key = _format_datetime(
                 leg.get("dep_time") or leg.get("departureTimeUtc")
@@ -840,6 +893,9 @@ def _build_sensitive_notes_rows(
                     "Account Name": account_label,
                     "Route": route,
                     "Matched Keywords": ", ".join(sorted(aggregated_matches)),
+                    "Matched Special Event Terms": ", ".join(
+                        sorted(special_event_matches)
+                    ),
                     "Notes": notes_display,
                     "_notes_raw": raw_notes,
                 }
@@ -1168,7 +1224,7 @@ def _render_sensitive_notes_results() -> None:
     if not results:
         if not error_message:
             st.info(
-                "Press **Fetch Sensitive Notes** to search FL3XX leg notes for the configured keywords."
+                "Press **Fetch Sensitive Notes** to search FL3XX leg/planning notes for configured keywords and special-event-fee terms."
             )
         return
 
@@ -1210,7 +1266,7 @@ def _render_sensitive_notes_results() -> None:
         st.warning(warning)
 
     if not rows:
-        st.info("No leg notes matched the configured keywords in the selected range.")
+        st.info("No leg/planning notes matched the configured keywords or special-event-fee terms in the selected range.")
     else:
         _render_sensitive_notes_table(rows)
 
@@ -1224,6 +1280,7 @@ def _render_sensitive_notes_results() -> None:
                     "Account Name": row.get("Account Name", ""),
                     "Route": row.get("Route", ""),
                     "Matched Keywords": row.get("Matched Keywords", ""),
+                    "Matched Special Event Terms": row.get("Matched Special Event Terms", ""),
                     "Notes": row.get("_notes_raw", ""),
                 }
             )
@@ -1251,6 +1308,7 @@ def _render_sensitive_notes_table(rows: List[Mapping[str, Any]]) -> None:
         "Account Name",
         "Route",
         "Matched Keywords",
+        "Matched Special Event Terms",
         "Notes",
     ]
     present_columns = [column for column in column_order if column in df.columns]
@@ -1332,7 +1390,8 @@ def _render_sensitive_keyword_manager() -> None:
 def _render_sensitive_notes_tab(api_settings: Optional[Mapping[str, Any]]) -> None:
     st.markdown(
         """
-        Search FL3XX leg notes for sensitive keywords that may require additional attention.
+        Search FL3XX leg + planning notes for sensitive keywords that may require additional attention.
+        The monitor also checks planning notes for special-event-fee language.
         Select the inclusive departure date range below and press **Fetch Sensitive Notes**
         to scan each matching leg's detailed notes.
         """
@@ -1406,4 +1465,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
