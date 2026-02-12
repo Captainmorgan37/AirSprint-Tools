@@ -115,3 +115,61 @@ def test_build_sensitive_notes_rows_flags_special_event_terms_from_planning_note
     assert len(display_rows) == 1
     assert display_rows[0]["Matched Special Event Terms"] == "SPECIAL EVENT FEE"
     assert stats["legs_with_special_event_terms"] == 1
+
+
+def test_build_sensitive_notes_rows_uses_row_level_planning_notes_without_quote_id():
+    module = _load_dashboard_module()
+
+    def fake_fetch_leg_details(_config, _quote_id, *, session=None):
+        raise AssertionError("leg detail lookup should not run when quote id is missing")
+
+    def fake_fetch_flight_services(_config, _flight_id, *, session=None):
+        return {"notes": []}
+
+    module.fetch_leg_details = fake_fetch_leg_details
+    module.fetch_flight_services = fake_fetch_flight_services
+
+    rows = [
+        {
+            "flightId": "F-201",
+            "dep_time": "2025-02-06T13:00:00Z",
+            "tail": "C-FSDO",
+            "departure_airport": "CYOW",
+            "arrival_airport": "CYXU",
+            "planningNotes": "Please bill KSFO superbowl special event fee to owner",
+        }
+    ]
+
+    class _DummyConfig:
+        pass
+
+    display_rows, warnings, stats = module._build_sensitive_notes_rows(rows, _DummyConfig())
+
+    assert warnings == []
+    assert len(display_rows) == 1
+    assert display_rows[0]["Matched Special Event Terms"] == "SPECIAL EVENT FEE"
+    assert stats["missing_quote_ids"] == 1
+    assert stats["legs_with_special_event_terms"] == 1
+
+
+def test_extract_leg_note_blocks_reads_all_items_from_multi_leg_payload():
+    module = _load_dashboard_module()
+
+    payload = [
+        {
+            "planningNotes": "06FEB CYOW-CYXU-KOAK\nGeneral routing notes",
+        },
+        {
+            "planningNotes": "Please bill KSFO superbowl special event fee to owner - $7,050.00 USD",
+        },
+    ]
+
+    extracted = module._extract_leg_note_blocks(payload)
+
+    assert extracted == [
+        ("Planning notes", "06FEB CYOW-CYXU-KOAK\nGeneral routing notes"),
+        (
+            "Planning notes",
+            "Please bill KSFO superbowl special event fee to owner - $7,050.00 USD",
+        ),
+    ]
