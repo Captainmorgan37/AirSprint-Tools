@@ -162,7 +162,12 @@ with col2:
 with col3:
     pax_count = st.number_input("Passengers", min_value=1, max_value=50, value=6)
 
-SUPPORTED_AIRCRAFT_TYPES = get_supported_endurance_aircraft_types()
+EXCLUDED_AIRCRAFT_TYPES = {"CITATION CJ4", "PILATUS PC-12"}
+SUPPORTED_AIRCRAFT_TYPES = tuple(
+    aircraft
+    for aircraft in get_supported_endurance_aircraft_types()
+    if aircraft not in EXCLUDED_AIRCRAFT_TYPES
+)
 
 aircraft_type = st.selectbox(
     "Aircraft type",
