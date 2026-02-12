@@ -22,6 +22,10 @@ DEFAULT_MAX_FLIGHT_TIME_BY_PAX_HOURS = (
     (13, 50, 3.0),
 )
 MIN_RUNWAY_LENGTH_FT = 5000
+PREFERRED_RUNWAY_LENGTH_FT = 7500
+MAX_RECOMMENDED_OPTIONS = 3
+MAX_EVENNESS_DEGRADATION_RATIO = 1.2
+MAX_EVENNESS_DEGRADATION_NM = 75
 
 
 @dataclass(frozen=True)
@@ -168,6 +172,29 @@ def _parse_hhmm_to_hours(value: str) -> float | None:
     return (parsed.hour * 60 + parsed.minute) / 60.0
 
 
+def _split_top_options(df: pd.DataFrame, score_column: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+    if df.empty:
+        return df, df
+
+    sorted_df = df.sort_values(score_column, ascending=True).reset_index(drop=True)
+    best_score = float(sorted_df.iloc[0][score_column])
+    close_match_mask = sorted_df[score_column] <= best_score * 1.15
+    top_count = int(min(MAX_RECOMMENDED_OPTIONS, max(1, close_match_mask.sum())))
+    return sorted_df.head(top_count).copy(), sorted_df.iloc[top_count:].copy()
+
+
+def _runway_penalty(length_ft: pd.Series) -> pd.Series:
+    shortfall = (PREFERRED_RUNWAY_LENGTH_FT - length_ft).clip(lower=0, upper=PREFERRED_RUNWAY_LENGTH_FT - MIN_RUNWAY_LENGTH_FT)
+    return shortfall / (PREFERRED_RUNWAY_LENGTH_FT - MIN_RUNWAY_LENGTH_FT)
+
+
+def _evenness_threshold(best_evenness_nm: float) -> float:
+    return max(
+        best_evenness_nm * MAX_EVENNESS_DEGRADATION_RATIO,
+        best_evenness_nm + MAX_EVENNESS_DEGRADATION_NM,
+    )
+
+
 st.subheader("Trip inputs")
 
 col1, col2, col3 = st.columns(3)
@@ -296,6 +323,9 @@ if departure_code and arrival_code:
         & (candidates["icao"] != arrival.icao)
     ].copy()
 
+    if not is_international and departure.country and arrival.country:
+        candidates = candidates.loc[candidates["country"] == departure.country]
+
     if require_customs:
         candidates = candidates.loc[candidates["customs_available"]]
 
@@ -318,13 +348,27 @@ if departure_code and arrival_code:
         & (candidates["total_nm"] <= direct_distance_nm * detour_ratio)
     ].copy()
 
-    one_stop = one_stop.sort_values("total_nm").head(15)
+    one_stop["evenness_score"] = (one_stop["leg1_nm"] - one_stop["leg2_nm"]).abs()
+    one_stop["detour_nm"] = one_stop["total_nm"] - direct_distance_nm
+    one_stop["runway_penalty"] = _runway_penalty(one_stop["max_runway_length_ft"])
+    if not one_stop.empty:
+        best_evenness = float(one_stop["evenness_score"].min())
+        evenness_threshold = _evenness_threshold(best_evenness)
+        one_stop["evenness_over_threshold"] = (
+            one_stop["evenness_score"] - evenness_threshold
+        ).clip(lower=0)
+        one_stop = one_stop.sort_values(
+            ["evenness_over_threshold", "runway_penalty", "evenness_score", "detour_nm"],
+            ascending=[True, True, True, True],
+        )
 
-    st.subheader("One-stop options")
-    if one_stop.empty:
+    top_one_stop, additional_one_stop = _split_top_options(one_stop, "evenness_over_threshold")
+
+    st.subheader("One-stop options (recommended)")
+    if top_one_stop.empty:
         st.info("No one-stop options met the runway/customs/detour criteria.")
     else:
-        one_stop_display = one_stop[
+        one_stop_display = top_one_stop[
             [
                 "icao",
                 "name",
@@ -335,64 +379,128 @@ if departure_code and arrival_code:
                 "leg1_nm",
                 "leg2_nm",
                 "total_nm",
+                "evenness_score",
+                "runway_penalty",
             ]
         ].copy()
         one_stop_display["max_runway_length_ft"] = one_stop_display["max_runway_length_ft"].round(0)
         one_stop_display["leg1_nm"] = one_stop_display["leg1_nm"].round(0)
         one_stop_display["leg2_nm"] = one_stop_display["leg2_nm"].round(0)
         one_stop_display["total_nm"] = one_stop_display["total_nm"].round(0)
+        one_stop_display["evenness_score"] = one_stop_display["evenness_score"].round(0)
+        one_stop_display["runway_penalty"] = one_stop_display["runway_penalty"].round(2)
         st.dataframe(one_stop_display, use_container_width=True, hide_index=True)
 
-    st.subheader("Two-stop options")
-    if candidates.empty:
-        st.info("No candidates meet the runway/customs criteria for multi-stop routing.")
-    else:
-        near_departure = candidates.loc[candidates["leg1_nm"] <= max_leg_distance_nm].copy()
-        near_departure = near_departure.sort_values("leg1_nm").head(25)
-        near_arrival = candidates.loc[candidates["leg2_nm"] <= max_leg_distance_nm].copy()
-        near_arrival = near_arrival.sort_values("leg2_nm").head(25)
+        if not additional_one_stop.empty:
+            with st.expander("Additional one-stop options"):
+                additional_one_stop_display = additional_one_stop[
+                    [
+                        "icao",
+                        "name",
+                        "city",
+                        "country",
+                        "max_runway_length_ft",
+                        "customs_available",
+                        "leg1_nm",
+                        "leg2_nm",
+                        "total_nm",
+                        "evenness_score",
+                        "runway_penalty",
+                    ]
+                ].copy()
+                additional_one_stop_display["max_runway_length_ft"] = additional_one_stop_display[
+                    "max_runway_length_ft"
+                ].round(0)
+                additional_one_stop_display["leg1_nm"] = additional_one_stop_display["leg1_nm"].round(0)
+                additional_one_stop_display["leg2_nm"] = additional_one_stop_display["leg2_nm"].round(0)
+                additional_one_stop_display["total_nm"] = additional_one_stop_display["total_nm"].round(0)
+                additional_one_stop_display["evenness_score"] = additional_one_stop_display[
+                    "evenness_score"
+                ].round(0)
+                additional_one_stop_display["runway_penalty"] = additional_one_stop_display[
+                    "runway_penalty"
+                ].round(2)
+                st.dataframe(additional_one_stop_display, use_container_width=True, hide_index=True)
 
-        two_stop_rows = []
-        for _, first in near_departure.iterrows():
-            for _, second in near_arrival.iterrows():
-                if first["icao"] == second["icao"]:
-                    continue
-                leg2_nm = _haversine_nm(
-                    float(first["lat"]),
-                    float(first["lon"]),
-                    float(second["lat"]),
-                    float(second["lon"]),
-                )
-                if leg2_nm > max_leg_distance_nm:
-                    continue
-                total_nm = float(first["leg1_nm"]) + leg2_nm + float(second["leg2_nm"])
-                if total_nm > direct_distance_nm * detour_ratio:
-                    continue
-                two_stop_rows.append(
-                    {
-                        "stop_1": first["icao"],
-                        "stop_2": second["icao"],
-                        "stop_1_name": first["name"],
-                        "stop_2_name": second["name"],
-                        "stop_1_country": first["country"],
-                        "stop_2_country": second["country"],
-                        "stop_1_customs": bool(first["customs_available"]),
-                        "stop_2_customs": bool(second["customs_available"]),
-                        "leg1_nm": float(first["leg1_nm"]),
-                        "leg2_nm": leg2_nm,
-                        "leg3_nm": float(second["leg2_nm"]),
-                        "total_nm": total_nm,
-                    }
-                )
-
-        if not two_stop_rows:
-            st.info("No two-stop options met the runway/customs/detour criteria.")
+    if one_stop.empty:
+        if candidates.empty:
+            st.info("No candidates meet the runway/customs criteria for multi-stop routing.")
         else:
-            two_stop_df = pd.DataFrame(two_stop_rows)
-            two_stop_df = two_stop_df.sort_values("total_nm").head(15)
-            for column in ("leg1_nm", "leg2_nm", "leg3_nm", "total_nm"):
-                two_stop_df[column] = two_stop_df[column].round(0)
-            st.dataframe(two_stop_df, use_container_width=True, hide_index=True)
+            near_departure = candidates.loc[candidates["leg1_nm"] <= max_leg_distance_nm].copy()
+            near_departure = near_departure.sort_values("leg1_nm").head(25)
+            near_arrival = candidates.loc[candidates["leg2_nm"] <= max_leg_distance_nm].copy()
+            near_arrival = near_arrival.sort_values("leg2_nm").head(25)
+
+            two_stop_rows = []
+            for _, first in near_departure.iterrows():
+                for _, second in near_arrival.iterrows():
+                    if first["icao"] == second["icao"]:
+                        continue
+                    leg2_nm = _haversine_nm(
+                        float(first["lat"]),
+                        float(first["lon"]),
+                        float(second["lat"]),
+                        float(second["lon"]),
+                    )
+                    if leg2_nm > max_leg_distance_nm:
+                        continue
+                    total_nm = float(first["leg1_nm"]) + leg2_nm + float(second["leg2_nm"])
+                    if total_nm > direct_distance_nm * detour_ratio:
+                        continue
+                    two_stop_rows.append(
+                        {
+                            "stop_1": first["icao"],
+                            "stop_2": second["icao"],
+                            "stop_1_name": first["name"],
+                            "stop_2_name": second["name"],
+                            "stop_1_country": first["country"],
+                            "stop_2_country": second["country"],
+                            "stop_1_customs": bool(first["customs_available"]),
+                            "stop_2_customs": bool(second["customs_available"]),
+                            "leg1_nm": float(first["leg1_nm"]),
+                            "leg2_nm": leg2_nm,
+                            "leg3_nm": float(second["leg2_nm"]),
+                            "total_nm": total_nm,
+                        }
+                    )
+
+            if not two_stop_rows:
+                st.info("No two-stop options met the runway/customs/detour criteria.")
+            else:
+                two_stop_df = pd.DataFrame(two_stop_rows)
+                two_stop_df["max_leg_gap_nm"] = two_stop_df[["leg1_nm", "leg2_nm", "leg3_nm"]].max(axis=1) - two_stop_df[
+                    ["leg1_nm", "leg2_nm", "leg3_nm"]
+                ].min(axis=1)
+                two_stop_df["detour_nm"] = two_stop_df["total_nm"] - direct_distance_nm
+                runway_by_icao = candidates.set_index("icao")["max_runway_length_ft"]
+                two_stop_df["min_runway_length_ft"] = two_stop_df[["stop_1", "stop_2"]].apply(
+                    lambda row: min(float(runway_by_icao[row["stop_1"]]), float(runway_by_icao[row["stop_2"]])),
+                    axis=1,
+                )
+                two_stop_df["runway_penalty"] = _runway_penalty(two_stop_df["min_runway_length_ft"])
+                best_gap = float(two_stop_df["max_leg_gap_nm"].min())
+                gap_threshold = _evenness_threshold(best_gap)
+                two_stop_df["gap_over_threshold"] = (two_stop_df["max_leg_gap_nm"] - gap_threshold).clip(lower=0)
+                two_stop_df = two_stop_df.sort_values(
+                    ["gap_over_threshold", "runway_penalty", "max_leg_gap_nm", "detour_nm"],
+                    ascending=[True, True, True, True],
+                )
+                top_two_stop, additional_two_stop = _split_top_options(two_stop_df, "gap_over_threshold")
+
+                st.subheader("Two-stop options (recommended)")
+                for column in ("leg1_nm", "leg2_nm", "leg3_nm", "total_nm", "max_leg_gap_nm", "min_runway_length_ft"):
+                    top_two_stop[column] = top_two_stop[column].round(0)
+                top_two_stop["runway_penalty"] = top_two_stop["runway_penalty"].round(2)
+                st.dataframe(top_two_stop, use_container_width=True, hide_index=True)
+
+                if not additional_two_stop.empty:
+                    with st.expander("Additional two-stop options"):
+                        for column in ("leg1_nm", "leg2_nm", "leg3_nm", "total_nm", "max_leg_gap_nm", "min_runway_length_ft"):
+                            additional_two_stop[column] = additional_two_stop[column].round(0)
+                        additional_two_stop["runway_penalty"] = additional_two_stop["runway_penalty"].round(2)
+                        st.dataframe(additional_two_stop, use_container_width=True, hide_index=True)
+    else:
+        st.caption("Two-stop options are hidden because one-stop routing is available.")
 
 st.markdown("---")
 st.caption(
