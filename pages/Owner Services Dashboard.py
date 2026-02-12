@@ -649,6 +649,26 @@ def _extract_leg_note_blocks(payload: Any) -> List[tuple[str, str]]:
     return blocks
 
 
+def _extract_row_note_blocks(row: Mapping[str, Any]) -> List[tuple[str, str]]:
+    blocks: List[tuple[str, str]] = []
+    seen: set[str] = set()
+    fields: tuple[tuple[str, str], ...] = (
+        ("Leg notes", "notes"),
+        ("Planning notes", "planningNotes"),
+        ("Planning notes", "planningNote"),
+        ("Planning notes", "planning_notes"),
+    )
+    for label, field in fields:
+        value = row.get(field)
+        if isinstance(value, str):
+            text = value.strip()
+            if text and text not in seen:
+                seen.add(text)
+                blocks.append((label, text))
+
+    return blocks
+
+
 def _coerce_note_text(value: Any) -> Optional[str]:
     if value is None:
         return None
@@ -763,6 +783,10 @@ def _build_sensitive_notes_rows(
         for leg in rows:
             note_blocks: List[tuple[str, str]] = []
 
+            row_note_blocks = _extract_row_note_blocks(leg)
+            if row_note_blocks:
+                note_blocks.extend(row_note_blocks)
+
             quote_id = _extract_quote_identifier(leg)
             payload: Optional[Any] = None
             if not quote_id:
@@ -828,6 +852,16 @@ def _build_sensitive_notes_rows(
                     if service_notes:
                         stats["legs_with_service_notes"] += 1
                         note_blocks.extend(service_notes)
+
+            if note_blocks:
+                deduped_note_blocks: List[tuple[str, str]] = []
+                seen_note_blocks: set[tuple[str, str]] = set()
+                for note_block in note_blocks:
+                    if note_block in seen_note_blocks:
+                        continue
+                    seen_note_blocks.add(note_block)
+                    deduped_note_blocks.append(note_block)
+                note_blocks = deduped_note_blocks
 
             if not note_blocks:
                 continue
