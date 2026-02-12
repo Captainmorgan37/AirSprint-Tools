@@ -8,9 +8,13 @@ import pandas as pd
 import streamlit as st
 
 from Home import configure_page, password_gate, render_sidebar
+from feasibility.checker_aircraft import (
+    get_endurance_limit_minutes,
+    get_supported_endurance_aircraft_types,
+)
 
 
-MAX_FLIGHT_TIME_BY_PAX_HOURS = (
+DEFAULT_MAX_FLIGHT_TIME_BY_PAX_HOURS = (
     (1, 4, 4.5),
     (5, 8, 4.0),
     (9, 12, 3.5),
@@ -141,11 +145,11 @@ def _haversine_nm(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return 2 * earth_radius_nm * asin(sqrt(a))
 
 
-def _max_flight_time_for_pax(pax: int) -> float:
-    for start, end, max_hours in MAX_FLIGHT_TIME_BY_PAX_HOURS:
+def _max_flight_time_for_pax_default(pax: int) -> float:
+    for start, end, max_hours in DEFAULT_MAX_FLIGHT_TIME_BY_PAX_HOURS:
         if start <= pax <= end:
             return max_hours
-    return MAX_FLIGHT_TIME_BY_PAX_HOURS[-1][2]
+    return DEFAULT_MAX_FLIGHT_TIME_BY_PAX_HOURS[-1][2]
 
 
 st.subheader("Trip inputs")
@@ -157,6 +161,20 @@ with col2:
     arrival_code = st.text_input("Arrival airport code", value="", placeholder="ICAO/IATA")
 with col3:
     pax_count = st.number_input("Passengers", min_value=1, max_value=50, value=6)
+
+EXCLUDED_AIRCRAFT_TYPES = {"CITATION CJ4", "PILATUS PC-12"}
+SUPPORTED_AIRCRAFT_TYPES = tuple(
+    aircraft
+    for aircraft in get_supported_endurance_aircraft_types()
+    if aircraft not in EXCLUDED_AIRCRAFT_TYPES
+)
+
+aircraft_type = st.selectbox(
+    "Aircraft type",
+    options=SUPPORTED_AIRCRAFT_TYPES,
+    index=0,
+    help="Uses feasibility aircraft+pax endurance limits for stop-needed decisions.",
+)
 
 col4, col5, col6 = st.columns(3)
 with col4:
@@ -178,7 +196,14 @@ with col5:
 with col6:
     override_max = st.checkbox("Override max flight time", value=False)
 
-max_flight_time_hours = _max_flight_time_for_pax(int(pax_count))
+pax_count_int = int(pax_count)
+endurance_limit_minutes = get_endurance_limit_minutes(aircraft_type, pax_count_int)
+
+if endurance_limit_minutes is not None:
+    max_flight_time_hours = endurance_limit_minutes / 60.0
+else:
+    max_flight_time_hours = _max_flight_time_for_pax_default(pax_count_int)
+
 if override_max:
     max_flight_time_hours = st.number_input(
         "Max flight time (hours)",
@@ -188,7 +213,19 @@ if override_max:
         step=0.1,
     )
 else:
-    st.caption(f"Max flight time derived from pax count: **{max_flight_time_hours:.1f} hr**")
+    if endurance_limit_minutes is not None:
+        st.caption(
+            "Max flight time derived from feasibility aircraft+pax limits: "
+            f"**{max_flight_time_hours:.2f} hr** ({endurance_limit_minutes} min)."
+        )
+    else:
+        st.warning(
+            f"No feasibility endurance value is defined for {aircraft_type} at {pax_count_int} pax; using default pax bands."
+        )
+        st.caption(
+            "Max flight time derived from default pax bands: "
+            f"**{max_flight_time_hours:.1f} hr**."
+        )
 
 
 if departure_code and arrival_code:
@@ -338,5 +375,5 @@ if departure_code and arrival_code:
 st.markdown("---")
 st.caption(
     "Runway length filter uses the max length in `runways.csv`. Update the max flight time mapping in this page "
-    "to match your published limits."
+    "to match your published limits. If aircraft type is supplied, feasibility endurance tables are used first."
 )
