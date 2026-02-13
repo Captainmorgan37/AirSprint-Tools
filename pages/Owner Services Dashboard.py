@@ -788,11 +788,13 @@ def _build_sensitive_notes_rows(
         "service_failures": 0,
         "legs_with_service_data": 0,
         "legs_with_service_notes": 0,
+        "legs_missing_special_event_disclosure": 0,
     }
 
     detail_cache: Dict[str, Optional[Any]] = {}
     services_cache: Dict[str, Optional[Any]] = {}
     missing_flight_seen: set[tuple[str, str]] = set()
+    analysed_legs: List[Dict[str, Any]] = []
 
     session = requests.Session()
     try:
@@ -879,10 +881,8 @@ def _build_sensitive_notes_rows(
                     deduped_note_blocks.append(note_block)
                 note_blocks = deduped_note_blocks
 
-            if not note_blocks:
-                continue
-
-            stats["legs_with_notes"] += 1
+            if note_blocks:
+                stats["legs_with_notes"] += 1
 
             rendered_blocks = []
             aggregated_matches: set[str] = set()
@@ -900,10 +900,6 @@ def _build_sensitive_notes_rows(
                     }
                 )
 
-            if not aggregated_matches and not special_event_matches:
-                continue
-
-            stats["legs_flagged"] += 1
             if special_event_matches:
                 stats["legs_with_special_event_terms"] += 1
 
@@ -922,7 +918,10 @@ def _build_sensitive_notes_rows(
             route = f"{dep_ap or '?'} → {arr_ap or '?'}"
             account_label = _extract_account_label(leg)
 
-            if len(rendered_blocks) == 1 and rendered_blocks[0]["label"] == "Leg notes":
+            if not rendered_blocks:
+                notes_display = "—"
+                raw_notes = ""
+            elif len(rendered_blocks) == 1 and rendered_blocks[0]["label"] == "Leg notes":
                 notes_display = rendered_blocks[0]["highlighted"]
                 raw_notes = rendered_blocks[0]["raw"]
             else:
@@ -934,24 +933,63 @@ def _build_sensitive_notes_rows(
                 notes_display = "\n\n".join(sections)
                 raw_notes = "\n\n---\n\n".join(raw_sections)
 
-            display_rows.append(
+            analysed_legs.append(
                 {
-                    "_sort_key": sort_key or departure_label,
+                    "sort_key": sort_key or departure_label,
                     "Departure (UTC)": departure_label,
                     "Tail": tail,
                     "Booking Identifier": booking_identifier,
                     "Account Name": account_label,
                     "Route": route,
-                    "Matched Keywords": ", ".join(sorted(aggregated_matches)),
-                    "Matched Special Event Terms": ", ".join(
-                        sorted(special_event_matches)
-                    ),
+                    "Matched Keywords": sorted(aggregated_matches),
+                    "Matched Special Event Terms": sorted(special_event_matches),
                     "Notes": notes_display,
                     "_notes_raw": raw_notes,
+                    "_airports": {code for code in (dep_ap, arr_ap) if code},
                 }
             )
     finally:
         session.close()
+
+    special_event_airports = {
+        airport
+        for row in analysed_legs
+        if row["Matched Special Event Terms"]
+        for airport in row.get("_airports", set())
+        if airport.upper().startswith("K")
+    }
+
+    for row in analysed_legs:
+        matched_keywords = row.get("Matched Keywords", [])
+        matched_special_event_terms = row.get("Matched Special Event Terms", [])
+        related_special_event_airports = sorted(
+            airport
+            for airport in row.get("_airports", set())
+            if airport in special_event_airports
+        )
+        missing_disclosure = bool(related_special_event_airports) and not bool(
+            matched_special_event_terms
+        )
+
+        if missing_disclosure:
+            stats["legs_missing_special_event_disclosure"] += 1
+
+        if not matched_keywords and not matched_special_event_terms and not missing_disclosure:
+            continue
+
+        stats["legs_flagged"] += 1
+
+        row["Matched Keywords"] = ", ".join(matched_keywords)
+        row["Matched Special Event Terms"] = ", ".join(matched_special_event_terms)
+        row["Special Event Follow-up"] = (
+            "Missing special event fee mention for airport(s): "
+            + ", ".join(related_special_event_airports)
+            if missing_disclosure
+            else ""
+        )
+        row["_sort_key"] = row.pop("sort_key", "")
+        row.pop("_airports", None)
+        display_rows.append(row)
 
     display_rows.sort(key=lambda row: row.get("_sort_key") or "")
     for row in display_rows:
@@ -1331,6 +1369,7 @@ def _render_sensitive_notes_results() -> None:
                     "Route": row.get("Route", ""),
                     "Matched Keywords": row.get("Matched Keywords", ""),
                     "Matched Special Event Terms": row.get("Matched Special Event Terms", ""),
+                    "Special Event Follow-up": row.get("Special Event Follow-up", ""),
                     "Notes": row.get("_notes_raw", ""),
                 }
             )
@@ -1359,6 +1398,7 @@ def _render_sensitive_notes_table(rows: List[Mapping[str, Any]]) -> None:
         "Route",
         "Matched Keywords",
         "Matched Special Event Terms",
+        "Special Event Follow-up",
         "Notes",
     ]
     present_columns = [column for column in column_order if column in df.columns]
