@@ -231,14 +231,14 @@ def _render_route_map(
             "lat": departure.lat,
             "label": f"Departure: {departure.icao}",
             "kind": "main",
-            "color": [16, 185, 129],
+            "color": [250, 204, 21],
         },
         {
             "lon": arrival.lon,
             "lat": arrival.lat,
             "label": f"Arrival: {arrival.icao}",
             "kind": "main",
-            "color": [249, 115, 22],
+            "color": [250, 204, 21],
         },
     ]
 
@@ -270,7 +270,7 @@ def _render_route_map(
                     "lat": float(stop["lat"]),
                     "label": f"Fuel stop: {stop['icao']}",
                     "kind": "fuel",
-                    "color": [220, 38, 38],
+                    "color": [250, 204, 21],
                 }
             )
     elif two_stop is not None and not two_stop.empty:
@@ -299,14 +299,14 @@ def _render_route_map(
                         "lat": stop_1.lat,
                         "label": f"Fuel stop: {stop_1.icao}",
                         "kind": "fuel",
-                        "color": [220, 38, 38],
+                        "color": [250, 204, 21],
                     },
                     {
                         "lon": stop_2.lon,
                         "lat": stop_2.lat,
                         "label": f"Fuel stop: {stop_2.icao}",
                         "kind": "fuel",
-                        "color": [220, 38, 38],
+                        "color": [250, 204, 21],
                     },
                 ]
             )
@@ -332,7 +332,7 @@ def _render_route_map(
         data=unique_points,
         get_position="[lon, lat]",
         get_color="color",
-        get_radius=6000,
+        get_radius=3500,
         pickable=True,
     )
     labels_layer = pdk.Layer(
@@ -543,11 +543,11 @@ if departure_code and arrival_code:
             one_stop["evenness_score"] - evenness_threshold
         ).clip(lower=0)
         one_stop = one_stop.sort_values(
-            ["evenness_over_threshold", "runway_penalty", "evenness_score", "detour_nm"],
+            ["detour_nm", "runway_penalty", "evenness_over_threshold", "evenness_score"],
             ascending=[True, True, True, True],
         )
 
-    top_one_stop, additional_one_stop = _split_top_options(one_stop, "evenness_over_threshold")
+    top_one_stop, additional_one_stop = _split_top_options(one_stop, "detour_nm")
 
     st.subheader("One-stop options (recommended)")
     if top_one_stop.empty:
@@ -564,6 +564,7 @@ if departure_code and arrival_code:
                 "leg1_nm",
                 "leg2_nm",
                 "total_nm",
+                "detour_nm",
                 "evenness_score",
                 "runway_penalty",
             ]
@@ -572,6 +573,7 @@ if departure_code and arrival_code:
         one_stop_display["leg1_nm"] = one_stop_display["leg1_nm"].round(0)
         one_stop_display["leg2_nm"] = one_stop_display["leg2_nm"].round(0)
         one_stop_display["total_nm"] = one_stop_display["total_nm"].round(0)
+        one_stop_display["detour_nm"] = one_stop_display["detour_nm"].round(0)
         one_stop_display["evenness_score"] = one_stop_display["evenness_score"].round(0)
         one_stop_display["runway_penalty"] = one_stop_display["runway_penalty"].round(2)
         st.dataframe(one_stop_display, use_container_width=True, hide_index=True)
@@ -589,6 +591,7 @@ if departure_code and arrival_code:
                         "leg1_nm",
                         "leg2_nm",
                         "total_nm",
+                        "detour_nm",
                         "evenness_score",
                         "runway_penalty",
                     ]
@@ -599,6 +602,7 @@ if departure_code and arrival_code:
                 additional_one_stop_display["leg1_nm"] = additional_one_stop_display["leg1_nm"].round(0)
                 additional_one_stop_display["leg2_nm"] = additional_one_stop_display["leg2_nm"].round(0)
                 additional_one_stop_display["total_nm"] = additional_one_stop_display["total_nm"].round(0)
+                additional_one_stop_display["detour_nm"] = additional_one_stop_display["detour_nm"].round(0)
                 additional_one_stop_display["evenness_score"] = additional_one_stop_display[
                     "evenness_score"
                 ].round(0)
@@ -669,20 +673,20 @@ if departure_code and arrival_code:
                 gap_threshold = _evenness_threshold(best_gap)
                 two_stop_df["gap_over_threshold"] = (two_stop_df["max_leg_gap_nm"] - gap_threshold).clip(lower=0)
                 two_stop_df = two_stop_df.sort_values(
-                    ["gap_over_threshold", "runway_penalty", "max_leg_gap_nm", "detour_nm"],
+                    ["detour_nm", "runway_penalty", "gap_over_threshold", "max_leg_gap_nm"],
                     ascending=[True, True, True, True],
                 )
-                top_two_stop, additional_two_stop = _split_top_options(two_stop_df, "gap_over_threshold")
+                top_two_stop, additional_two_stop = _split_top_options(two_stop_df, "detour_nm")
 
                 st.subheader("Two-stop options (recommended)")
-                for column in ("leg1_nm", "leg2_nm", "leg3_nm", "total_nm", "max_leg_gap_nm", "min_runway_length_ft"):
+                for column in ("leg1_nm", "leg2_nm", "leg3_nm", "total_nm", "detour_nm", "max_leg_gap_nm", "min_runway_length_ft"):
                     top_two_stop[column] = top_two_stop[column].round(0)
                 top_two_stop["runway_penalty"] = top_two_stop["runway_penalty"].round(2)
                 st.dataframe(top_two_stop, use_container_width=True, hide_index=True)
 
                 if not additional_two_stop.empty:
                     with st.expander("Additional two-stop options"):
-                        for column in ("leg1_nm", "leg2_nm", "leg3_nm", "total_nm", "max_leg_gap_nm", "min_runway_length_ft"):
+                        for column in ("leg1_nm", "leg2_nm", "leg3_nm", "total_nm", "detour_nm", "max_leg_gap_nm", "min_runway_length_ft"):
                             additional_two_stop[column] = additional_two_stop[column].round(0)
                         additional_two_stop["runway_penalty"] = additional_two_stop["runway_penalty"].round(2)
                         st.dataframe(additional_two_stop, use_container_width=True, hide_index=True)
