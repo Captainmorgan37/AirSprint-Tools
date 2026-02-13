@@ -669,10 +669,12 @@ if departure_code and arrival_code:
         if candidates.empty:
             st.info("No candidates meet the runway/customs criteria for multi-stop routing.")
         else:
+            # Evaluate all feasible first/last-leg candidates; trimming too aggressively can hide
+            # otherwise valid two-stop routings on longer flights.
             near_departure = candidates.loc[candidates["leg1_nm"] <= max_leg_distance_nm].copy()
-            near_departure = near_departure.sort_values("leg1_nm").head(25)
+            near_departure = near_departure.sort_values("leg1_nm")
             near_arrival = candidates.loc[candidates["leg2_nm"] <= max_leg_distance_nm].copy()
-            near_arrival = near_arrival.sort_values("leg2_nm").head(25)
+            near_arrival = near_arrival.sort_values("leg2_nm")
 
             two_stop_rows = []
             for _, first in near_departure.iterrows():
