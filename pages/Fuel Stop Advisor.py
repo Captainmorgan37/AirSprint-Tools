@@ -28,6 +28,7 @@ PREFERRED_RUNWAY_LENGTH_FT = 7500
 MAX_RECOMMENDED_OPTIONS = 3
 MAX_EVENNESS_DEGRADATION_RATIO = 1.2
 MAX_EVENNESS_DEGRADATION_NM = 75
+DISTANCE_EQUIVALENCE_RATIO = 0.02
 MAX_CRUISE_SPEED_KTS_BY_AIRCRAFT = {
     "CITATION CJ2+": 418,
     "CITATION CJ3+": 416,
@@ -207,6 +208,10 @@ def _evenness_threshold(best_evenness_nm: float) -> float:
         best_evenness_nm * MAX_EVENNESS_DEGRADATION_RATIO,
         best_evenness_nm + MAX_EVENNESS_DEGRADATION_NM,
     )
+
+
+def _distance_equivalence_cutoff(best_total_nm: float) -> float:
+    return best_total_nm * (1 + DISTANCE_EQUIVALENCE_RATIO)
 
 
 def _render_route_map(
@@ -537,17 +542,20 @@ if departure_code and arrival_code:
     one_stop["detour_nm"] = one_stop["total_nm"] - direct_distance_nm
     one_stop["runway_penalty"] = _runway_penalty(one_stop["max_runway_length_ft"])
     if not one_stop.empty:
+        best_total_nm = float(one_stop["total_nm"].min())
+        one_stop["within_distance_band"] = one_stop["total_nm"] <= _distance_equivalence_cutoff(best_total_nm)
         best_evenness = float(one_stop["evenness_score"].min())
         evenness_threshold = _evenness_threshold(best_evenness)
         one_stop["evenness_over_threshold"] = (
             one_stop["evenness_score"] - evenness_threshold
         ).clip(lower=0)
+        one_stop["distance_band_rank"] = (~one_stop["within_distance_band"]).astype(int)
         one_stop = one_stop.sort_values(
-            ["detour_nm", "runway_penalty", "evenness_over_threshold", "evenness_score"],
-            ascending=[True, True, True, True],
+            ["distance_band_rank", "evenness_over_threshold", "runway_penalty", "evenness_score", "detour_nm"],
+            ascending=[True, True, True, True, True],
         )
 
-    top_one_stop, additional_one_stop = _split_top_options(one_stop, "detour_nm")
+    top_one_stop, additional_one_stop = _split_top_options(one_stop, "distance_band_rank")
 
     st.subheader("One-stop options (recommended)")
     if top_one_stop.empty:
@@ -669,14 +677,17 @@ if departure_code and arrival_code:
                     axis=1,
                 )
                 two_stop_df["runway_penalty"] = _runway_penalty(two_stop_df["min_runway_length_ft"])
+                best_total_nm = float(two_stop_df["total_nm"].min())
+                two_stop_df["within_distance_band"] = two_stop_df["total_nm"] <= _distance_equivalence_cutoff(best_total_nm)
                 best_gap = float(two_stop_df["max_leg_gap_nm"].min())
                 gap_threshold = _evenness_threshold(best_gap)
                 two_stop_df["gap_over_threshold"] = (two_stop_df["max_leg_gap_nm"] - gap_threshold).clip(lower=0)
+                two_stop_df["distance_band_rank"] = (~two_stop_df["within_distance_band"]).astype(int)
                 two_stop_df = two_stop_df.sort_values(
-                    ["detour_nm", "runway_penalty", "gap_over_threshold", "max_leg_gap_nm"],
-                    ascending=[True, True, True, True],
+                    ["distance_band_rank", "gap_over_threshold", "runway_penalty", "max_leg_gap_nm", "detour_nm"],
+                    ascending=[True, True, True, True, True],
                 )
-                top_two_stop, additional_two_stop = _split_top_options(two_stop_df, "detour_nm")
+                top_two_stop, additional_two_stop = _split_top_options(two_stop_df, "distance_band_rank")
 
                 st.subheader("Two-stop options (recommended)")
                 for column in ("leg1_nm", "leg2_nm", "leg3_nm", "total_nm", "detour_nm", "max_leg_gap_nm", "min_runway_length_ft"):
