@@ -3,9 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from math import asin, cos, radians, sin, sqrt
+import os
 from typing import Any
 
 import pandas as pd
+import pydeck as pdk
 import streamlit as st
 
 from Home import configure_page, password_gate, render_sidebar
@@ -34,6 +36,10 @@ MAX_CRUISE_SPEED_KTS_BY_AIRCRAFT = {
     "PILATUS PC-12": 290,
     "PRAETOR 500": 466,
 }
+
+_MAPBOX_TOKEN = st.secrets.get("mapbox_token")  # type: ignore[attr-defined]
+if isinstance(_MAPBOX_TOKEN, str) and _MAPBOX_TOKEN.strip():
+    os.environ["MAPBOX_API_KEY"] = _MAPBOX_TOKEN.strip()
 
 
 @dataclass(frozen=True)
@@ -200,6 +206,154 @@ def _evenness_threshold(best_evenness_nm: float) -> float:
     return max(
         best_evenness_nm * MAX_EVENNESS_DEGRADATION_RATIO,
         best_evenness_nm + MAX_EVENNESS_DEGRADATION_NM,
+    )
+
+
+def _render_route_map(
+    departure: Airport,
+    arrival: Airport,
+    one_stop: pd.DataFrame,
+    two_stop: pd.DataFrame | None,
+) -> None:
+    line_data = [
+        {
+            "from_lon": departure.lon,
+            "from_lat": departure.lat,
+            "to_lon": arrival.lon,
+            "to_lat": arrival.lat,
+            "color": [37, 99, 235],
+            "label": f"Direct: {departure.icao} → {arrival.icao}",
+        }
+    ]
+    point_rows = [
+        {
+            "lon": departure.lon,
+            "lat": departure.lat,
+            "label": f"Departure: {departure.icao}",
+            "kind": "main",
+            "color": [16, 185, 129],
+        },
+        {
+            "lon": arrival.lon,
+            "lat": arrival.lat,
+            "label": f"Arrival: {arrival.icao}",
+            "kind": "main",
+            "color": [249, 115, 22],
+        },
+    ]
+
+    if not one_stop.empty:
+        for _, stop in one_stop.iterrows():
+            line_data.extend(
+                [
+                    {
+                        "from_lon": departure.lon,
+                        "from_lat": departure.lat,
+                        "to_lon": float(stop["lon"]),
+                        "to_lat": float(stop["lat"]),
+                        "color": [220, 38, 38],
+                        "label": f"Suggested fuel leg: {departure.icao} → {stop['icao']}",
+                    },
+                    {
+                        "from_lon": float(stop["lon"]),
+                        "from_lat": float(stop["lat"]),
+                        "to_lon": arrival.lon,
+                        "to_lat": arrival.lat,
+                        "color": [220, 38, 38],
+                        "label": f"Suggested fuel leg: {stop['icao']} → {arrival.icao}",
+                    },
+                ]
+            )
+            point_rows.append(
+                {
+                    "lon": float(stop["lon"]),
+                    "lat": float(stop["lat"]),
+                    "label": f"Fuel stop: {stop['icao']}",
+                    "kind": "fuel",
+                    "color": [220, 38, 38],
+                }
+            )
+    elif two_stop is not None and not two_stop.empty:
+        first_option = two_stop.iloc[0]
+        stop_1 = _lookup_airport(str(first_option["stop_1"]))
+        stop_2 = _lookup_airport(str(first_option["stop_2"]))
+        if stop_1 and stop_2:
+            route_points = [departure, stop_1, stop_2, arrival]
+            for idx in range(len(route_points) - 1):
+                source = route_points[idx]
+                target = route_points[idx + 1]
+                line_data.append(
+                    {
+                        "from_lon": source.lon,
+                        "from_lat": source.lat,
+                        "to_lon": target.lon,
+                        "to_lat": target.lat,
+                        "color": [220, 38, 38],
+                        "label": f"Suggested fuel leg: {source.icao} → {target.icao}",
+                    }
+                )
+            point_rows.extend(
+                [
+                    {
+                        "lon": stop_1.lon,
+                        "lat": stop_1.lat,
+                        "label": f"Fuel stop: {stop_1.icao}",
+                        "kind": "fuel",
+                        "color": [220, 38, 38],
+                    },
+                    {
+                        "lon": stop_2.lon,
+                        "lat": stop_2.lat,
+                        "label": f"Fuel stop: {stop_2.icao}",
+                        "kind": "fuel",
+                        "color": [220, 38, 38],
+                    },
+                ]
+            )
+
+    if not line_data:
+        return
+
+    unique_points = list({(row["lon"], row["lat"], row["label"]): row for row in point_rows}.values())
+    avg_lat = sum(point["lat"] for point in unique_points) / len(unique_points)
+    avg_lon = sum(point["lon"] for point in unique_points) / len(unique_points)
+
+    lines_layer = pdk.Layer(
+        "LineLayer",
+        data=line_data,
+        get_source_position="[from_lon, from_lat]",
+        get_target_position="[to_lon, to_lat]",
+        get_color="color",
+        get_width=4,
+        pickable=True,
+    )
+    points_layer = pdk.Layer(
+        "ScatterplotLayer",
+        data=unique_points,
+        get_position="[lon, lat]",
+        get_color="color",
+        get_radius=6000,
+        pickable=True,
+    )
+    labels_layer = pdk.Layer(
+        "TextLayer",
+        data=unique_points,
+        get_position="[lon, lat]",
+        get_text="label",
+        get_size=14,
+        get_color=[255, 255, 255],
+        get_alignment_baseline="bottom",
+        get_pixel_offset=[0, -12],
+    )
+
+    st.pydeck_chart(
+        pdk.Deck(
+            map_style="mapbox://styles/mapbox/dark-v10",
+            initial_view_state=pdk.ViewState(latitude=avg_lat, longitude=avg_lon, zoom=3.4),
+            layers=[lines_layer, points_layer, labels_layer],
+            tooltip={"text": "{label}"},
+        ),
+        use_container_width=True,
     )
 
 
@@ -453,6 +607,8 @@ if departure_code and arrival_code:
                 ].round(2)
                 st.dataframe(additional_one_stop_display, use_container_width=True, hide_index=True)
 
+    top_two_stop = pd.DataFrame()
+
     if one_stop.empty:
         if candidates.empty:
             st.info("No candidates meet the runway/customs criteria for multi-stop routing.")
@@ -532,6 +688,47 @@ if departure_code and arrival_code:
                         st.dataframe(additional_two_stop, use_container_width=True, hide_index=True)
     else:
         st.caption("Two-stop options are hidden because one-stop routing is available.")
+
+    st.subheader("Suggested stop map")
+    _render_route_map(departure, arrival, top_one_stop, top_two_stop)
+
+    stop_locations = []
+    for _, stop in top_one_stop.iterrows():
+        stop_locations.append(
+            {
+                "type": "One-stop",
+                "icao": stop["icao"],
+                "name": stop["name"],
+                "city": stop["city"],
+                "country": stop["country"],
+                "lat": float(stop["lat"]),
+                "lon": float(stop["lon"]),
+            }
+        )
+    if not stop_locations and not top_two_stop.empty:
+        first_two_stop = top_two_stop.iloc[0]
+        for stop_code in (str(first_two_stop["stop_1"]), str(first_two_stop["stop_2"])):
+            stop_airport = _lookup_airport(stop_code)
+            if not stop_airport:
+                continue
+            stop_locations.append(
+                {
+                    "type": "Two-stop",
+                    "icao": stop_airport.icao,
+                    "name": stop_airport.name,
+                    "city": stop_airport.city,
+                    "country": stop_airport.country,
+                    "lat": stop_airport.lat,
+                    "lon": stop_airport.lon,
+                }
+            )
+
+    if stop_locations:
+        st.subheader("Suggested fuel stop locations")
+        stop_locations_df = pd.DataFrame(stop_locations)
+        stop_locations_df["lat"] = stop_locations_df["lat"].round(4)
+        stop_locations_df["lon"] = stop_locations_df["lon"].round(4)
+        st.dataframe(stop_locations_df, use_container_width=True, hide_index=True)
 
 st.markdown("---")
 st.caption(
