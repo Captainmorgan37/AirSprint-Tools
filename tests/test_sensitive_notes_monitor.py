@@ -152,6 +152,53 @@ def test_build_sensitive_notes_rows_uses_row_level_planning_notes_without_quote_
     assert stats["legs_with_special_event_terms"] == 1
 
 
+def test_build_sensitive_notes_rows_flags_related_us_airport_without_special_event_mention():
+    module = _load_dashboard_module()
+
+    def fake_fetch_leg_details(_config, quote_id, *, session=None):
+        if quote_id == "Q-100":
+            return {"planningNotes": "Owner advised of special event fee at KLAS."}
+        return {"planningNotes": "Standard handling notes only."}
+
+    def fake_fetch_flight_services(_config, _flight_id, *, session=None):
+        return {"notes": []}
+
+    module.fetch_leg_details = fake_fetch_leg_details
+    module.fetch_flight_services = fake_fetch_flight_services
+
+    rows = [
+        {
+            "quoteId": "Q-100",
+            "flightId": "F-200",
+            "dep_time": "2025-04-07T13:00:00Z",
+            "tail": "N100AA",
+            "departure_airport": "KTEB",
+            "arrival_airport": "KLAS",
+        },
+        {
+            "quoteId": "Q-101",
+            "flightId": "F-201",
+            "dep_time": "2025-04-08T13:00:00Z",
+            "tail": "N101AA",
+            "departure_airport": "KLAS",
+            "arrival_airport": "KDAL",
+        },
+    ]
+
+    class _DummyConfig:
+        pass
+
+    display_rows, warnings, stats = module._build_sensitive_notes_rows(rows, _DummyConfig())
+
+    assert warnings == []
+    assert len(display_rows) == 2
+    follow_up_rows = [row for row in display_rows if row["Special Event Follow-up"]]
+    assert len(follow_up_rows) == 1
+    assert follow_up_rows[0]["Route"] == "KLAS → KDAL"
+    assert "KLAS" in follow_up_rows[0]["Special Event Follow-up"]
+    assert stats["legs_missing_special_event_disclosure"] == 1
+
+
 def test_extract_leg_note_blocks_reads_all_items_from_multi_leg_payload():
     module = _load_dashboard_module()
 
