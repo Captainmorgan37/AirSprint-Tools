@@ -371,6 +371,11 @@ def _extract_account_label(row: Mapping[str, Any]) -> str:
     return "—"
 
 
+def _is_airsprint_inc_account(account_label: str) -> bool:
+    normalized = re.sub(r"[^a-z0-9]+", " ", account_label.lower()).strip()
+    return normalized == "airsprint inc"
+
+
 def _coerce_text(value: Any) -> Optional[str]:
     if value in (None, ""):
         return None
@@ -940,6 +945,7 @@ def _build_sensitive_notes_rows(
                     "Tail": tail,
                     "Booking Identifier": booking_identifier,
                     "Account Name": account_label,
+                    "_is_airsprint_inc": _is_airsprint_inc_account(account_label),
                     "Route": route,
                     "Matched Keywords": sorted(aggregated_matches),
                     "Matched Special Event Terms": sorted(special_event_matches),
@@ -967,8 +973,10 @@ def _build_sensitive_notes_rows(
             for airport in row.get("_airports", set())
             if airport in special_event_airports
         )
-        missing_disclosure = bool(related_special_event_airports) and not bool(
-            matched_special_event_terms
+        missing_disclosure = (
+            bool(related_special_event_airports)
+            and not bool(matched_special_event_terms)
+            and not bool(row.get("_is_airsprint_inc"))
         )
 
         if missing_disclosure:
@@ -989,6 +997,7 @@ def _build_sensitive_notes_rows(
         )
         row["_sort_key"] = row.pop("sort_key", "")
         row.pop("_airports", None)
+        row.pop("_is_airsprint_inc", None)
         display_rows.append(row)
 
     display_rows.sort(key=lambda row: row.get("_sort_key") or "")

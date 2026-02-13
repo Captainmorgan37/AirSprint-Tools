@@ -199,6 +199,52 @@ def test_build_sensitive_notes_rows_flags_related_us_airport_without_special_eve
     assert stats["legs_missing_special_event_disclosure"] == 1
 
 
+def test_build_sensitive_notes_rows_ignores_airsprint_inc_for_missing_disclosure_check():
+    module = _load_dashboard_module()
+
+    def fake_fetch_leg_details(_config, quote_id, *, session=None):
+        if quote_id == "Q-100":
+            return {"planningNotes": "Owner advised of special event fee at KLAS."}
+        return {"planningNotes": "No disclosure text in this note."}
+
+    def fake_fetch_flight_services(_config, _flight_id, *, session=None):
+        return {"notes": []}
+
+    module.fetch_leg_details = fake_fetch_leg_details
+    module.fetch_flight_services = fake_fetch_flight_services
+
+    rows = [
+        {
+            "quoteId": "Q-100",
+            "flightId": "F-200",
+            "dep_time": "2025-04-07T13:00:00Z",
+            "tail": "N100AA",
+            "departure_airport": "KTEB",
+            "arrival_airport": "KLAS",
+            "accountName": "Client Account",
+        },
+        {
+            "quoteId": "Q-101",
+            "flightId": "F-201",
+            "dep_time": "2025-04-08T13:00:00Z",
+            "tail": "N101AA",
+            "departure_airport": "KLAS",
+            "arrival_airport": "KDAL",
+            "accountName": "Airsprint Inc.",
+        },
+    ]
+
+    class _DummyConfig:
+        pass
+
+    display_rows, warnings, stats = module._build_sensitive_notes_rows(rows, _DummyConfig())
+
+    assert warnings == []
+    assert len(display_rows) == 1
+    assert display_rows[0]["Route"] == "KTEB → KLAS"
+    assert stats["legs_missing_special_event_disclosure"] == 0
+
+
 def test_extract_leg_note_blocks_reads_all_items_from_multi_leg_payload():
     module = _load_dashboard_module()
 
