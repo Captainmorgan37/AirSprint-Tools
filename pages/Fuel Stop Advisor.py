@@ -224,7 +224,7 @@ def _distance_equivalence_cutoff(best_total_nm: float) -> float:
 def _category_warning_style(value: Any) -> str:
     category = str(value or "").strip().upper()
     if category in NON_APPROVED_HIGHLIGHT_CATEGORIES:
-        return "background-color: #FEF3C7"
+        return "background-color: #FEF3C7; color: #111827; font-weight: 600"
     return ""
 
 
