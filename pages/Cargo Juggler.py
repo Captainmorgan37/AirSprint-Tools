@@ -67,6 +67,22 @@ containers = {
             "width_min": 36,
             "width_max": 54
         }
+    },
+    "Full-Size SUV": {
+        "modes": [
+            {
+                "label": "Third Row Up (All Seats in Use)",
+                "cargo_volume_cf": 41,
+                "door": {"width": 49, "height": 28, "diag": math.hypot(49, 28)},
+                "interior": {"depth": 22, "width": 49, "height": 28}
+            },
+            {
+                "label": "Third Row Folded",
+                "cargo_volume_cf": 94,
+                "door": {"width": 49, "height": 28, "diag": math.hypot(49, 28)},
+                "interior": {"depth": 50, "width": 49, "height": 28}
+            }
+        ]
     }
 }
 
@@ -754,6 +770,8 @@ with colB:
         st.success("✅ Baggage list cleared.")
 
 container = containers[container_choice]
+is_multi_mode_container = "modes" in container
+container_modes = container.get("modes", [])
 allow_diagonal_fit = st.checkbox(
     "Allow diagonal floor placement for single-item fit checks",
     value=False,
@@ -762,6 +780,17 @@ allow_diagonal_fit = st.checkbox(
         "floor and 3D diagonals. Packing/visualization remains axis-aligned."
     )
 )
+
+if is_multi_mode_container:
+    mode_descriptions = "\n".join(
+        f"- **{mode['label']}**: ~{mode['cargo_volume_cf']} cu ft, "
+        f"{mode['interior']['depth']} × {mode['interior']['width']} × {mode['interior']['height']} in (L×W×H)"
+        for mode in container_modes
+    )
+    st.markdown(
+        "This vehicle is evaluated in order: first with all seats in use, then with third row folded if needed.\n"
+        f"{mode_descriptions}"
+    )
 
 st.write("### Add Baggage")
 col1, col2, col3, col4 = st.columns([1,1,1,1])
@@ -816,72 +845,113 @@ if st.session_state["baggage_list"]:
 
     # Fit checks + Packing
     if st.button("Check Fit / Pack"):
-        # Per-item simple fit
-        results = []
-        door_fail_items = []
-        diagonal_fit_items = []
-        for i, item in enumerate(st.session_state["baggage_list"], 1):
-            box_dims = item["Dims"]
-            door_fit = fits_through_door(box_dims, container["door"], item.get("Flex", 1.0))
-            interior_fit, used_diagonal = fits_inside(
-                box_dims,
-                container["interior"],
-                container_choice,
-                item.get("Flex", 1.0),
-                allow_diagonal=allow_diagonal_fit
-            )
-            if door_fit and interior_fit:
-                status = "✅ Fits (Diagonal)" if used_diagonal else "✅ Fits"
-            else:
-                status = "❌ Door Fail" if not door_fit else "❌ Interior Fail"
-            if not door_fit:
-                door_fail_items.append(i)
-            if used_diagonal:
-                diagonal_fit_items.append(i)
-            results.append({"Type": item["Type"], "Dims": box_dims, "Result": status})
+        def evaluate_mode(mode_label, mode_door, mode_interior):
+            results = []
+            door_fail_items = []
+            diagonal_fit_items = []
+            for i, item in enumerate(st.session_state["baggage_list"], 1):
+                box_dims = item["Dims"]
+                door_fit = fits_through_door(box_dims, mode_door, item.get("Flex", 1.0))
+                interior_fit, used_diagonal = fits_inside(
+                    box_dims,
+                    mode_interior,
+                    container_choice,
+                    item.get("Flex", 1.0),
+                    allow_diagonal=allow_diagonal_fit
+                )
+                if door_fit and interior_fit:
+                    status = "✅ Fits (Diagonal)" if used_diagonal else "✅ Fits"
+                else:
+                    status = "❌ Door Fail" if not door_fit else "❌ Interior Fail"
+                if not door_fit:
+                    door_fail_items.append(i)
+                if used_diagonal:
+                    diagonal_fit_items.append(i)
+                results.append({"Type": item["Type"], "Dims": box_dims, "Result": status})
 
-        results_df = pd.DataFrame(results).reset_index(drop=True)
-        results_df.index = results_df.index + 1
-        results_df.index.name = "Item"
-        st.write("### Fit Results")
-        st.table(results_df)
+            results_df = pd.DataFrame(results).reset_index(drop=True)
+            results_df.index = results_df.index + 1
+            results_df.index.name = "Item"
 
-        if door_fail_items:
-            fail_descriptions = [
-                f"{idx} ({results[idx-1]['Type']})" for idx in door_fail_items
-            ]
-            fail_summary = ", ".join(fail_descriptions)
-            st.error(
-                "🚫 Door fit failed. Remove the following item(s) before finishing calculations: "
-                f"{fail_summary}."
-            )
-            st.info("Door failures must be resolved before packing calculations can continue.")
-            st.stop()
-        if diagonal_fit_items:
-            diagonal_descriptions = [
-                f"{idx} ({results[idx-1]['Type']})" for idx in diagonal_fit_items
-            ]
-            diagonal_summary = ", ".join(diagonal_descriptions)
-            st.info(
-                "📐 Diagonal fit assumed for the following item(s): "
-                f"{diagonal_summary}. Packing/visualization remains axis-aligned."
-            )
+            st.write(f"### Fit Results — {mode_label}")
+            st.table(results_df)
 
-        # Packing multi-strategy
-        result = multi_strategy_packing(
-            st.session_state["baggage_list"], container_choice, container["interior"]
+            if door_fail_items:
+                fail_descriptions = [
+                    f"{idx} ({results[idx-1]['Type']})" for idx in door_fail_items
+                ]
+                fail_summary = ", ".join(fail_descriptions)
+                st.error(
+                    "🚫 Door fit failed. Remove the following item(s) before finishing calculations: "
+                    f"{fail_summary}."
+                )
+                return {
+                    "results": results,
+                    "door_fail_items": door_fail_items,
+                    "diagonal_fit_items": diagonal_fit_items,
+                    "packing": None
+                }
+
+            if diagonal_fit_items:
+                diagonal_descriptions = [
+                    f"{idx} ({results[idx-1]['Type']})" for idx in diagonal_fit_items
+                ]
+                diagonal_summary = ", ".join(diagonal_descriptions)
+                st.info(
+                    "📐 Diagonal fit assumed for the following item(s): "
+                    f"{diagonal_summary}. Packing/visualization remains axis-aligned."
+                )
+
+            packing_result = multi_strategy_packing(
+                st.session_state["baggage_list"], container_choice, mode_interior
+            )
+            return {
+                "results": results,
+                "door_fail_items": door_fail_items,
+                "diagonal_fit_items": diagonal_fit_items,
+                "packing": packing_result
+            }
+
+        modes_to_check = (
+            container_modes
+            if is_multi_mode_container
+            else [{"label": container_choice, "door": container["door"], "interior": container["interior"]}]
         )
 
+        selected_mode = None
+        selected_assessment = None
+
+        for mode in modes_to_check:
+            assessment = evaluate_mode(mode["label"], mode["door"], mode["interior"])
+            packing_result = assessment.get("packing")
+            selected_mode = mode
+            selected_assessment = assessment
+
+            if packing_result and packing_result["success"]:
+                break
+
+        result = selected_assessment.get("packing")
+        if is_multi_mode_container and result and result["success"]:
+            st.success(f"✅ Final result: fits in **{selected_mode['label']}**.")
+        elif is_multi_mode_container:
+            st.error("❌ Final result: does not fit, even with the third row folded.")
+
+        if selected_assessment.get("door_fail_items"):
+            st.info("Door failures must be resolved before packing calculations can continue.")
+            st.stop()
+
         st.write("### Overall Cargo Packing Feasibility")
-        if result["success"]:
+        if result and result["success"]:
             st.success(f"✅ Packing possible using **{result['strategy']}** strategy.")
-        else:
+        elif result:
             st.warning(
                 f"⚠️ Full packing failed. Best strategy was **{result['strategy']}**, "
                 f"which fit {result['fit_count']} out of {len(st.session_state['baggage_list'])} items."
             )
+        else:
+            st.warning("⚠️ Packing could not be attempted due to fit limitations.")
 
-        placements = result["placements"]
+        placements = result["placements"] if result else []
 
         if placements:
             # Human-friendly placements table
@@ -904,25 +974,25 @@ if st.session_state["baggage_list"]:
 
             # Utilization
             total_bag_vol = sum(bag_volume(item["Dims"]) for item in st.session_state["baggage_list"])
-            hold_vol = cargo_volume(container["interior"], container_choice)
+            hold_vol = cargo_volume(selected_mode["interior"], container_choice)
             utilization = (total_bag_vol / hold_vol) * 100 if hold_vol > 0 else 0.0
             st.info(f"📦 Estimated Volume Utilization: {utilization:.1f}% (bags / usable hold volume)")
 
             # Visualization
             st.write("### Cargo Load Visualization")
             if container_choice == "CJ":
-                cargo_dims = (container["interior"]["depth"],
-                              container["interior"]["width"],
-                              container["interior"]["height"])
+                cargo_dims = (selected_mode["interior"]["depth"],
+                              selected_mode["interior"]["width"],
+                              selected_mode["interior"]["height"])
             elif container_choice == "Legacy":
-                cargo_dims = (container["interior"]["depth"],
-                              container["interior"]["width_max"],
-                              container["interior"]["height"])
+                cargo_dims = (selected_mode["interior"]["depth"],
+                              selected_mode["interior"]["width_max"],
+                              selected_mode["interior"]["height"])
             else:
-                cargo_dims = (container["interior"]["depth"],
-                              container["interior"]["width"],
-                              container["interior"]["height"])
-            fig = plot_cargo(cargo_dims, placements, container_choice, container["interior"])
+                cargo_dims = (selected_mode["interior"]["depth"],
+                              selected_mode["interior"]["width"],
+                              selected_mode["interior"]["height"])
+            fig = plot_cargo(cargo_dims, placements, container_choice, selected_mode["interior"])
             st.plotly_chart(fig, width="stretch")
 
             # Debug expander (optional)
