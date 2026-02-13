@@ -15,6 +15,7 @@ from feasibility.checker_aircraft import (
     get_endurance_limit_minutes,
     get_supported_endurance_aircraft_types,
 )
+from feasibility.data_access import load_fl3xx_airport_categories
 
 
 DEFAULT_MAX_FLIGHT_TIME_BY_PAX_HOURS = (
@@ -29,6 +30,7 @@ MAX_RECOMMENDED_OPTIONS = 3
 MAX_EVENNESS_DEGRADATION_RATIO = 1.2
 MAX_EVENNESS_DEGRADATION_NM = 75
 DISTANCE_EQUIVALENCE_RATIO = 0.02
+NON_APPROVED_HIGHLIGHT_CATEGORIES = {"", "NC"}
 MAX_CRUISE_SPEED_KTS_BY_AIRCRAFT = {
     "CITATION CJ2+": 418,
     "CITATION CJ3+": 416,
@@ -97,6 +99,7 @@ def _build_airport_catalog() -> pd.DataFrame:
     airports = _load_airports()
     runways = _load_runways()
     customs = _load_customs()
+    fl3xx_categories = load_fl3xx_airport_categories()
 
     airports = airports.merge(
         runways,
@@ -105,6 +108,10 @@ def _build_airport_catalog() -> pd.DataFrame:
         right_on="airport_ident",
     )
     airports["customs_available"] = airports["icao"].isin(customs["airport_icao"])
+    airports["fl3xx_category"] = airports["icao"].map(
+        lambda icao: (record.category if (record := fl3xx_categories.get(str(icao).upper())) else None)
+    )
+    airports["fl3xx_category"] = airports["fl3xx_category"].fillna("").astype(str).str.strip().str.upper()
     airports = airports.rename(columns={"length_ft": "max_runway_length_ft"})
     return airports
 
@@ -191,11 +198,11 @@ def _split_top_options(df: pd.DataFrame, score_column: str) -> tuple[pd.DataFram
     if df.empty:
         return df, df
 
-    sorted_df = df.sort_values(score_column, ascending=True).reset_index(drop=True)
-    best_score = float(sorted_df.iloc[0][score_column])
-    close_match_mask = sorted_df[score_column] <= best_score * 1.15
+    ranked_df = df.reset_index(drop=True)
+    best_score = float(ranked_df[score_column].min())
+    close_match_mask = ranked_df[score_column] <= best_score * 1.15
     top_count = int(min(MAX_RECOMMENDED_OPTIONS, max(1, close_match_mask.sum())))
-    return sorted_df.head(top_count).copy(), sorted_df.iloc[top_count:].copy()
+    return ranked_df.head(top_count).copy(), ranked_df.iloc[top_count:].copy()
 
 
 def _runway_penalty(length_ft: pd.Series) -> pd.Series:
@@ -212,6 +219,20 @@ def _evenness_threshold(best_evenness_nm: float) -> float:
 
 def _distance_equivalence_cutoff(best_total_nm: float) -> float:
     return best_total_nm * (1 + DISTANCE_EQUIVALENCE_RATIO)
+
+
+def _category_warning_style(value: Any) -> str:
+    category = str(value or "").strip().upper()
+    if category in NON_APPROVED_HIGHLIGHT_CATEGORIES:
+        return "background-color: #FEF3C7; color: #111827; font-weight: 600"
+    return ""
+
+
+def _style_category_columns(df: pd.DataFrame, category_columns: list[str]):
+    target_columns = [column for column in category_columns if column in df.columns]
+    if not target_columns:
+        return df
+    return df.style.applymap(_category_warning_style, subset=target_columns)
 
 
 def _render_route_map(
@@ -519,6 +540,11 @@ if departure_code and arrival_code:
     if require_customs:
         candidates = candidates.loc[candidates["customs_available"]]
 
+    prohibited_count = int((candidates["fl3xx_category"] == "P").sum())
+    candidates = candidates.loc[candidates["fl3xx_category"] != "P"].copy()
+    if prohibited_count:
+        st.info(f"Excluded {prohibited_count} prohibited category P airport(s) from suggestions.")
+
     def compute_leg_distances(lat: float, lon: float) -> tuple[float, float]:
         return (
             _haversine_nm(departure.lat, departure.lon, lat, lon),
@@ -541,6 +567,7 @@ if departure_code and arrival_code:
     one_stop["evenness_score"] = (one_stop["leg1_nm"] - one_stop["leg2_nm"]).abs()
     one_stop["detour_nm"] = one_stop["total_nm"] - direct_distance_nm
     one_stop["runway_penalty"] = _runway_penalty(one_stop["max_runway_length_ft"])
+    one_stop["fl3xx_a_priority"] = (one_stop["fl3xx_category"] != "A").astype(int)
     if not one_stop.empty:
         best_total_nm = float(one_stop["total_nm"].min())
         one_stop["within_distance_band"] = one_stop["total_nm"] <= _distance_equivalence_cutoff(best_total_nm)
@@ -551,8 +578,15 @@ if departure_code and arrival_code:
         ).clip(lower=0)
         one_stop["distance_band_rank"] = (~one_stop["within_distance_band"]).astype(int)
         one_stop = one_stop.sort_values(
-            ["distance_band_rank", "evenness_over_threshold", "runway_penalty", "evenness_score", "detour_nm"],
-            ascending=[True, True, True, True, True],
+            [
+                "fl3xx_a_priority",
+                "distance_band_rank",
+                "evenness_over_threshold",
+                "runway_penalty",
+                "evenness_score",
+                "detour_nm",
+            ],
+            ascending=[True, True, True, True, True, True],
         )
 
     top_one_stop, additional_one_stop = _split_top_options(one_stop, "distance_band_rank")
@@ -567,6 +601,7 @@ if departure_code and arrival_code:
                 "name",
                 "city",
                 "country",
+                "fl3xx_category",
                 "max_runway_length_ft",
                 "customs_available",
                 "leg1_nm",
@@ -584,7 +619,11 @@ if departure_code and arrival_code:
         one_stop_display["detour_nm"] = one_stop_display["detour_nm"].round(0)
         one_stop_display["evenness_score"] = one_stop_display["evenness_score"].round(0)
         one_stop_display["runway_penalty"] = one_stop_display["runway_penalty"].round(2)
-        st.dataframe(one_stop_display, use_container_width=True, hide_index=True)
+        st.dataframe(
+            _style_category_columns(one_stop_display, ["fl3xx_category"]),
+            use_container_width=True,
+            hide_index=True,
+        )
 
         if not additional_one_stop.empty:
             with st.expander("Additional one-stop options"):
@@ -594,6 +633,7 @@ if departure_code and arrival_code:
                         "name",
                         "city",
                         "country",
+                        "fl3xx_category",
                         "max_runway_length_ft",
                         "customs_available",
                         "leg1_nm",
@@ -617,7 +657,11 @@ if departure_code and arrival_code:
                 additional_one_stop_display["runway_penalty"] = additional_one_stop_display[
                     "runway_penalty"
                 ].round(2)
-                st.dataframe(additional_one_stop_display, use_container_width=True, hide_index=True)
+                st.dataframe(
+                    _style_category_columns(additional_one_stop_display, ["fl3xx_category"]),
+                    use_container_width=True,
+                    hide_index=True,
+                )
 
     top_two_stop = pd.DataFrame()
 
@@ -677,6 +721,13 @@ if departure_code and arrival_code:
                     axis=1,
                 )
                 two_stop_df["runway_penalty"] = _runway_penalty(two_stop_df["min_runway_length_ft"])
+                category_by_icao = candidates.set_index("icao")["fl3xx_category"].to_dict()
+                two_stop_df["stop_1_fl3xx_category"] = two_stop_df["stop_1"].map(category_by_icao).fillna("")
+                two_stop_df["stop_2_fl3xx_category"] = two_stop_df["stop_2"].map(category_by_icao).fillna("")
+                two_stop_df["fl3xx_non_a_count"] = (
+                    (two_stop_df["stop_1_fl3xx_category"] != "A").astype(int)
+                    + (two_stop_df["stop_2_fl3xx_category"] != "A").astype(int)
+                )
                 best_total_nm = float(two_stop_df["total_nm"].min())
                 two_stop_df["within_distance_band"] = two_stop_df["total_nm"] <= _distance_equivalence_cutoff(best_total_nm)
                 best_gap = float(two_stop_df["max_leg_gap_nm"].min())
@@ -684,23 +735,76 @@ if departure_code and arrival_code:
                 two_stop_df["gap_over_threshold"] = (two_stop_df["max_leg_gap_nm"] - gap_threshold).clip(lower=0)
                 two_stop_df["distance_band_rank"] = (~two_stop_df["within_distance_band"]).astype(int)
                 two_stop_df = two_stop_df.sort_values(
-                    ["distance_band_rank", "gap_over_threshold", "runway_penalty", "max_leg_gap_nm", "detour_nm"],
-                    ascending=[True, True, True, True, True],
+                    [
+                        "fl3xx_non_a_count",
+                        "distance_band_rank",
+                        "gap_over_threshold",
+                        "runway_penalty",
+                        "max_leg_gap_nm",
+                        "detour_nm",
+                    ],
+                    ascending=[True, True, True, True, True, True],
                 )
                 top_two_stop, additional_two_stop = _split_top_options(two_stop_df, "distance_band_rank")
 
                 st.subheader("Two-stop options (recommended)")
+                top_two_stop_display = top_two_stop[
+                    [
+                        "stop_1",
+                        "stop_1_name",
+                        "stop_1_fl3xx_category",
+                        "stop_2",
+                        "stop_2_name",
+                        "stop_2_fl3xx_category",
+                        "leg1_nm",
+                        "leg2_nm",
+                        "leg3_nm",
+                        "total_nm",
+                        "detour_nm",
+                        "max_leg_gap_nm",
+                        "min_runway_length_ft",
+                        "runway_penalty",
+                    ]
+                ].copy()
                 for column in ("leg1_nm", "leg2_nm", "leg3_nm", "total_nm", "detour_nm", "max_leg_gap_nm", "min_runway_length_ft"):
-                    top_two_stop[column] = top_two_stop[column].round(0)
-                top_two_stop["runway_penalty"] = top_two_stop["runway_penalty"].round(2)
-                st.dataframe(top_two_stop, use_container_width=True, hide_index=True)
+                    top_two_stop_display[column] = top_two_stop_display[column].round(0)
+                top_two_stop_display["runway_penalty"] = top_two_stop_display["runway_penalty"].round(2)
+                st.dataframe(
+                    _style_category_columns(top_two_stop_display, ["stop_1_fl3xx_category", "stop_2_fl3xx_category"]),
+                    use_container_width=True,
+                    hide_index=True,
+                )
 
                 if not additional_two_stop.empty:
                     with st.expander("Additional two-stop options"):
+                        additional_two_stop_display = additional_two_stop[
+                            [
+                                "stop_1",
+                                "stop_1_name",
+                                "stop_1_fl3xx_category",
+                                "stop_2",
+                                "stop_2_name",
+                                "stop_2_fl3xx_category",
+                                "leg1_nm",
+                                "leg2_nm",
+                                "leg3_nm",
+                                "total_nm",
+                                "detour_nm",
+                                "max_leg_gap_nm",
+                                "min_runway_length_ft",
+                                "runway_penalty",
+                            ]
+                        ].copy()
                         for column in ("leg1_nm", "leg2_nm", "leg3_nm", "total_nm", "detour_nm", "max_leg_gap_nm", "min_runway_length_ft"):
-                            additional_two_stop[column] = additional_two_stop[column].round(0)
-                        additional_two_stop["runway_penalty"] = additional_two_stop["runway_penalty"].round(2)
-                        st.dataframe(additional_two_stop, use_container_width=True, hide_index=True)
+                            additional_two_stop_display[column] = additional_two_stop_display[column].round(0)
+                        additional_two_stop_display["runway_penalty"] = additional_two_stop_display["runway_penalty"].round(2)
+                        st.dataframe(
+                            _style_category_columns(
+                                additional_two_stop_display, ["stop_1_fl3xx_category", "stop_2_fl3xx_category"]
+                            ),
+                            use_container_width=True,
+                            hide_index=True,
+                        )
     else:
         st.caption("Two-stop options are hidden because one-stop routing is available.")
 
@@ -716,6 +820,7 @@ if departure_code and arrival_code:
                 "name": stop["name"],
                 "city": stop["city"],
                 "country": stop["country"],
+                "fl3xx_category": stop.get("fl3xx_category", ""),
                 "lat": float(stop["lat"]),
                 "lon": float(stop["lon"]),
             }
@@ -733,6 +838,10 @@ if departure_code and arrival_code:
                     "name": stop_airport.name,
                     "city": stop_airport.city,
                     "country": stop_airport.country,
+                    "fl3xx_category": first_two_stop.get(
+                        "stop_1_fl3xx_category" if stop_code == str(first_two_stop["stop_1"]) else "stop_2_fl3xx_category",
+                        "",
+                    ),
                     "lat": stop_airport.lat,
                     "lon": stop_airport.lon,
                 }
@@ -743,7 +852,11 @@ if departure_code and arrival_code:
         stop_locations_df = pd.DataFrame(stop_locations)
         stop_locations_df["lat"] = stop_locations_df["lat"].round(4)
         stop_locations_df["lon"] = stop_locations_df["lon"].round(4)
-        st.dataframe(stop_locations_df, use_container_width=True, hide_index=True)
+        st.dataframe(
+            _style_category_columns(stop_locations_df, ["fl3xx_category"]),
+            use_container_width=True,
+            hide_index=True,
+        )
 
 st.markdown("---")
 st.caption(
