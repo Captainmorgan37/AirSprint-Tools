@@ -921,14 +921,25 @@ if st.session_state["baggage_list"]:
         selected_mode = None
         selected_assessment = None
 
-        for mode in modes_to_check:
+        for mode_index, mode in enumerate(modes_to_check, start=1):
             assessment = evaluate_mode(mode["label"], mode["door"], mode["interior"])
             packing_result = assessment.get("packing")
             selected_mode = mode
             selected_assessment = assessment
 
             if packing_result and packing_result["success"]:
+                if is_multi_mode_container and mode_index > 1:
+                    st.success(f"✅ Fits in **{mode['label']}** after retrying with additional cargo space.")
                 break
+
+            if is_multi_mode_container and packing_result and not packing_result["success"]:
+                if mode_index < len(modes_to_check):
+                    st.warning(
+                        f"❌ Does not fully fit in **{mode['label']}**. "
+                        "Proceeding to the next cargo-space check."
+                    )
+                else:
+                    st.error(f"❌ Does not fully fit in **{mode['label']}**.")
 
         result = selected_assessment.get("packing")
         if is_multi_mode_container and result and result["success"]:
