@@ -549,7 +549,7 @@ _RSC_VALUE_REGEX = re.compile(
     re.IGNORECASE,
 )
 _FICON_LINE_REGEX = re.compile(
-    r"(?:^|\n)\s*(?:E\)\s*)?((?:RWY|RUNWAY)\b.*?\bFICON\b.*?\.)",
+    r"(?:^|\n)\s*(?:E\)\s*)?((?:[A-Z]{3,4}\s+)?(?:RWY|RUNWAY)\b.*?\bFICON\b.*?(?:\.|$))",
     re.IGNORECASE | re.DOTALL,
 )
 _FICON_VALUE_REGEX = re.compile(
