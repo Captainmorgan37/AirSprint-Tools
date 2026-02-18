@@ -158,7 +158,14 @@ PPR_HOURS_OUT_RE = re.compile(r"(\d+)\s*(?:h|hrs|hours)\s*(?:notice|prior)")
 CLOSED_BETWEEN_RE = re.compile(r"closed between\s*(\d{3,4})[-–](\d{3,4})")
 CLOSED_RANGE_RE = re.compile(r"closed[^0-9]*?(\d{3,4})[-–](\d{3,4})")
 RUNWAY_NUM_RE = re.compile(r"rwy\s*(\d{2}[lrc]?)", re.IGNORECASE)
-ACFT_LIMIT_RE = re.compile(r"(embraer|cj2|cj3|legacy|challenger|global)", re.IGNORECASE)
+ACFT_LIMIT_RE = re.compile(
+    r"\b(embraer|emb|legacy|l450|praetor|e\s?5(?:00|45|50)|cj2\+?|cj3\+?|cj2/3|cj|c25a|c25b|challenger|global)\b",
+    re.IGNORECASE,
+)
+ACFT_APPROVAL_TERMS_RE = re.compile(
+    r"\b(approved\s+for|not\s+approved|operations?\s+only|ops\s+only|restricted|restrcited|limitations?|no\s+[a-z0-9+\-/]+\s+ops?)\b",
+    re.IGNORECASE,
+)
 
 HOURS_RE = re.compile(
     r"(\d{1,2}[:h]?\d{2}\s*[a-z]{0,3})\s*(?:[a-z]{0,3}\s*[-–]\s*|\s+to\s+)(\d{1,2}[:h]?\d{2}\s*[a-z]{0,3})",
@@ -508,7 +515,7 @@ def parse_operational_restrictions(notes: Sequence[str]) -> ParsedRestrictions:
             _extract_night_details(text, parsed, add_note=primary == "night")
         if "runway" in categories:
             _extract_runway_details(text, parsed, add_note=True)
-            _extract_aircraft_limits(text, parsed, add_note=True)
+        _extract_aircraft_limits(text, parsed, add_note=True)
         if "weather" in categories:
             _extract_weather_limitations(text, parsed)
         if not categories:
@@ -677,9 +684,16 @@ def _extract_aircraft_limits(
     note: str, out: ParsedRestrictions, *, add_note: bool = True
 ) -> None:
     lower = note.lower()
-    if ACFT_LIMIT_RE.search(lower) and ("only" in lower or "restricted" in lower):
-        if add_note:
-            out["aircraft_type_limits"].append(note)
+    has_aircraft = ACFT_LIMIT_RE.search(lower) is not None
+    if not has_aircraft:
+        return
+
+    has_restriction_language = ACFT_APPROVAL_TERMS_RE.search(lower) is not None
+    if not has_restriction_language:
+        return
+
+    if add_note:
+        out["aircraft_type_limits"].append(note)
 
 
 def _extract_generic(note: str, out: ParsedRestrictions) -> None:
@@ -969,6 +983,12 @@ def summarize_operational_notes(
 
     if any("pic" in note and "duty pilot" in note for note in raw_notes):
         add_issue("PIC to contact Duty Pilot prior to operation", severity="INFO")
+
+    if restrictions["aircraft_type_limits"]:
+        add_issue(
+            "Aircraft-type operational limits noted (e.g., CJ-only / Embraer not approved); verify assigned aircraft compatibility.",
+            severity="CAUTION",
+        )
 
     tfr_pattern = re.compile(r"\b(tfrs?|temporary flight restriction)\b")
     if any(tfr_pattern.search(note) and "no tfr" not in note for note in raw_notes):

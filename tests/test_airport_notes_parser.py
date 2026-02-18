@@ -269,3 +269,36 @@ def test_tfr_not_triggered_by_email_substring() -> None:
 
     assert summary.status == "PASS"
     assert all("TFR" not in issue for issue in summary.issues)
+
+
+def test_aircraft_type_restriction_patterns_are_captured() -> None:
+    notes = [
+        "NOT approved for Embraer ops due to weight bearing limitations",
+        "RESTRICTIONS:\n\n• Approved for CJ2+ operations only",
+        "CJ2+, CJ3+ OPERATIONS ONLY - DUE TO WEIGHT LIMITATIONS",
+        "APPROVED FOR:\n\n• CJ2+, CJ3+ PORD/FEX operations only, no Legacy ops",
+        "RESTRCITED CJ2/3 OPS",
+        "APPROVED FOR:\n\n• Only CJ2+, CJ3+ operations, no L450 operations permitted",
+    ]
+
+    parsed = parse_operational_restrictions(notes)
+
+    assert parsed["aircraft_type_limits"] == notes
+
+
+def test_aircraft_type_restrictions_raise_operational_caution() -> None:
+    note = "Airport Approved for CJ operations ONLY, due to taxiways being under 35' & small ramp space"
+
+    parsed = parse_operational_restrictions([note])
+    summary = summarize_operational_notes("TEST", [{"note": note}], parsed)
+
+    assert summary.status == "CAUTION"
+    assert any("Aircraft-type operational limits" in issue for issue in summary.issues)
+
+
+def test_non_restrictive_aircraft_mentions_do_not_trigger_aircraft_limit_flag() -> None:
+    note = "Embraer parking is available at the north ramp with marshaller support."
+
+    parsed = parse_operational_restrictions([note])
+
+    assert parsed["aircraft_type_limits"] == []

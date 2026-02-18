@@ -226,7 +226,7 @@ def main() -> None:
     docs = {
         "Cargo Fit Checker Workflow": "docs/Cargo Fit Checker Workflow.docx",
         "Max ZFW Checker Workflow": "docs/Max ZFW Checker Workflow.docx",
-        "Arrivel Weather Outlook Workflow": "docs/Arrival Weather Outlook Workflow.docx",
+        "Arrival Weather Outlook Workflow": "docs/Arrival Weather Outlook Workflow.docx",
         "Customs Dashboard Workflow": "docs/Customs Dashboard Workflow.docx",
         "Duty Calculator Workflow": "docs/Duty Calculator.docx",
         "FBO Disconnect Report Workflow": "docs/FBO Disconnect Report.docx",
