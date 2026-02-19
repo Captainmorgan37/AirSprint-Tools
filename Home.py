@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import json
 import time
+from datetime import datetime, timezone
+from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import Any
 
 import streamlit as st
+import streamlit_authenticator as stauth
 
 
 _SECRET_RETRY_PREFIX = "_secret_retry__"
@@ -13,6 +18,8 @@ _MISSING = object()
 _PAGE_CONFIGURED_KEY = "_page_configured"
 _DEFAULT_PAGE_TITLE = "AirSprint Ops Tools"
 _DEFAULT_PAGE_ICON = "✈️"
+_DEFAULT_AUTH_COOKIE_NAME = "airsprint_tools_auth"
+_DEFAULT_AUTH_COOKIE_DAYS = 14
 
 
 def _secret_retry_key(name: str) -> str:
@@ -44,7 +51,7 @@ def _fetch_secret(key: str, *, required: bool, default: Any = _MISSING) -> Any:
 
     if required:
         st.error(
-            f"Required secret '{key}' is not configured. Update `.streamlit/secrets.toml` and refresh the app."
+            f"Required secret '{key}' is not configured. Add it in Streamlit secrets (Cloud app settings or local `.streamlit/secrets.toml`) and refresh the app."
         )
         st.stop()
 
@@ -65,6 +72,18 @@ def get_secret(key: str, default: Any | None = None) -> Any:
 
     sentinel = _MISSING if default is None else default
     return _fetch_secret(key, required=False, default=sentinel)
+
+
+
+
+def _to_plain_data(value: Any) -> Any:
+    """Recursively convert Streamlit secret containers to mutable built-ins."""
+
+    if isinstance(value, Mapping):
+        return {k: _to_plain_data(v) for k, v in value.items()}
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [_to_plain_data(item) for item in value]
+    return value
 
 
 def _hide_builtin_sidebar_nav() -> None:
@@ -187,9 +206,102 @@ def render_sidebar() -> None:
     st.sidebar.caption("Built by AirSprint Ops • © 2025")
 
 
+def _append_auth_event(event_type: str, username: str | None = None) -> None:
+    """Write a lightweight auth audit event to a JSONL log file."""
+
+    log_path = get_secret("auth_audit_log_path", "logs/auth_events.log")
+    if not log_path:
+        return
+
+    event = {
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "event": event_type,
+        "username": username,
+    }
+
+    path = Path(str(log_path))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(event) + "\n")
+
+
+def _load_authenticator() -> stauth.Authenticate:
+    """Build the authenticator from Streamlit secrets."""
+
+    credentials = _to_plain_data(require_secret("auth_credentials"))
+    cookie_key = require_secret("auth_cookie_key")
+    cookie_name = get_secret("auth_cookie_name", _DEFAULT_AUTH_COOKIE_NAME)
+    cookie_days = int(get_secret("auth_cookie_expiry_days", _DEFAULT_AUTH_COOKIE_DAYS))
+
+    return stauth.Authenticate(
+        credentials=credentials,
+        cookie_name=str(cookie_name),
+        cookie_key=str(cookie_key),
+        cookie_expiry_days=cookie_days,
+    )
+
+
+def current_user() -> str | None:
+    """Return the logged-in username when user-based auth is enabled."""
+
+    return st.session_state.get("auth_username")
+
+
+def require_role(*roles: str) -> None:
+    """Stop rendering if the signed-in user does not have one of the required roles."""
+
+    if not roles:
+        return
+
+    if not get_secret("enable_user_auth", False):
+        return
+
+    user_role = st.session_state.get("auth_role")
+    if user_role not in roles:
+        st.error("You do not have permission to access this page.")
+        st.stop()
+
+
 # --- Basic single-password login gate ---
 def password_gate() -> None:
-    """Simple access restriction with a single shared password."""
+    """Access restriction supporting legacy shared-password and per-user auth."""
+
+    if get_secret("enable_user_auth", False):
+        authenticator = _load_authenticator()
+        name, authentication_status, username = authenticator.login(location="main")
+
+        if authentication_status:
+            if st.session_state.get("authenticated") is not True:
+                _append_auth_event("login_success", username)
+            st.session_state.authenticated = True
+            st.session_state.auth_name = name
+            st.session_state.auth_username = username
+            user_records = _to_plain_data(require_secret("auth_credentials")).get("usernames", {})
+            st.session_state.auth_role = user_records.get(username, {}).get("role", "viewer")
+
+            with st.sidebar:
+                st.caption(f"Signed in as **{name or username}**")
+                st.caption(f"Role: `{st.session_state.auth_role}`")
+                if authenticator.logout("Logout", location="sidebar"):
+                    _append_auth_event("logout", username)
+                    st.session_state.authenticated = False
+                    st.session_state.pop("auth_name", None)
+                    st.session_state.pop("auth_username", None)
+                    st.session_state.pop("auth_role", None)
+                    st.rerun()
+            return
+
+        st.session_state.authenticated = False
+        st.session_state.pop("auth_name", None)
+        st.session_state.pop("auth_username", None)
+        st.session_state.pop("auth_role", None)
+
+        st.title("🔐 AirSprint Tools Access")
+        if authentication_status is False:
+            st.error("Username/password is incorrect")
+        else:
+            st.info("Please sign in with your assigned account.")
+        st.stop()
 
     correct_password = require_secret("app_password")
 
@@ -202,6 +314,9 @@ def password_gate() -> None:
         if st.button("Unlock"):
             if pw == correct_password:
                 st.session_state.authenticated = True
+                st.session_state.auth_username = "shared-password-user"
+                st.session_state.auth_role = "admin"
+                _append_auth_event("login_success", "shared-password-user")
                 st.rerun()
             else:
                 st.error("Incorrect password")
