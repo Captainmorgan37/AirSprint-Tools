@@ -1,86 +1,266 @@
-# User-Based Authentication Rollout (Initial Implementation)
+# User-Based Authentication Rollout (Implementation + Operations Guide)
 
-This project now supports two auth modes in `Home.password_gate()`:
+This project supports two auth modes in `Home.password_gate()`:
 
 1. **Legacy shared password** (default): uses `app_password`.
 2. **Per-user auth** (opt-in): set `enable_user_auth = true` and provide `auth_credentials` + cookie settings.
 
-## Important for Streamlit Cloud
+---
 
-You do **not** need to commit a local `.streamlit/secrets.toml` file.
+## 1) Streamlit Cloud secrets setup (source of truth)
 
-For Streamlit Cloud, add these values in:
+For Streamlit Cloud, add secrets in:
 
 **App Settings → Secrets**
 
-The app reads secrets from `st.secrets`, so Cloud-managed secrets work exactly the same as local secrets.
+The app reads from `st.secrets`, so Cloud-managed secrets are all you need in production.
 
-## What was implemented
-
-- Feature flag: `enable_user_auth` controls whether user-based login is active.
-- Username/password login with `streamlit-authenticator`.
-- Session identity fields (`auth_username`, `auth_name`, `auth_role`).
-- Basic role helper (`require_role`) for page-level authorization.
-- Auth event logging to JSONL (`logs/auth_events.log` by default).
-
-## Secrets to add in Streamlit Cloud
-
-Paste a TOML block like this into Streamlit Cloud Secrets (replace sample values):
+### Example secrets block (starting point)
 
 ```toml
-# --- Legacy fallback ---
+# Legacy fallback (can be removed after full migration)
 app_password = "change-me"
 
-# --- User auth rollout flag ---
+# Feature flag to turn on per-user auth
 enable_user_auth = true
 
-# Used to sign auth cookies. Use a long random value.
-auth_cookie_key = "replace-with-long-random-secret"
-
+# Cookie signing settings
+# Use a long random value (32+ chars)
+auth_cookie_key = "replace-with-very-long-random-secret"
 auth_cookie_name = "airsprint_tools_auth"
 auth_cookie_expiry_days = 14
 
-# Optional: where auth events are written as JSONL
-# (if filesystem persistence is limited on your host, wire this to external logging later)
+# Optional local JSONL auth log path
 auth_audit_log_path = "logs/auth_events.log"
 
 [auth_credentials]
   [auth_credentials.usernames]
+
     [auth_credentials.usernames.ops_admin]
     name = "Ops Admin"
-    # Generate with streamlit_authenticator.Hasher(['StrongPasswordHere']).generate()[0]
     password = "$2b$12$replace_with_bcrypt_hash"
     role = "admin"
 
-    [auth_credentials.usernames.ops_viewer]
-    name = "Ops Viewer"
+    [auth_credentials.usernames.ops_lead]
+    name = "Ops Lead"
+    password = "$2b$12$replace_with_bcrypt_hash"
+    role = "ops_lead"
+
+    [auth_credentials.usernames.viewer_jane]
+    name = "Jane Viewer"
     password = "$2b$12$replace_with_bcrypt_hash"
     role = "viewer"
 ```
 
-## How to protect pages by role
+---
 
-On any page, after `password_gate()`, add role checks:
+## 2) Create real users and assign least-privilege roles
+
+A practical role model to start with:
+
+- `admin`: user management/security-sensitive pages.
+- `ops_lead`: high-sensitivity operational tools.
+- `viewer`: read-only / low-risk pages.
+
+### Suggested rollout process
+
+1. List each page and the data sensitivity.
+2. Assign the **minimum** role needed.
+3. Start with restrictive defaults (only `admin`) and then grant access where needed.
+
+### Example page-to-role matrix
+
+| Page | Sensitivity | Allowed roles |
+|---|---|---|
+| `System Diagnostics` | high | `admin` |
+| `Owner Services Dashboard` | high | `admin`, `ops_lead` |
+| `Flight Following Reports` | medium | `admin`, `ops_lead`, `viewer` |
+| `Duty Calculator` | low | `admin`, `ops_lead`, `viewer` |
+
+---
+
+## 3) Hash passwords before inserting into secrets
+
+Never store plaintext passwords in Streamlit secrets.
+
+### One-time hash generation (local)
+
+Run:
+
+```bash
+python - <<'PY'
+import streamlit_authenticator as stauth
+
+passwords = ["TempAdmin#2026", "TempLead#2026", "TempViewer#2026"]
+hashes = stauth.Hasher(passwords).generate()
+for h in hashes:
+    print(h)
+PY
+```
+
+Copy each resulting hash into the matching user’s `password` field in Cloud secrets.
+
+### Operational tip
+
+- Generate temporary passwords.
+- Share via a secure channel.
+- Force periodic resets by rotating hashes on a schedule.
+
+---
+
+## 4) Turn on feature flag in staging first, validate, then production
+
+Use a simple phased plan:
+
+### Stage A — Prep
+
+- Add all required secrets in **staging**.
+- Keep `enable_user_auth = false` initially.
+- Confirm app still works with shared password fallback.
+
+### Stage B — Enable per-user auth in staging
+
+- Set `enable_user_auth = true`.
+- Test each role login (`admin`, `ops_lead`, `viewer`).
+- Verify denied pages show permission errors.
+- Verify logout works.
+
+### Stage C — Production cutover
+
+- Copy validated secret structure to production.
+- Enable `enable_user_auth = true` during low-traffic window.
+- Keep rollback option: temporarily set flag to `false` if needed.
+
+### Validation checklist (staging)
+
+- Successful login for each role.
+- Failed login shows expected error.
+- Unauthorized role cannot access restricted page.
+- Authorized role can access expected page.
+- Logout clears session and requires new login.
+
+---
+
+## 5) Add page-level authorization (`require_role`) for sensitive tools
+
+Add this pattern on pages with sensitive data.
+
+### Admin-only page example
 
 ```python
-from Home import require_role
+from Home import configure_page, password_gate, render_sidebar, require_role
 
+configure_page(page_title="System Diagnostics")
 password_gate()
 require_role("admin")
+render_sidebar()
 ```
 
-Or allow multiple:
+### Multi-role page example
 
 ```python
-require_role("admin", "viewer")
+from Home import configure_page, password_gate, render_sidebar, require_role
+
+configure_page(page_title="Owner Services Dashboard")
+password_gate()
+require_role("admin", "ops_lead")
+render_sidebar()
 ```
 
-## What you should do next
+### Recommended implementation order
 
-1. **Create real users** and assign least-privilege roles.
-2. **Hash passwords** before inserting them into secrets.
-3. **Turn on feature flag in staging first**, validate all pages, then production.
-4. **Add page-level authorization** (`require_role`) for sensitive tools.
-5. **Set up log retention/review** for auth events.
-6. **Rotate cookie key and credentials** on a defined schedule.
-7. **(Recommended next step)** Move users/roles to a managed identity provider or database-backed user store for lifecycle management (joiners/leavers/password reset).
+1. Protect highest-risk pages first.
+2. Then medium-risk pages.
+3. Finally low-risk pages.
+
+---
+
+## 6) Set up log retention and review for auth events
+
+Current implementation writes JSONL events (login/logout) to `auth_audit_log_path`.
+
+### What to review daily/weekly
+
+- Unexpected login times.
+- Repeated failed logins (if/when added).
+- Logins from users who should be inactive.
+- Missing logout patterns.
+
+### Example JSONL line
+
+```json
+{"timestamp_utc":"2026-02-19T20:35:00+00:00","event":"login_success","username":"ops_admin"}
+```
+
+### Retention baseline
+
+- Keep at least **90 days** in active storage.
+- Archive to longer-term storage (e.g., 1 year) for audits.
+
+> Note: Streamlit Cloud filesystem persistence can be limited depending on deploy/runtime behavior. For long-term reliability, forward events to external logging/storage (e.g., S3, CloudWatch, Datadog, ELK, etc.).
+
+---
+
+## 7) Rotate cookie key and credentials on a schedule
+
+A simple policy to start:
+
+- **Every 90 days**: rotate user passwords (update hashes).
+- **Every 180 days**: rotate `auth_cookie_key`.
+- **Immediately** on suspected compromise: rotate both.
+
+### Rotation runbook
+
+1. Generate new hashes (or temporary passwords) for target users.
+2. Update Cloud secrets.
+3. Rotate `auth_cookie_key` (this invalidates active sessions).
+4. Restart/redeploy app.
+5. Confirm users can re-login.
+6. Record rotation date + owner.
+
+---
+
+## 8) Recommended next step: managed identity provider or DB-backed users
+
+When your user list grows, secrets-only user management becomes operationally heavy.
+
+### Why move beyond secrets-only users
+
+- Better joiner/leaver workflow.
+- Password reset flows.
+- Centralized access governance.
+- Stronger auditability and policy controls.
+
+### Path A: External IdP (preferred long-term)
+
+Use SSO/OIDC (e.g., Okta, Azure AD, Google Workspace via an auth proxy/service).
+
+- Pros: centralized IAM, MFA, automated deprovisioning.
+- Cons: integration complexity.
+
+### Path B: DB-backed users/roles
+
+Store users and role mappings in a managed DB.
+
+- Pros: full app control, easier custom workflows.
+- Cons: you must build secure reset/lockout/audit features.
+
+### Migration strategy
+
+1. Keep current role names (`admin`, `ops_lead`, `viewer`) as a stable contract.
+2. Replace source of user records (from secrets → IdP/DB).
+3. Keep `require_role(...)` checks unchanged in pages.
+4. Run in parallel for a short validation window.
+
+---
+
+## 9) Immediate action plan (next 1–2 weeks)
+
+1. Define role matrix for all pages.
+2. Create named users (no shared accounts).
+3. Generate bcrypt hashes and load Cloud secrets.
+4. Protect top 5 sensitive pages using `require_role`.
+5. Validate in staging, then enable in production.
+6. Set calendar reminders for rotation + access review.
+
+If you want, the next implementation step can be: **I can add `require_role(...)` directly to a first batch of high-sensitivity pages and include a proposed role matrix in code comments/docs.**
