@@ -15,6 +15,8 @@ For Streamlit Cloud, add secrets in:
 
 The app reads from `st.secrets`, so Cloud-managed secrets are all you need in production.
 
+> ✅ **Known issue fixed:** If you previously saw `TypeError: Secrets does not support item assignment` right after setting `enable_user_auth = true`, that happened because `streamlit-authenticator` mutates the credentials object internally. The app now converts `st.secrets["auth_credentials"]` into a plain mutable `dict` before passing it to `Authenticate`.
+
 ### Example secrets block (starting point)
 
 ```toml
@@ -264,3 +266,20 @@ Store users and role mappings in a managed DB.
 6. Set calendar reminders for rotation + access review.
 
 If you want, the next implementation step can be: **I can add `require_role(...)` directly to a first batch of high-sensitivity pages and include a proposed role matrix in code comments/docs.**
+
+
+## 10) Troubleshooting
+
+### Error: `TypeError: Secrets does not support item assignment`
+
+Cause:
+- `st.secrets` objects are immutable wrappers.
+- `streamlit-authenticator` writes fields into credentials during runtime.
+
+Resolution:
+- Ensure you are running the latest code in this repo where auth credentials are converted to a mutable dictionary before being passed into `Authenticate`.
+- Restart the Streamlit app after deployment so the updated code is loaded.
+
+Quick verification:
+- Set `enable_user_auth = true` in Cloud secrets.
+- Refresh app and confirm login form renders without traceback.

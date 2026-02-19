@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import time
 from datetime import datetime, timezone
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -71,6 +72,18 @@ def get_secret(key: str, default: Any | None = None) -> Any:
 
     sentinel = _MISSING if default is None else default
     return _fetch_secret(key, required=False, default=sentinel)
+
+
+
+
+def _to_plain_data(value: Any) -> Any:
+    """Recursively convert Streamlit secret containers to mutable built-ins."""
+
+    if isinstance(value, Mapping):
+        return {k: _to_plain_data(v) for k, v in value.items()}
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [_to_plain_data(item) for item in value]
+    return value
 
 
 def _hide_builtin_sidebar_nav() -> None:
@@ -215,7 +228,7 @@ def _append_auth_event(event_type: str, username: str | None = None) -> None:
 def _load_authenticator() -> stauth.Authenticate:
     """Build the authenticator from Streamlit secrets."""
 
-    credentials = require_secret("auth_credentials")
+    credentials = _to_plain_data(require_secret("auth_credentials"))
     cookie_key = require_secret("auth_cookie_key")
     cookie_name = get_secret("auth_cookie_name", _DEFAULT_AUTH_COOKIE_NAME)
     cookie_days = int(get_secret("auth_cookie_expiry_days", _DEFAULT_AUTH_COOKIE_DAYS))
@@ -263,7 +276,7 @@ def password_gate() -> None:
             st.session_state.authenticated = True
             st.session_state.auth_name = name
             st.session_state.auth_username = username
-            user_records = require_secret("auth_credentials").get("usernames", {})
+            user_records = _to_plain_data(require_secret("auth_credentials")).get("usernames", {})
             st.session_state.auth_role = user_records.get(username, {}).get("role", "viewer")
 
             with st.sidebar:
