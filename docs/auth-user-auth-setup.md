@@ -227,6 +227,8 @@ The app can now forward auth events to an external webhook with:
 
 This runs alongside local JSONL logging, so you can keep lightweight local logs while sending durable copies to your SIEM.
 
+If you do not have a webhook endpoint yet, leave webhook URL secrets blank. The app will skip external forwarding and continue with local logging only.
+
 ---
 
 ## 6.1) Failed-login telemetry, backoff, and lockout

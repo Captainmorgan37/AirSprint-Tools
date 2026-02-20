@@ -35,8 +35,14 @@ def _secret_retry_key(name: str) -> str:
     return f"{_SECRET_RETRY_PREFIX}{name}"
 
 
-def _fetch_secret(key: str, *, required: bool, default: Any = _MISSING) -> Any:
-    """Fetch a secret, retrying briefly if the secrets store isn't ready yet."""
+def _fetch_secret(
+    key: str,
+    *,
+    required: bool,
+    default: Any = _MISSING,
+    retry_if_unavailable: bool = True,
+) -> Any:
+    """Fetch a secret, optionally retrying if the secrets store is not ready."""
 
     try:
         if key in st.secrets:
@@ -50,13 +56,16 @@ def _fetch_secret(key: str, *, required: bool, default: Any = _MISSING) -> Any:
         pass
 
     retry_key = _secret_retry_key(key)
-    attempts = int(st.session_state.get(retry_key, 0))
 
-    if attempts < _SECRET_RETRY_MAX:
-        st.session_state[retry_key] = attempts + 1
-        st.info("Preparing secure configuration…")
-        time.sleep(_SECRET_RETRY_DELAY_SECONDS)
-        st.rerun()
+    if retry_if_unavailable:
+        attempts = int(st.session_state.get(retry_key, 0))
+        if attempts < _SECRET_RETRY_MAX:
+            st.session_state[retry_key] = attempts + 1
+            st.info("Preparing secure configuration…")
+            time.sleep(_SECRET_RETRY_DELAY_SECONDS)
+            st.rerun()
+
+    st.session_state.pop(retry_key, None)
 
     if required:
         st.error(
@@ -73,14 +82,14 @@ def _fetch_secret(key: str, *, required: bool, default: Any = _MISSING) -> Any:
 def require_secret(key: str) -> Any:
     """Return a secret value, stopping the app if it never becomes available."""
 
-    return _fetch_secret(key, required=True)
+    return _fetch_secret(key, required=True, retry_if_unavailable=True)
 
 
 def get_secret(key: str, default: Any | None = None) -> Any:
     """Return a secret value if available, otherwise the provided default."""
 
     sentinel = _MISSING if default is None else default
-    return _fetch_secret(key, required=False, default=sentinel)
+    return _fetch_secret(key, required=False, default=sentinel, retry_if_unavailable=False)
 
 
 
