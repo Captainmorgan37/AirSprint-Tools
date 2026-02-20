@@ -35,6 +35,22 @@ auth_cookie_expiry_days = 14
 # Optional local JSONL auth log path
 auth_audit_log_path = "logs/auth_events.log"
 
+# Optional webhook for durable external auth event shipping (SIEM/log store)
+# Example: HTTPS endpoint for Datadog HTTP intake, Logstash HTTP input, Splunk HEC proxy, etc.
+auth_audit_webhook_url = "https://your-log-endpoint.example.com/auth-events"
+auth_audit_webhook_token = "optional-bearer-token"
+auth_audit_webhook_timeout_seconds = 3
+
+# Optional webhook for high-signal alerting events (failed login / lockout)
+auth_alert_webhook_url = "https://your-alert-endpoint.example.com/security"
+auth_alert_webhook_token = "optional-bearer-token"
+
+# Brute-force protection controls
+auth_max_failed_attempts = 5
+auth_lockout_seconds = 900
+auth_backoff_base_seconds = 1
+auth_backoff_cap_seconds = 8
+
 [auth_credentials]
   [auth_credentials.usernames]
 
@@ -200,6 +216,41 @@ Current implementation writes JSONL events (login/logout) to `auth_audit_log_pat
 - Archive to longer-term storage (e.g., 1 year) for audits.
 
 > Note: Streamlit Cloud filesystem persistence can be limited depending on deploy/runtime behavior. For long-term reliability, forward events to external logging/storage (e.g., S3, CloudWatch, Datadog, ELK, etc.).
+
+### External log shipping (recommended)
+
+The app can now forward auth events to an external webhook with:
+
+- `auth_audit_webhook_url`
+- `auth_audit_webhook_token` (optional bearer token)
+- `auth_audit_webhook_timeout_seconds`
+
+This runs alongside local JSONL logging, so you can keep lightweight local logs while sending durable copies to your SIEM.
+
+If you do not have a webhook endpoint yet, leave webhook URL secrets blank. The app will skip external forwarding and continue with local logging only.
+
+---
+
+## 6.1) Failed-login telemetry, backoff, and lockout
+
+The app can now emit high-signal auth telemetry and enforce brute-force protections:
+
+- Event `login_failure` on invalid credentials.
+- Event `login_lockout` after repeated failed attempts.
+- Exponential backoff per failed attempt.
+- Temporary lockout after threshold is reached.
+
+Secrets controlling behavior:
+
+- `auth_max_failed_attempts` (default `5`)
+- `auth_lockout_seconds` (default `900`)
+- `auth_backoff_base_seconds` (default `1`)
+- `auth_backoff_cap_seconds` (default `8`)
+
+Optional alert webhook for `login_failure` / `login_lockout`:
+
+- `auth_alert_webhook_url`
+- `auth_alert_webhook_token`
 
 ---
 
