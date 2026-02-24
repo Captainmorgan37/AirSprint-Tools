@@ -22,6 +22,23 @@ MAINTENANCE_TYPES: Sequence[str] = (
 )
 
 
+def _covered_seconds(intervals: Sequence[tuple[datetime, datetime]]) -> float:
+    if not intervals:
+        return 0.0
+
+    merged: List[tuple[datetime, datetime]] = []
+    for start, end in sorted(intervals, key=lambda interval: interval[0]):
+        if end <= start:
+            continue
+        if not merged or start >= merged[-1][1]:
+            merged.append((start, end))
+            continue
+        merged_start, merged_end = merged[-1]
+        merged[-1] = (merged_start, max(merged_end, end))
+
+    return sum((end - start).total_seconds() for start, end in merged)
+
+
 @dataclass(frozen=True)
 class MaintenanceEvent:
     tail: str
@@ -150,6 +167,8 @@ def maintenance_daily_status(
     events: Sequence[MaintenanceEvent],
     start_date: date,
     end_date: date,
+    *,
+    fractional_day: bool = False,
 ) -> pd.DataFrame:
     if end_date < start_date:
         raise ValueError("end_date must be on or after start_date")
@@ -160,20 +179,59 @@ def maintenance_daily_status(
     for day_ts in all_dates:
         day_start = datetime.combine(day_ts.date(), time.min).replace(tzinfo=UTC)
         day_end = day_start + timedelta(days=1)
-        per_type: Dict[str, Set[str]] = {task_type: set() for task_type in MAINTENANCE_TYPES}
+        if not fractional_day:
+            per_type: Dict[str, Set[str]] = {task_type: set() for task_type in MAINTENANCE_TYPES}
+
+            for event in events:
+                overlaps = event.start_utc < day_end and event.end_utc > day_start
+                if overlaps:
+                    per_type[event.task_type].add(event.tail)
+
+            rows.append(
+                {
+                    "date": day_ts.date(),
+                    "scheduled_maintenance": len(per_type["MAINTENANCE"]),
+                    "unscheduled_maintenance": len(per_type["UNSCHEDULED_MAINTENANCE"]),
+                    "aog": len(per_type["AOG"]),
+                    "total_aircraft_down": len(set().union(*per_type.values())),
+                }
+            )
+            continue
+
+        seconds_in_day = 24 * 60 * 60
+        per_type_intervals: Dict[str, Dict[str, List[tuple[datetime, datetime]]]] = {
+            task_type: {} for task_type in MAINTENANCE_TYPES
+        }
+        per_tail_intervals: Dict[str, List[tuple[datetime, datetime]]] = {}
 
         for event in events:
-            overlaps = event.start_utc < day_end and event.end_utc >= day_start
-            if overlaps:
-                per_type[event.task_type].add(event.tail)
+            overlap_start = max(event.start_utc, day_start)
+            overlap_end = min(event.end_utc, day_end)
+            if overlap_end <= overlap_start:
+                continue
+
+            per_type_intervals[event.task_type].setdefault(event.tail, []).append((overlap_start, overlap_end))
+            per_tail_intervals.setdefault(event.tail, []).append((overlap_start, overlap_end))
 
         rows.append(
             {
                 "date": day_ts.date(),
-                "scheduled_maintenance": len(per_type["MAINTENANCE"]),
-                "unscheduled_maintenance": len(per_type["UNSCHEDULED_MAINTENANCE"]),
-                "aog": len(per_type["AOG"]),
-                "total_aircraft_down": len(set().union(*per_type.values())),
+                "scheduled_maintenance": (
+                    sum(_covered_seconds(intervals) for intervals in per_type_intervals["MAINTENANCE"].values())
+                    / seconds_in_day
+                ),
+                "unscheduled_maintenance": (
+                    sum(
+                        _covered_seconds(intervals)
+                        for intervals in per_type_intervals["UNSCHEDULED_MAINTENANCE"].values()
+                    )
+                    / seconds_in_day
+                ),
+                "aog": sum(_covered_seconds(intervals) for intervals in per_type_intervals["AOG"].values())
+                / seconds_in_day,
+                "total_aircraft_down": (
+                    sum(_covered_seconds(intervals) for intervals in per_tail_intervals.values()) / seconds_in_day
+                ),
             }
         )
 
