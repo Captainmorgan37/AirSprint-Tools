@@ -65,5 +65,36 @@ def test_maintenance_daily_status_counts_unique_tails_per_type():
     assert int(feb11["total_aircraft_down"]) == 2
 
 
+def test_maintenance_daily_status_fractional_day_mode_prorates():
+    tasks = [
+        {
+            "id": "task_1",
+            "taskType": "MAINTENANCE",
+            "departureDateUTC": "2026-02-11T00:00",
+            "arrivalDateUTC": "2026-02-11T12:00",
+        },
+        {
+            "id": "task_2",
+            "taskType": "UNSCHEDULED_MAINTENANCE",
+            "departureDateUTC": "2026-02-11T06:00",
+            "arrivalDateUTC": "2026-02-11T18:00",
+        },
+    ]
+
+    events = extract_maintenance_events(tasks, "C-FSEF")
+    df = maintenance_daily_status(
+        events,
+        start_date=date(2026, 2, 11),
+        end_date=date(2026, 2, 11),
+        fractional_day=True,
+    )
+
+    row = df.iloc[0]
+    assert row["scheduled_maintenance"] == 0.5
+    assert row["unscheduled_maintenance"] == 0.5
+    assert row["aog"] == 0
+    assert row["total_aircraft_down"] == 0.75
+
+
 def test_format_tail_for_fl3xx_inserts_hyphen():
     assert format_tail_for_fl3xx("CFSEF") == "C-FSEF"
