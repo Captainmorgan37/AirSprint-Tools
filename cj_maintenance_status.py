@@ -305,4 +305,8 @@ def maintenance_daily_status(
             }
         )
 
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
+    value_columns = ["scheduled_maintenance", "unscheduled_maintenance", "aog", "total_aircraft_down"]
+    if not df.empty:
+        df[value_columns] = df[value_columns].round(2)
+    return df
