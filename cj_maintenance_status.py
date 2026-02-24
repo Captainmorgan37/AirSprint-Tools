@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
+import re
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set
 from urllib.parse import urlsplit
 
@@ -11,7 +12,9 @@ import pandas as pd
 import requests
 
 from fl3xx_api import DEFAULT_FL3XX_BASE_URL, Fl3xxApiConfig
+from flight_leg_utils import load_airport_tz_lookup
 from flight_leg_utils import safe_parse_dt
+from zoneinfo_compat import ZoneInfo
 from hangar_logic import CJ_TAILS
 
 UTC = timezone.utc
@@ -47,6 +50,8 @@ class MaintenanceEvent:
     start_utc: datetime
     end_utc: datetime
     notes: str
+    airport_code: Optional[str] = None
+    airport_tz: str = "UTC"
 
 
 def list_cj_tails() -> List[str]:
@@ -113,6 +118,44 @@ def fetch_aircraft_schedule(
 
 def extract_maintenance_events(tasks: Iterable[Mapping[str, Any]], tail: str) -> List[MaintenanceEvent]:
     events: List[MaintenanceEvent] = []
+    airport_tz_lookup = load_airport_tz_lookup()
+
+    def _extract_codes(value: Any) -> List[str]:
+        if isinstance(value, Mapping):
+            fields = [
+                value.get("icao"),
+                value.get("iata"),
+                value.get("code"),
+                value.get("airport"),
+                value.get("id"),
+                value.get("name"),
+            ]
+            text = " ".join(str(item) for item in fields if item not in (None, ""))
+        else:
+            text = str(value or "")
+        return [token.upper() for token in re.findall(r"\b[A-Za-z0-9]{3,4}\b", text.upper())]
+
+    def _event_airport_code(task: Mapping[str, Any]) -> Optional[str]:
+        candidates = (
+            "departureAirport",
+            "departureAirportCode",
+            "departureAirportIcao",
+            "departureAirportIata",
+            "airportFrom",
+            "arrivalAirport",
+            "arrivalAirportCode",
+            "arrivalAirportIcao",
+            "arrivalAirportIata",
+            "airportTo",
+        )
+        for key in candidates:
+            value = task.get(key)
+            if value in (None, ""):
+                continue
+            codes = _extract_codes(value)
+            if codes:
+                return codes[0]
+        return None
 
     for task in tasks:
         task_type_raw = task.get("taskType")
@@ -129,6 +172,8 @@ def extract_maintenance_events(tasks: Iterable[Mapping[str, Any]], tail: str) ->
 
         task_id = str(task.get("id") or "")
         notes = str(task.get("notes") or "")
+        airport_code = _event_airport_code(task)
+        airport_tz = airport_tz_lookup.get(airport_code, "UTC") if airport_code else "UTC"
         events.append(
             MaintenanceEvent(
                 tail=tail,
@@ -137,6 +182,8 @@ def extract_maintenance_events(tasks: Iterable[Mapping[str, Any]], tail: str) ->
                 start_utc=start_utc,
                 end_utc=end_utc,
                 notes=notes,
+                airport_code=airport_code,
+                airport_tz=airport_tz,
             )
         )
 
@@ -176,20 +223,55 @@ def maintenance_daily_status(
     all_dates = pd.date_range(start=start_date, end=end_date, freq="D")
     rows: List[Dict[str, Any]] = []
 
-    for day_ts in all_dates:
-        day_start = datetime.combine(day_ts.date(), time.min).replace(tzinfo=UTC)
-        day_end = day_start + timedelta(days=1)
+    date_rows: Dict[date, Dict[str, Any]] = {
+        day_ts.date(): {
+            "date": day_ts.date(),
+            "per_type_tails": {task_type: set() for task_type in MAINTENANCE_TYPES},
+            "per_type_intervals": {task_type: {} for task_type in MAINTENANCE_TYPES},
+            "per_tail_intervals": {},
+        }
+        for day_ts in all_dates
+    }
+
+    for event in events:
+        try:
+            zone = ZoneInfo(event.airport_tz)
+        except Exception:
+            zone = UTC
+
+        local_start = event.start_utc.astimezone(zone)
+        local_end = event.end_utc.astimezone(zone)
+
         if not fractional_day:
-            per_type: Dict[str, Set[str]] = {task_type: set() for task_type in MAINTENANCE_TYPES}
+            current_day_start = datetime.combine(local_start.date(), time.min, tzinfo=zone)
+            while current_day_start < local_end:
+                day_row = date_rows.get(current_day_start.date())
+                if day_row is not None:
+                    day_row["per_type_tails"][event.task_type].add(event.tail)
+                current_day_start += timedelta(days=1)
+            continue
 
-            for event in events:
-                overlaps = event.start_utc < day_end and event.end_utc > day_start
-                if overlaps:
-                    per_type[event.task_type].add(event.tail)
+        current_day_start = datetime.combine(local_start.date(), time.min, tzinfo=zone)
+        while current_day_start < local_end:
+            next_day_start = current_day_start + timedelta(days=1)
+            overlap_start = max(local_start, current_day_start)
+            overlap_end = min(local_end, next_day_start)
+            if overlap_end > overlap_start:
+                day_row = date_rows.get(current_day_start.date())
+                if day_row is not None:
+                    day_row["per_type_intervals"][event.task_type].setdefault(event.tail, []).append(
+                        (overlap_start, overlap_end)
+                    )
+                    day_row["per_tail_intervals"].setdefault(event.tail, []).append((overlap_start, overlap_end))
+            current_day_start = next_day_start
 
+    for day in [day_ts.date() for day_ts in all_dates]:
+        day_row = date_rows[day]
+        if not fractional_day:
+            per_type = day_row["per_type_tails"]
             rows.append(
                 {
-                    "date": day_ts.date(),
+                    "date": day,
                     "scheduled_maintenance": len(per_type["MAINTENANCE"]),
                     "unscheduled_maintenance": len(per_type["UNSCHEDULED_MAINTENANCE"]),
                     "aog": len(per_type["AOG"]),
@@ -199,23 +281,11 @@ def maintenance_daily_status(
             continue
 
         seconds_in_day = 24 * 60 * 60
-        per_type_intervals: Dict[str, Dict[str, List[tuple[datetime, datetime]]]] = {
-            task_type: {} for task_type in MAINTENANCE_TYPES
-        }
-        per_tail_intervals: Dict[str, List[tuple[datetime, datetime]]] = {}
-
-        for event in events:
-            overlap_start = max(event.start_utc, day_start)
-            overlap_end = min(event.end_utc, day_end)
-            if overlap_end <= overlap_start:
-                continue
-
-            per_type_intervals[event.task_type].setdefault(event.tail, []).append((overlap_start, overlap_end))
-            per_tail_intervals.setdefault(event.tail, []).append((overlap_start, overlap_end))
-
+        per_type_intervals = day_row["per_type_intervals"]
+        per_tail_intervals = day_row["per_tail_intervals"]
         rows.append(
             {
-                "date": day_ts.date(),
+                "date": day,
                 "scheduled_maintenance": (
                     sum(_covered_seconds(intervals) for intervals in per_type_intervals["MAINTENANCE"].values())
                     / seconds_in_day
@@ -235,4 +305,8 @@ def maintenance_daily_status(
             }
         )
 
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
+    value_columns = ["scheduled_maintenance", "unscheduled_maintenance", "aog", "total_aircraft_down"]
+    if not df.empty:
+        df[value_columns] = df[value_columns].round(2)
+    return df
