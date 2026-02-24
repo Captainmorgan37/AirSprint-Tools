@@ -98,7 +98,7 @@ _CATEGORY_ALIASES = {
 _ZFW_PAX_THRESHOLDS: Dict[str, int] = {
     "C25A": 5,
     "C25B": 6,
-    "E545": 9,
+    "E545": 8,
 }
 
 _HIGH_PAX_WEIGHT_ALIASES: Dict[str, str] = {

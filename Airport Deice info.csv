@@ -1069,7 +1069,7 @@ KDCU,DCU,DCU,Pryor Field Regional,Decatur,United States,34.654056,-86.945361,Air
 KDEN,DEN,DEN,Denver International,Denver,United States,39.861667,-104.673167,AirSprint Inc.: A,A_10,No Deice Mentions Found,
 KDET,DET,DET,Coleman A Young Municipal,Detroit,United States,42.409327,-83.010174,AirSprint Inc.: A,,"DEICE/ANTI-ICE:
 
-•	Type 1 only",No
+•	Type 1 and 4",No
 KDFW,DFW,DFW,Dallas-Fort Worth International,Dallas-Fort Worth,United States,32.897233,-97.037695,AirSprint Inc.: A,A_10,No Deice Mentions Found,
 KDHN,DHN,DHN,Dothan Regional,Dothan,United States,31.321028,-85.449472,AirSprint Inc.: A,,"DEICE/ANTI-ICE:
 
@@ -2194,6 +2194,7 @@ NOT AVAILABLE",Yes
 ,,1R7,Brookhaven-Lincoln County,Brookhaven,United States,31.605833,-90.409306,AirSprint Inc.: B,,"DEICE/ANTI-ICE:
 
 NOT AVAILABLE",Yes
+
 
 
 
