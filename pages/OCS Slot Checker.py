@@ -37,7 +37,8 @@ This tool normalizes both formats and compares them against Fl3xx with airport-s
 
 # ---------------- Config ----------------
 WINDOWS_MIN = {"CYYC": 30, "CYVR": 30, "CYYZ": 30, "CYUL": 15}
-FL3XX_FETCH_CHUNK_DAYS = 5
+REQUIREMENT_HORIZON_DAYS = {"CYYC": 30, "CYYZ": 30, "CYUL": 10, "CYVR": 3}
+FL3XX_FETCH_CHUNK_DAYS = 3
 MONTHS = {m: i for i, m in enumerate(
     ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"], 1)}
 
@@ -551,14 +552,24 @@ def fetch_fl3xx_dataframe(start: date, end: date, token: Optional[str] = None) -
     return df, metadata
 
 # ---------------- Helpers ----------------
-def _cyvr_future_exempt(ap: str, sched_dt: pd.Timestamp, threshold_days: int = 4) -> bool:
-    """Return True if this should NOT be flagged as Missing:
-       CYVR legs that are threshold_days or more days in the future."""
-    if ap != "CYVR" or pd.isna(sched_dt):
+def _is_within_requirement_horizon(ap: str, sched_dt: pd.Timestamp) -> bool:
+    """Return True when a leg is inside the airport requirement look-ahead window."""
+    if pd.isna(sched_dt):
+        return False
+    threshold_days = REQUIREMENT_HORIZON_DAYS.get(ap)
+    if threshold_days is None:
+        return True
+    today = pd.Timestamp.utcnow().date()
+    days_out = (sched_dt.date() - today).days
+    return days_out <= threshold_days
+
+def _is_tail_mismatch_suppressed(sched_dt: pd.Timestamp) -> bool:
+    """Suppress tail mismatches when the leg is farther out than tomorrow."""
+    if pd.isna(sched_dt):
         return False
     today = pd.Timestamp.utcnow().date()
     days_out = (sched_dt.date() - today).days
-    return days_out >= threshold_days
+    return days_out > 1
 
 def show_table(df: pd.DataFrame, title: str, key: str):
     st.subheader(title)
@@ -1067,15 +1078,6 @@ def show_missing_table(df: pd.DataFrame, title: str, key: str):
     )
 
 
-def _tail_future_exempt(sched_dt: pd.Timestamp, threshold_days: int = 3) -> bool:
-    """Hide tail-mismatch items when the leg is >= threshold_days (3+) days in the future."""
-    if pd.isna(sched_dt):
-        return False
-    today = pd.Timestamp.utcnow().date()
-    days_out = (sched_dt.date() - today).days
-    return days_out >= threshold_days
-
-
 # ---------------- Tail filtering ----------------
 def load_tails(path="tails.csv"):
     if not os.path.exists(path):
@@ -1097,7 +1099,7 @@ else:
 
 def _default_date_range() -> Tuple[date, date]:
     today = datetime.utcnow().date()
-    return today, today + timedelta(days=1)
+    return today, today + timedelta(days=30)
 
 
 st.sidebar.markdown("---")
@@ -1465,6 +1467,9 @@ def compare(fl3xx_df: pd.DataFrame, ocs_df: pd.DataFrame):
     for leg in legs:
         ap, move, tail, sched_dt = leg["Airport"], leg["Movement"], leg["Tail"], leg["SchedDT"]
 
+        if not _is_within_requirement_horizon(ap, sched_dt):
+            continue
+
         # Start with slots for same airport & movement that are NOT already allocated
         cand = ocs_df[
             (ocs_df["SlotAirport"] == ap) &
@@ -1473,8 +1478,6 @@ def compare(fl3xx_df: pd.DataFrame, ocs_df: pd.DataFrame):
         ].copy()
 
         if cand.empty:
-            if _cyvr_future_exempt(ap, sched_dt):  # your helper
-                continue
             results["Missing"].append({**leg, "Reason": "No slot for airport/movement"})
             continue
 
@@ -1489,8 +1492,6 @@ def compare(fl3xx_df: pd.DataFrame, ocs_df: pd.DataFrame):
         # Keep slots on the same day or ±1 day of the leg (cross-midnight tolerance)
         cand = cand[cand["_SlotDT"].apply(lambda d: abs((d.date() - sched_dt.date()).days) <= 1)]
         if cand.empty:
-            if _cyvr_future_exempt(ap, sched_dt):
-                continue
             results["Missing"].append({**leg, "Reason": "No slot (±1 day)"})
             continue
 
@@ -1524,7 +1525,7 @@ def compare(fl3xx_df: pd.DataFrame, ocs_df: pd.DataFrame):
 
         # 2) any-tail within window → Tail mismatch (do NOT allocate; wrong tail booked)
         if any_best <= window:
-            if not _tail_future_exempt(sched_dt, threshold_days=3):  # your helper
+            if not _is_tail_mismatch_suppressed(sched_dt):
                 if str(any_row["SlotRef"]) not in suggested_slot_refs:
                     results["MisalignedTail"].append({
                         **leg,
@@ -1548,15 +1549,15 @@ def compare(fl3xx_df: pd.DataFrame, ocs_df: pd.DataFrame):
             })
             continue
 
-        # 4) otherwise → Missing (respect CYVR exemption)
-        if not _cyvr_future_exempt(ap, sched_dt):
-            results["Missing"].append({**leg, "Reason": "No matching tail/time within window"})
+        # 4) otherwise → Missing
+        results["Missing"].append({**leg, "Reason": "No matching tail/time within window"})
 
     # --- Slot-side evaluation (Stale)
     # A slot is NOT stale if:
     #   (a) there is ANY leg with same airport/movement/TAIL within ±1 day of the slot's date, or
     #   (b) we've already used it (Matched) or suggested it (Tail mismatch), or
-    #   (c) it's a far-future wrong-tail case (we suppress tail mismatches 5+ days out).
+    #   (c) the leg is outside the airport requirement look-ahead window, or
+    #   (d) it's a suppressed far-future wrong-tail case (farther out than tomorrow).
     def has_leg_for_slot(slot_row):
         ap   = slot_row["SlotAirport"]
         mv   = slot_row["Movement"]
@@ -1572,10 +1573,9 @@ def compare(fl3xx_df: pd.DataFrame, ocs_df: pd.DataFrame):
                 return True
         return False
 
-    def _far_future_wrong_tail(slot_row):
+    def _outside_requirement_horizon(slot_row):
         ap   = slot_row["SlotAirport"]
         mv   = slot_row["Movement"]
-        tail = slot_row["Tail"]
         day, month = slot_row["Date"]
         for lg in legs:
             if lg["Airport"] != ap or lg["Movement"] != mv:
@@ -1584,8 +1584,21 @@ def compare(fl3xx_df: pd.DataFrame, ocs_df: pd.DataFrame):
             slot_date = datetime(lg["SchedDT"].year, month, day).date()
             # same day ±1 indicates this slot relates to that leg's operation
             if abs((slot_date - lg["SchedDT"].date()).days) <= 1:
-                # wrong tail & we intentionally suppress tail mismatches far in the future
-                if lg["Tail"] != tail and _tail_future_exempt(lg["SchedDT"], threshold_days=3):
+                if not _is_within_requirement_horizon(ap, lg["SchedDT"]):
+                    return True
+        return False
+
+    def _suppressed_tail_mismatch(slot_row):
+        ap = slot_row["SlotAirport"]
+        mv = slot_row["Movement"]
+        tail = slot_row["Tail"]
+        day, month = slot_row["Date"]
+        for lg in legs:
+            if lg["Airport"] != ap or lg["Movement"] != mv:
+                continue
+            slot_date = datetime(lg["SchedDT"].year, month, day).date()
+            if abs((slot_date - lg["SchedDT"].date()).days) <= 1:
+                if lg["Tail"] != tail and _is_tail_mismatch_suppressed(lg["SchedDT"]):
                     return True
         return False
 
@@ -1597,7 +1610,8 @@ def compare(fl3xx_df: pd.DataFrame, ocs_df: pd.DataFrame):
     stale_df = ocs_df[
         (~ocs_df["SlotRef"].astype(str).isin(used_or_suggested)) &
         (~ocs_df.apply(has_leg_for_slot, axis=1)) &
-        (~ocs_df.apply(_far_future_wrong_tail, axis=1))
+        (~ocs_df.apply(_outside_requirement_horizon, axis=1)) &
+        (~ocs_df.apply(_suppressed_tail_mismatch, axis=1))
     ].copy()
 
 
