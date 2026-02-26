@@ -78,6 +78,15 @@ TAIL_DISPLAY_ORDER: tuple[str, ...] = (
 )
 TAIL_INDEX = {tail: idx for idx, tail in enumerate(TAIL_DISPLAY_ORDER)}
 
+
+@st.cache_data(show_spinner=False, ttl=300, hash_funcs={dict: lambda _: "0"})
+def _load_filtered_flights(settings: dict, start_date: date, end_date: date):
+    config = build_fl3xx_api_config(settings)
+    flights, meta = fetch_flights(config, from_date=start_date, to_date=end_date + timedelta(days=1))
+    normalized, _ = normalize_fl3xx_payload({"items": flights})
+    filtered, _ = filter_out_subcharter_rows(normalized)
+    return filtered, meta
+
 st.title("🏠 Hangar Recommendation Tool")
 
 # ============================================================
@@ -172,9 +181,7 @@ except Exception as exc:  # pragma: no cover - defensive
     st.stop()
 
 with st.spinner("Fetching flight data..."):
-    flights, meta = fetch_flights(config, from_date=start_date, to_date=end_date + timedelta(days=1))
-    normalized, _ = normalize_fl3xx_payload({"items": flights})
-    filtered, _ = filter_out_subcharter_rows(normalized)
+    filtered, meta = _load_filtered_flights(dict(fl3xx_settings), start_date, end_date)
 df = pd.DataFrame(filtered)
 
 if df.empty:

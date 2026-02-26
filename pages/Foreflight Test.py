@@ -406,6 +406,9 @@ else:
 fetch = st.button("Fetch flights")
 
 if fetch:
+    st.session_state["foreflight_test_should_render"] = True
+
+if fetch:
     foreflight_token = get_secret("foreflight_api", {}).get("api_token")
     fl3xx_token = get_secret("fl3xx_api", {}).get("api_token")
 
@@ -459,6 +462,20 @@ if fetch:
                     "Booking Identifier": ff_record.booking_identifier or fl3xx_record.booking_identifier or "—",
                 }
             )
+
+    st.session_state["foreflight_test_results"] = {
+        "matches": matches,
+        "unmatched_foreflight": unmatched_foreflight,
+        "unmatched_fl3xx": unmatched_fl3xx,
+        "mismatch_rows": mismatch_rows,
+    }
+
+results_payload = st.session_state.get("foreflight_test_results")
+if results_payload:
+    matches = results_payload.get("matches", [])
+    unmatched_foreflight = results_payload.get("unmatched_foreflight", [])
+    unmatched_fl3xx = results_payload.get("unmatched_fl3xx", [])
+    mismatch_rows = results_payload.get("mismatch_rows", [])
 
     st.subheader("Results")
     st.caption(
