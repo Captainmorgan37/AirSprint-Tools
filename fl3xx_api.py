@@ -255,6 +255,15 @@ def _build_staff_crew_endpoint(base_url: str, crew_id: Any) -> str:
     return f"{base}/staff/crew/{crew_id}"
 
 
+def _build_staff_roster_endpoint(base_url: str) -> str:
+    base = base_url.rstrip("/")
+    if base.lower().endswith("/flights"):
+        base = base[: -len("/flights")]
+    if base.lower().endswith("/flight"):
+        base = base[: -len("/flight")]
+    return f"{base}/staff/roster"
+
+
 def _build_leg_endpoint(base_url: str, quote_id: Any) -> str:
     base = base_url.rstrip("/")
     if base.lower().endswith("/flights"):
@@ -495,6 +504,52 @@ def fetch_crew_member(
         )
         response.raise_for_status()
         return response.json()
+    finally:
+        if close_session:
+            try:
+                http.close()
+            except AttributeError:
+                pass
+
+
+def fetch_staff_roster(
+    config: Fl3xxApiConfig,
+    *,
+    from_time: datetime,
+    to_time: datetime,
+    filter_value: str = "STAFF",
+    include_flights: bool = True,
+    session: Optional[requests.Session] = None,
+) -> List[Dict[str, Any]]:
+    """Return roster rows from the ``/staff/roster`` endpoint."""
+
+    params: List[Tuple[str, str]] = [
+        ("from", from_time.strftime("%Y-%m-%dT%H:%M")),
+        ("to", to_time.strftime("%Y-%m-%dT%H:%M")),
+        ("filter", str(filter_value or "STAFF").upper()),
+        ("includeFlights", "true" if include_flights else "false"),
+    ]
+
+    http = session or requests.Session()
+    close_session = session is None
+    try:
+        response = http.get(
+            _build_staff_roster_endpoint(config.base_url),
+            params=params,
+            headers=config.build_headers(),
+            timeout=config.timeout,
+            verify=config.verify_ssl,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if isinstance(payload, list):
+            return [item for item in payload if isinstance(item, MutableMapping)]
+        if isinstance(payload, MutableMapping):
+            items = payload.get("items")
+            if isinstance(items, list):
+                return [item for item in items if isinstance(item, MutableMapping)]
+            raise ValueError("Unsupported FL3XX staff roster payload structure")
+        raise ValueError("Unsupported FL3XX staff roster payload structure")
     finally:
         if close_session:
             try:
