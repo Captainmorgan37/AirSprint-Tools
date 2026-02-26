@@ -301,3 +301,45 @@ def test_compute_hotac_coverage_matches_real_fl3xx_shape_with_pilot_id() -> None
 
     assert len(raw_df) == 2
     assert set(raw_df["HOTAC status"].tolist()) == {"Booked"}
+
+
+def test_compute_hotac_coverage_extracts_tail_flight_and_times_from_nested_leg_details() -> None:
+    flights = [
+        {
+            "flightId": 77,
+            "tailNumber": "C-FXYZ",
+            "flightNumberCompany": "AS777",
+            "detailsDeparture": {"scheduledOut": "2026-03-01T10:15:00Z"},
+            "detailsArrival": {"scheduledIn": "2026-03-01T12:45:00Z"},
+            "arrivalAirport": "CYUL",
+        }
+    ]
+
+    def fake_crew(_config, _flight_id):
+        return [{"role": "CMD", "id": "77", "firstName": "Terry", "lastName": "Pilot"}]
+
+    def fake_services(_config, _flight_id):
+        return {
+            "arrivalHotac": [
+                {
+                    "status": "OK",
+                    "person": {"id": "77"},
+                    "hotacService": {"company": "Airport Hotel"},
+                    "documents": [{"id": 1}],
+                }
+            ]
+        }
+
+    _display_df, raw_df, _troubleshooting_df = compute_hotac_coverage(
+        Fl3xxApiConfig(),
+        date(2026, 3, 1),
+        flights=flights,
+        crew_fetcher=fake_crew,
+        services_fetcher=fake_services,
+    )
+
+    row = raw_df.iloc[0]
+    assert row["Tail"] == "C-FXYZ"
+    assert row["Flight"] == "AS777"
+    assert row["End ETD (local)"]
+    assert row["End ETA (local)"]
