@@ -784,7 +784,7 @@ def compute_hotac_coverage(
         display_df = raw_df.copy()
     else:
         display_df = raw_df.sort_values(
-            by=["HOTAC status", "Pilot"],
+            by=["HOTAC status", "Tail", "Pilot"],
             key=lambda series: series.map(_rank_status) if series.name == "HOTAC status" else series,
         ).reset_index(drop=True)
 

@@ -12,11 +12,11 @@ from fl3xx_api import MOUNTAIN_TIME_ZONE
 from flight_leg_utils import FlightDataError, build_fl3xx_api_config
 from hotac_coverage import compute_hotac_coverage
 
-configure_page(page_title="HOTAC Coverage Monitor")
+configure_page(page_title="Hotel Booking Monitor")
 password_gate()
 render_sidebar()
 
-st.title("🏨 HOTAC Coverage Monitor")
+st.title("🏨 Hotel Booking Monitor")
 st.write(
     "Track end-of-day arrival hotel coverage for pilots. Action-required rows are sorted first."
 )

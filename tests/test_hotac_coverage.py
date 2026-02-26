@@ -118,6 +118,45 @@ def test_compute_hotac_coverage_uses_crew_fetcher_and_last_leg_per_pilot() -> No
     assert display_df.iloc[0]["HOTAC status"] == "Missing"
 
 
+def test_compute_hotac_coverage_sorts_status_then_tail() -> None:
+    flights = [
+        {
+            "flightId": 10,
+            "tail": "C-GZZZ",
+            "flightNumber": "AS910",
+            "departureTimeUtc": "2026-03-01T18:00:00Z",
+            "arrivalTimeUtc": "2026-03-01T20:00:00Z",
+            "arrivalAirport": "CYVR",
+        },
+        {
+            "flightId": 20,
+            "tail": "C-GAAA",
+            "flightNumber": "AS920",
+            "departureTimeUtc": "2026-03-01T18:10:00Z",
+            "arrivalTimeUtc": "2026-03-01T20:10:00Z",
+            "arrivalAirport": "CYVR",
+        },
+    ]
+
+    def fake_crew(_config, flight_id):
+        if flight_id == 10:
+            return [{"role": "CMD", "id": "10", "firstName": "Zulu", "lastName": "Pilot"}]
+        return [{"role": "CMD", "id": "20", "firstName": "Alpha", "lastName": "Pilot"}]
+
+    def fake_services(_config, _flight_id):
+        return {"arrivalHotac": []}
+
+    display_df, raw_df, _troubleshooting_df = compute_hotac_coverage(
+        Fl3xxApiConfig(),
+        date(2026, 3, 1),
+        flights=flights,
+        crew_fetcher=fake_crew,
+        services_fetcher=fake_services,
+    )
+
+    assert len(raw_df) == 2
+    assert list(display_df["Tail"]) == ["C-GAAA", "C-GZZZ"]
+
 def test_compute_hotac_coverage_matches_hotac_person_using_alternate_id_fields() -> None:
     flights = [
         {
