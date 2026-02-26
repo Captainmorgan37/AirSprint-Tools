@@ -2,16 +2,15 @@ from __future__ import annotations
 
 import pathlib
 import sys
+from datetime import date
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
-
-from datetime import date
 
 from fl3xx_api import Fl3xxApiConfig
 from hotac_coverage import _status_from_hotac_records, compute_hotac_coverage
 
 
-def test_status_mapping_prefers_ok_and_flags_missing_documents():
+def test_status_mapping_prefers_ok_and_flags_missing_documents() -> None:
     status, company, notes = _status_from_hotac_records(
         [
             {
@@ -32,7 +31,7 @@ def test_status_mapping_prefers_ok_and_flags_missing_documents():
     assert "itinerary" in notes
 
 
-def test_status_mapping_cancelled_only_when_no_active_records():
+def test_status_mapping_cancelled_only_when_no_active_records() -> None:
     status, company, notes = _status_from_hotac_records(
         [
             {"status": "CNL", "hotacService": {"company": "Hotel A"}},
@@ -41,10 +40,11 @@ def test_status_mapping_cancelled_only_when_no_active_records():
     )
 
     assert status == "Cancelled-only"
+    assert company is None
     assert "cancelled" in notes.lower()
 
 
-def test_compute_hotac_coverage_uses_last_leg_per_pilot_and_sorts_triage_first():
+def test_compute_hotac_coverage_uses_crew_fetcher_and_last_leg_per_pilot() -> None:
     flights = [
         {
             "flightId": 1,
@@ -53,9 +53,6 @@ def test_compute_hotac_coverage_uses_last_leg_per_pilot_and_sorts_triage_first()
             "departureTimeUtc": "2026-01-01T14:00:00Z",
             "arrivalTimeUtc": "2026-01-01T16:00:00Z",
             "arrivalAirport": "CYYC",
-            "crew": [
-                {"pilot": True, "person": {"id": 100, "firstName": "Pat", "lastName": "One"}},
-            ],
         },
         {
             "flightId": 2,
@@ -64,9 +61,6 @@ def test_compute_hotac_coverage_uses_last_leg_per_pilot_and_sorts_triage_first()
             "departureTimeUtc": "2026-01-01T18:00:00Z",
             "arrivalTimeUtc": "2026-01-01T20:00:00Z",
             "arrivalAirport": "CYVR",
-            "crew": [
-                {"pilot": True, "person": {"id": 100, "firstName": "Pat", "lastName": "One"}},
-            ],
         },
         {
             "flightId": 3,
@@ -75,11 +69,15 @@ def test_compute_hotac_coverage_uses_last_leg_per_pilot_and_sorts_triage_first()
             "departureTimeUtc": "2026-01-01T17:00:00Z",
             "arrivalTimeUtc": "2026-01-01T19:00:00Z",
             "arrivalAirport": "CYYC",
-            "crew": [
-                {"pilot": True, "person": {"id": 200, "firstName": "Sam", "lastName": "Two"}},
-            ],
         },
     ]
+
+    def fake_crew(_config, flight_id):
+        if flight_id in {1, 2}:
+            return [{"role": "CMD", "id": "100", "firstName": "Pat", "lastName": "One"}]
+        if flight_id == 3:
+            return [{"role": "FO", "id": "200", "firstName": "Sam", "lastName": "Two"}]
+        return []
 
     def fake_services(_config, flight_id):
         if flight_id == 2:
@@ -93,14 +91,13 @@ def test_compute_hotac_coverage_uses_last_leg_per_pilot_and_sorts_triage_first()
                     }
                 ]
             }
-        if flight_id == 3:
-            return {"arrivalHotac": []}
         return {"arrivalHotac": []}
 
     display_df, raw_df, troubleshooting_df = compute_hotac_coverage(
         Fl3xxApiConfig(),
         date(2026, 1, 1),
         flights=flights,
+        crew_fetcher=fake_crew,
         services_fetcher=fake_services,
     )
 
