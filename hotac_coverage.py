@@ -10,6 +10,7 @@ import requests
 
 from fl3xx_api import (
     Fl3xxApiConfig,
+    fetch_crew_member,
     fetch_flight_crew,
     fetch_flight_services,
     fetch_flights,
@@ -23,6 +24,7 @@ PILOT_ROLES = {"CMD", "FO", "PIC", "SIC", "CAPTAIN", "COPILOT"}
 
 CrewFetcher = Callable[[Fl3xxApiConfig, Any], List[Dict[str, Any]]]
 ServicesFetcher = Callable[[Fl3xxApiConfig, Any], Any]
+CrewMemberFetcher = Callable[[Fl3xxApiConfig, Any], Any]
 
 
 def _normalize_id(value: Any) -> Optional[str]:
@@ -339,8 +341,35 @@ def _status_from_hotac_records(records: Sequence[Mapping[str, Any]]) -> Tuple[st
 
 
 def _rank_status(status: str) -> int:
-    order = {"Missing": 0, "Cancelled-only": 1, "Unknown": 2, "Booked": 3}
+    order = {"Missing": 0, "Cancelled-only": 1, "Unknown": 2, "Home base": 3, "Booked": 4}
     return order.get(status, 9)
+
+
+def _is_canadian_airport(airport_code: str) -> bool:
+    code = airport_code.strip().upper()
+    if len(code) == 4:
+        return code.startswith("C")
+    if len(code) == 3:
+        return code.startswith("Y")
+    return False
+
+
+def _extract_home_airport_icao(crew_payload: Any) -> Optional[str]:
+    if not isinstance(crew_payload, Mapping):
+        return None
+
+    home_airport = crew_payload.get("homeAirport")
+    if isinstance(home_airport, Mapping):
+        icao = home_airport.get("icao")
+        if isinstance(icao, str) and icao.strip():
+            return icao.strip().upper()
+
+    for key in ("homeAirportIcao", "homeBaseIcao"):
+        value = crew_payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip().upper()
+
+    return None
 
 
 def _local_time_label(dt_utc: Optional[datetime], airport_code: str, tz_lookup: Mapping[str, str]) -> str:
@@ -363,6 +392,7 @@ def compute_hotac_coverage(
     flights: Optional[Iterable[Mapping[str, Any]]] = None,
     crew_fetcher: Optional[CrewFetcher] = None,
     services_fetcher: Optional[ServicesFetcher] = None,
+    crew_member_fetcher: Optional[CrewMemberFetcher] = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Return HOTAC coverage display, raw, and troubleshooting DataFrames."""
 
@@ -378,6 +408,7 @@ def compute_hotac_coverage(
 
     fetch_crew = crew_fetcher or fetch_flight_crew
     fetch_services = services_fetcher or fetch_flight_services
+    fetch_crew_member_details = crew_member_fetcher or fetch_crew_member
     tz_lookup = load_airport_tz_lookup()
 
     pilot_last_leg: Dict[str, Dict[str, Any]] = {}
@@ -556,6 +587,23 @@ def compute_hotac_coverage(
                         f"No matched HOTAC in {hotac_source} "
                         f"(arrival HOTAC records={len(arrival_hotac)}; pilot_id={pilot_person_id or 'n/a'})"
                     )
+                    end_airport = str(leg.get("end_airport") or "").strip().upper()
+                    if pilot_person_id and end_airport and _is_canadian_airport(end_airport):
+                        try:
+                            crew_member_payload = fetch_crew_member_details(config, pilot_person_id)
+                            home_airport_icao = _extract_home_airport_icao(crew_member_payload)
+                            if home_airport_icao and home_airport_icao == end_airport:
+                                status = "Home base"
+                                notes = f"Pilot ending at home base ({home_airport_icao})"
+                        except Exception as exc:
+                            troubleshooting_rows.append(
+                                {
+                                    "Flight ID": flight_id,
+                                    "Tail": leg.get("tail") or "",
+                                    "Issue": "Unable to fetch pilot home airport",
+                                    "Details": str(exc),
+                                }
+                            )
 
             except requests.HTTPError as exc:
                 status = "Unknown"
