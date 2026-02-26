@@ -255,6 +255,15 @@ def _build_staff_crew_endpoint(base_url: str, crew_id: Any) -> str:
     return f"{base}/staff/crew/{crew_id}"
 
 
+def _build_staff_roster_endpoint(base_url: str) -> str:
+    base = base_url.rstrip("/")
+    if base.lower().endswith("/flights"):
+        base = base[: -len("/flights")]
+    if base.lower().endswith("/flight"):
+        base = base[: -len("/flight")]
+    return f"{base}/staff/roster"
+
+
 def _build_leg_endpoint(base_url: str, quote_id: Any) -> str:
     base = base_url.rstrip("/")
     if base.lower().endswith("/flights"):
@@ -501,6 +510,67 @@ def fetch_crew_member(
                 http.close()
             except AttributeError:
                 pass
+
+
+def fetch_staff_roster(
+    config: Fl3xxApiConfig,
+    *,
+    from_time: datetime,
+    to_time: datetime,
+    filter_value: str = "STAFF",
+    include_flights: bool = True,
+    session: Optional[requests.Session] = None,
+) -> List[Dict[str, Any]]:
+    """Return roster rows from the ``/staff/roster`` endpoint."""
+
+    params: List[Tuple[str, str]] = [
+        ("from", from_time.strftime("%Y-%m-%dT%H:%M")),
+        ("to", to_time.strftime("%Y-%m-%dT%H:%M")),
+        ("filter", str(filter_value or "STAFF").upper()),
+        ("includeFlights", "true" if include_flights else "false"),
+    ]
+
+    def _coerce_rows(value: Any) -> Optional[List[Dict[str, Any]]]:
+        if isinstance(value, list):
+            rows = [item for item in value if isinstance(item, MutableMapping)]
+            return rows
+        if isinstance(value, MutableMapping):
+            # Some payloads may return a single roster object directly.
+            if any(key in value for key in ("user", "entries", "flights")):
+                return [value]
+        return None
+
+    http = session or requests.Session()
+    close_session = session is None
+    try:
+        response = http.get(
+            _build_staff_roster_endpoint(config.base_url),
+            params=params,
+            headers=config.build_headers(),
+            timeout=config.timeout,
+            verify=config.verify_ssl,
+        )
+        response.raise_for_status()
+        payload = response.json()
+
+        direct_rows = _coerce_rows(payload)
+        if direct_rows is not None:
+            return direct_rows
+
+        if isinstance(payload, MutableMapping):
+            for key in ("items", "data", "results", "rows", "roster", "staff"):
+                rows = _coerce_rows(payload.get(key))
+                if rows is not None:
+                    return rows
+
+        raise ValueError("Unsupported FL3XX staff roster payload structure")
+    finally:
+        if close_session:
+            try:
+                http.close()
+            except AttributeError:
+                pass
+
 
 
 @dataclass(frozen=True)

@@ -14,6 +14,7 @@ from fl3xx_api import (
     fetch_flight_crew,
     fetch_flight_services,
     fetch_flights,
+    fetch_staff_roster,
 )
 from flight_leg_utils import load_airport_tz_lookup, safe_parse_dt
 from zoneinfo_compat import ZoneInfo
@@ -25,6 +26,7 @@ PILOT_ROLES = {"CMD", "FO", "PIC", "SIC", "CAPTAIN", "COPILOT"}
 CrewFetcher = Callable[[Fl3xxApiConfig, Any], List[Dict[str, Any]]]
 ServicesFetcher = Callable[[Fl3xxApiConfig, Any], Any]
 CrewMemberFetcher = Callable[[Fl3xxApiConfig, Any], Any]
+RosterFetcher = Callable[[Fl3xxApiConfig, datetime, datetime], List[Dict[str, Any]]]
 
 
 def _normalize_id(value: Any) -> Optional[str]:
@@ -418,6 +420,79 @@ def _local_time_label(dt_utc: Optional[datetime], airport_code: str, tz_lookup: 
     return dt_utc.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
 
 
+def _extract_roster_positioning_events(
+    roster_rows: Iterable[Mapping[str, Any]],
+) -> Dict[str, List[Dict[str, Any]]]:
+    events_by_personnel: Dict[str, List[Dict[str, Any]]] = {}
+    for row in roster_rows:
+        user = row.get("user") if isinstance(row.get("user"), Mapping) else {}
+        personnel = _normalize_id(user.get("personnelNumber"))
+        entries = row.get("entries") if isinstance(row.get("entries"), list) else []
+        if not personnel:
+            continue
+        events: List[Dict[str, Any]] = []
+        for entry in entries:
+            if not isinstance(entry, Mapping):
+                continue
+            if _normalize_status(entry.get("type")) != "P":
+                continue
+            from_airport = _extract_airport(entry, ["fromAirport"])
+            to_airport = _extract_airport(entry, ["toAirport"])
+            from_ms = entry.get("from")
+            to_ms = entry.get("to")
+            from_utc = datetime.fromtimestamp(from_ms / 1000, tz=UTC) if isinstance(from_ms, (int, float)) else None
+            to_utc = datetime.fromtimestamp(to_ms / 1000, tz=UTC) if isinstance(to_ms, (int, float)) else None
+            notes = str(entry.get("notes") or "").strip()
+            events.append(
+                {
+                    "from_airport": from_airport or "",
+                    "to_airport": to_airport or "",
+                    "from_utc": from_utc,
+                    "to_utc": to_utc,
+                    "notes": notes,
+                }
+            )
+        if events:
+            events_by_personnel[personnel] = sorted(
+                events,
+                key=lambda event: event.get("from_utc") or datetime.min.replace(tzinfo=UTC),
+            )
+    return events_by_personnel
+
+
+def _find_positioning_event_for_leg(
+    events: Sequence[Mapping[str, Any]],
+    end_airport: str,
+    arrival_utc: Optional[datetime],
+) -> Optional[Mapping[str, Any]]:
+    airport = end_airport.strip().upper()
+    if not airport:
+        return None
+
+    matching = [event for event in events if str(event.get("from_airport") or "").strip().upper() == airport]
+    if not matching:
+        return None
+
+    if isinstance(arrival_utc, datetime):
+        after_arrival = [
+            event
+            for event in matching
+            if isinstance(event.get("from_utc"), datetime) and event["from_utc"] >= arrival_utc
+        ]
+        if after_arrival:
+            return after_arrival[0]
+    return matching[0]
+
+
+def _extract_hotel_from_positioning_notes(notes: str) -> str:
+    normalized = notes.replace("\\n", "\n")
+    for line in normalized.splitlines():
+        cleaned = line.strip()
+        if cleaned.casefold().startswith("hotel:"):
+            return cleaned.split(":", 1)[1].strip()
+    return ""
+
+
 def compute_hotac_coverage(
     config: Fl3xxApiConfig,
     target_date: date,
@@ -426,6 +501,7 @@ def compute_hotac_coverage(
     crew_fetcher: Optional[CrewFetcher] = None,
     services_fetcher: Optional[ServicesFetcher] = None,
     crew_member_fetcher: Optional[CrewMemberFetcher] = None,
+    roster_fetcher: Optional[RosterFetcher] = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Return HOTAC coverage display, raw, and troubleshooting DataFrames."""
 
@@ -442,10 +518,31 @@ def compute_hotac_coverage(
     fetch_crew = crew_fetcher or fetch_flight_crew
     fetch_services = services_fetcher or fetch_flight_services
     fetch_crew_member_details = crew_member_fetcher or fetch_crew_member
+    fetch_roster = roster_fetcher or (
+        lambda conf, from_time, to_time: fetch_staff_roster(conf, from_time=from_time, to_time=to_time)
+    )
     tz_lookup = load_airport_tz_lookup()
 
-    pilot_last_leg: Dict[str, Dict[str, Any]] = {}
+    roster_window_start = datetime.combine(target_date, datetime.min.time(), tzinfo=UTC) + timedelta(hours=12)
+    roster_window_end = roster_window_start + timedelta(days=1)
+    roster_events_by_personnel: Dict[str, List[Dict[str, Any]]] = {}
     troubleshooting_rows: List[Dict[str, Any]] = []
+    should_fetch_roster = roster_fetcher is not None or bool(config.api_token or config.auth_header)
+    if should_fetch_roster:
+        try:
+            roster_rows = fetch_roster(config, roster_window_start, roster_window_end)
+            roster_events_by_personnel = _extract_roster_positioning_events(roster_rows)
+        except Exception as exc:
+            troubleshooting_rows.append(
+                {
+                    "Flight ID": "",
+                    "Tail": "",
+                    "Issue": "Unable to fetch staff roster",
+                    "Details": str(exc),
+                }
+            )
+
+    pilot_last_leg: Dict[str, Dict[str, Any]] = {}
 
     for index, flight in enumerate(fetched_flights):
         if _is_add_remove_line(flight):
@@ -640,8 +737,30 @@ def compute_hotac_coverage(
                                     "Tail": leg.get("tail") or "",
                                     "Issue": "Unable to fetch pilot home airport",
                                     "Details": str(exc),
-                                }
-                            )
+                            }
+                        )
+
+                    pilot_personnel = _normalize_id(pilot.get("personnel"))
+                    positioning_events = roster_events_by_personnel.get(pilot_personnel or "", [])
+                    positioning_event = _find_positioning_event_for_leg(
+                        positioning_events,
+                        end_airport,
+                        leg.get("arr_utc"),
+                    )
+                    if positioning_event:
+                        reposition_to = str(positioning_event.get("to_airport") or "").strip().upper()
+                        if reposition_to:
+                            notes = f"Positioning note found: {end_airport} → {reposition_to}"
+                            if profile_home_base_airport and reposition_to == profile_home_base_airport:
+                                status = "Home base"
+                                notes = f"Positioned to home base ({reposition_to})"
+                            else:
+                                hotel_note = _extract_hotel_from_positioning_notes(str(positioning_event.get("notes") or ""))
+                                if hotel_note:
+                                    status = "Booked"
+                                    notes = f"Positioning hotel note: {hotel_note}"
+                                else:
+                                    notes = f"Positioned {end_airport} → {reposition_to}; hotel required at {reposition_to}"
 
             except requests.HTTPError as exc:
                 status = "Unknown"
