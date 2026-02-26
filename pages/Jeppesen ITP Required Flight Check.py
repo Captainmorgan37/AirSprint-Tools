@@ -184,6 +184,9 @@ with st.sidebar:
 
     generate_report = st.button("Generate report", width="stretch")
 
+if generate_report:
+    st.session_state["itp_generate_report"] = True
+
 
 if not isinstance(start_date, date) or not isinstance(end_date, date):
     st.error("Please select both a start and end date.")
@@ -206,7 +209,7 @@ if not has_credentials:
         "Add your FL3XX credentials to `.streamlit/secrets.toml` under `[fl3xx_api]` to enable live data fetching."
     )
 
-if not generate_report:
+if not generate_report and not st.session_state.get("itp_generate_report"):
     st.stop()
 
 try:

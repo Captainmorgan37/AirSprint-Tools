@@ -599,6 +599,9 @@ if not api_settings:
 settings_digest = _settings_digest(api_settings)
 
 tabs = st.tabs(["Passport expirations", "US customs readiness", "Customs tab status"])
+PASSPORT_RESULTS_KEY = "pax_passport_scan_results"
+US_CUSTOMS_RESULTS_KEY = "pax_us_customs_scan_results"
+CUSTOMS_STATUS_RESULTS_KEY = "pax_customs_status_scan_results"
 start_default = date.today()
 end_default = start_default + timedelta(days=7)
 
@@ -653,7 +656,7 @@ with tabs[0]:
             )
         submitted = st.form_submit_button("Run passport scan")
 
-    if not submitted:
+    if not submitted and PASSPORT_RESULTS_KEY not in st.session_state:
         st.info("Choose a date range and run the scan to check passport expirations.")
     else:
         if start_date is None or end_date is None:
@@ -694,20 +697,36 @@ with tabs[0]:
                         expiry_soon_cutoff=expiry_soon_cutoff,
                         expiry_window_days=expiry_window_days,
                     )
-                _render_results(
-                    legs=legs,
-                    airport_lookup=airport_lookup,
-                    expiring_passports=expiring_passports,
-                    missing_passports=missing_passports,
-                    missing_addresses=[],
-                    fetch_metadata=fetch_metadata,
-                    fetch_errors=fetch_errors,
-                    include_us_focus=False,
-                    scan_label=None,
-                    expiry_mode=expiry_mode,
-                    expiry_soon_cutoff=expiry_soon_cutoff,
-                    expiry_window_days=expiry_window_days,
-                )
+                payload = {
+                    "legs": legs,
+                    "airport_lookup": airport_lookup,
+                    "expiring_passports": expiring_passports,
+                    "missing_passports": missing_passports,
+                    "missing_addresses": [],
+                    "fetch_metadata": fetch_metadata,
+                    "fetch_errors": fetch_errors,
+                    "expiry_mode": expiry_mode,
+                    "expiry_soon_cutoff": expiry_soon_cutoff,
+                    "expiry_window_days": expiry_window_days,
+                }
+                st.session_state[PASSPORT_RESULTS_KEY] = payload
+
+    stored_passport_payload = st.session_state.get(PASSPORT_RESULTS_KEY)
+    if isinstance(stored_passport_payload, dict):
+        _render_results(
+            legs=stored_passport_payload["legs"],
+            airport_lookup=stored_passport_payload["airport_lookup"],
+            expiring_passports=stored_passport_payload["expiring_passports"],
+            missing_passports=stored_passport_payload["missing_passports"],
+            missing_addresses=stored_passport_payload["missing_addresses"],
+            fetch_metadata=stored_passport_payload["fetch_metadata"],
+            fetch_errors=stored_passport_payload["fetch_errors"],
+            include_us_focus=False,
+            scan_label=None,
+            expiry_mode=stored_passport_payload["expiry_mode"],
+            expiry_soon_cutoff=stored_passport_payload["expiry_soon_cutoff"],
+            expiry_window_days=stored_passport_payload["expiry_window_days"],
+        )
 
 with tabs[1]:
     st.subheader("US customs readiness")
@@ -760,7 +779,7 @@ with tabs[1]:
             )
         submitted = st.form_submit_button("Run US customs scan")
 
-    if not submitted:
+    if not submitted and US_CUSTOMS_RESULTS_KEY not in st.session_state:
         st.info("Choose a date range and run the scan to check US customs readiness.")
     else:
         if start_date is None or end_date is None:
@@ -831,37 +850,56 @@ with tabs[1]:
                         expiry_soon_cutoff=expiry_soon_cutoff,
                         expiry_window_days=expiry_window_days,
                     )
-                st.subheader("Inbound US arrivals (priority)")
-                _render_results(
-                    legs=inbound_legs,
-                    airport_lookup=airport_lookup,
-                    expiring_passports=expiring_passports,
-                    missing_passports=missing_passports,
-                    missing_addresses=missing_addresses,
-                    fetch_metadata=fetch_metadata,
-                    fetch_errors=fetch_errors,
-                    include_us_focus=True,
-                    scan_label="Inbound US-arrival customs pax legs scanned",
-                    expiry_mode=expiry_mode,
-                    expiry_soon_cutoff=expiry_soon_cutoff,
-                    expiry_window_days=expiry_window_days,
-                )
-                st.divider()
-                st.subheader("Outbound US international flights")
-                _render_results(
-                    legs=outbound_legs,
-                    airport_lookup=airport_lookup,
-                    expiring_passports=outbound_expiring,
-                    missing_passports=outbound_missing,
-                    missing_addresses=[],
-                    fetch_metadata=fetch_metadata,
-                    fetch_errors=outbound_errors,
-                    include_us_focus=False,
-                    scan_label="Outbound US international pax legs scanned",
-                    expiry_mode=expiry_mode,
-                    expiry_soon_cutoff=expiry_soon_cutoff,
-                    expiry_window_days=expiry_window_days,
-                )
+                st.session_state[US_CUSTOMS_RESULTS_KEY] = {
+                    "airport_lookup": airport_lookup,
+                    "fetch_metadata": fetch_metadata,
+                    "inbound_legs": inbound_legs,
+                    "expiring_passports": expiring_passports,
+                    "missing_passports": missing_passports,
+                    "missing_addresses": missing_addresses,
+                    "fetch_errors": fetch_errors,
+                    "outbound_legs": outbound_legs,
+                    "outbound_expiring": outbound_expiring,
+                    "outbound_missing": outbound_missing,
+                    "outbound_errors": outbound_errors,
+                    "expiry_mode": expiry_mode,
+                    "expiry_soon_cutoff": expiry_soon_cutoff,
+                    "expiry_window_days": expiry_window_days,
+                }
+
+    stored_us_payload = st.session_state.get(US_CUSTOMS_RESULTS_KEY)
+    if isinstance(stored_us_payload, dict):
+        st.subheader("Inbound US arrivals (priority)")
+        _render_results(
+            legs=stored_us_payload["inbound_legs"],
+            airport_lookup=stored_us_payload["airport_lookup"],
+            expiring_passports=stored_us_payload["expiring_passports"],
+            missing_passports=stored_us_payload["missing_passports"],
+            missing_addresses=stored_us_payload["missing_addresses"],
+            fetch_metadata=stored_us_payload["fetch_metadata"],
+            fetch_errors=stored_us_payload["fetch_errors"],
+            include_us_focus=True,
+            scan_label="Inbound US-arrival customs pax legs scanned",
+            expiry_mode=stored_us_payload["expiry_mode"],
+            expiry_soon_cutoff=stored_us_payload["expiry_soon_cutoff"],
+            expiry_window_days=stored_us_payload["expiry_window_days"],
+        )
+        st.divider()
+        st.subheader("Outbound US international flights")
+        _render_results(
+            legs=stored_us_payload["outbound_legs"],
+            airport_lookup=stored_us_payload["airport_lookup"],
+            expiring_passports=stored_us_payload["outbound_expiring"],
+            missing_passports=stored_us_payload["outbound_missing"],
+            missing_addresses=[],
+            fetch_metadata=stored_us_payload["fetch_metadata"],
+            fetch_errors=stored_us_payload["outbound_errors"],
+            include_us_focus=False,
+            scan_label="Outbound US international pax legs scanned",
+            expiry_mode=stored_us_payload["expiry_mode"],
+            expiry_soon_cutoff=stored_us_payload["expiry_soon_cutoff"],
+            expiry_window_days=stored_us_payload["expiry_window_days"],
+        )
 
 with tabs[2]:
     st.subheader("Customs tab status")
@@ -884,7 +922,7 @@ with tabs[2]:
         )
         submitted = st.form_submit_button("Run customs status scan")
 
-    if not submitted:
+    if not submitted and CUSTOMS_STATUS_RESULTS_KEY not in st.session_state:
         st.info("Choose a date range and run the scan to check customs statuses.")
     else:
         if start_date is None or end_date is None:
@@ -918,7 +956,20 @@ with tabs[2]:
                         settings=dict(api_settings),
                         airport_lookup=airport_lookup,
                     )
+                st.session_state[CUSTOMS_STATUS_RESULTS_KEY] = {
+                    "fetch_metadata": fetch_metadata,
+                    "international_legs": international_legs,
+                    "customs_rows": customs_rows,
+                    "errors": errors,
+                }
+
+    stored_customs_payload = st.session_state.get(CUSTOMS_STATUS_RESULTS_KEY)
+    if isinstance(stored_customs_payload, dict):
                 summary_cols = st.columns(4)
+                fetch_metadata = stored_customs_payload["fetch_metadata"]
+                international_legs = stored_customs_payload["international_legs"]
+                customs_rows = stored_customs_payload["customs_rows"]
+                errors = stored_customs_payload["errors"]
                 summary_cols[0].metric("Legs fetched", fetch_metadata.get("legs_after_filter", 0))
                 summary_cols[1].metric("International pax legs scanned", len(international_legs))
                 summary_cols[2].metric("Flights flagged", len(customs_rows))

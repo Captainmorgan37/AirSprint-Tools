@@ -1022,6 +1022,10 @@ if source == "FL3XX API":
     )
     if fetch_btn:
         legs_df = fetch_fl3xx_legs(token, start_utc, end_utc)
+        st.session_state["short_turn_cached_legs"] = legs_df
+        st.session_state["short_turn_cached_window"] = window_label
+    elif "short_turn_cached_legs" in st.session_state:
+        legs_df = st.session_state.get("short_turn_cached_legs", pd.DataFrame())
         if legs_df.empty:
             message = (
                 "No legs returned. Check your endpoint/mapping and date range "
