@@ -25,6 +25,7 @@ from fl3xx_api import (
     extract_crew_from_preflight,
     extract_passengers_from_pax_details,
     extract_missing_qualifications_from_preflight,
+    fetch_staff_roster,
     parse_postflight_payload,
     parse_preflight_payload,
 )
@@ -529,3 +530,63 @@ def test_extract_conflicts_from_preflight_returns_conflicts() -> None:
 
 def test_extract_conflicts_from_preflight_handles_missing_blocks() -> None:
     assert extract_conflicts_from_preflight({}) == []
+
+
+def test_fetch_staff_roster_builds_expected_endpoint_and_params() -> None:
+    class DummyResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return [{"user": {"personnelNumber": "248"}, "entries": []}]
+
+    class DummySession:
+        def __init__(self):
+            self.last_url = None
+            self.last_params = None
+
+        def get(self, url, **kwargs):
+            self.last_url = url
+            self.last_params = kwargs.get("params")
+            return DummyResponse()
+
+    session = DummySession()
+    config = Fl3xxApiConfig(base_url="https://app.fl3xx.us/api/external/flight/flights")
+
+    payload = fetch_staff_roster(
+        config,
+        from_time=datetime(2026, 2, 26, 12, 0),
+        to_time=datetime(2026, 2, 27, 12, 0),
+        session=session,
+    )
+
+    assert payload and payload[0]["user"]["personnelNumber"] == "248"
+    assert session.last_url == "https://app.fl3xx.us/api/external/staff/roster"
+    assert session.last_params == [
+        ("from", "2026-02-26T12:00"),
+        ("to", "2026-02-27T12:00"),
+        ("filter", "STAFF"),
+        ("includeFlights", "true"),
+    ]
+
+
+def test_fetch_staff_roster_accepts_mapping_data_payload() -> None:
+    class DummyResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"data": [{"user": {"personnelNumber": "999"}, "entries": []}]}
+
+    class DummySession:
+        def get(self, url, **kwargs):
+            return DummyResponse()
+
+    payload = fetch_staff_roster(
+        Fl3xxApiConfig(base_url="https://app.fl3xx.us/api/external/flight/flights"),
+        from_time=datetime(2026, 2, 26, 12, 0),
+        to_time=datetime(2026, 2, 27, 12, 0),
+        session=DummySession(),
+    )
+
+    assert payload[0]["user"]["personnelNumber"] == "999"
