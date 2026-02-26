@@ -16,7 +16,7 @@ from fl3xx_api import (
     fetch_flights,
     fetch_staff_roster,
 )
-from flight_leg_utils import load_airport_tz_lookup, safe_parse_dt
+from flight_leg_utils import safe_parse_dt
 from zoneinfo_compat import ZoneInfo
 
 UTC = timezone.utc
@@ -407,18 +407,6 @@ def _extract_home_airport_icao(crew_payload: Any) -> Optional[str]:
     return None
 
 
-def _local_time_label(dt_utc: Optional[datetime], airport_code: str, tz_lookup: Mapping[str, str]) -> str:
-    if not isinstance(dt_utc, datetime):
-        return ""
-
-    tz_name = tz_lookup.get(airport_code.upper()) if airport_code else None
-    if tz_name:
-        try:
-            return dt_utc.astimezone(ZoneInfo(tz_name)).strftime("%Y-%m-%d %H:%M %Z")
-        except Exception:
-            pass
-    return dt_utc.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
-
 
 def _extract_roster_positioning_events(
     roster_rows: Iterable[Mapping[str, Any]],
@@ -521,7 +509,6 @@ def compute_hotac_coverage(
     fetch_roster = roster_fetcher or (
         lambda conf, from_time, to_time: fetch_staff_roster(conf, from_time=from_time, to_time=to_time)
     )
-    tz_lookup = load_airport_tz_lookup()
 
     roster_window_start = datetime.combine(target_date, datetime.min.time(), tzinfo=UTC) + timedelta(hours=12)
     roster_window_end = roster_window_start + timedelta(days=1)
@@ -643,6 +630,7 @@ def compute_hotac_coverage(
         flight_id = leg.get("flight_id")
         pilot = leg.get("pilot", {})
         profile_home_base_airport = ""
+        positioning_route = ""
 
         status = "Unknown"
         company = ""
@@ -748,7 +736,12 @@ def compute_hotac_coverage(
                         leg.get("arr_utc"),
                     )
                     if positioning_event:
+                        reposition_from = str(positioning_event.get("from_airport") or "").strip().upper()
                         reposition_to = str(positioning_event.get("to_airport") or "").strip().upper()
+                        if reposition_from and reposition_to:
+                            positioning_route = f"{reposition_from}-{reposition_to}"
+                        elif reposition_to:
+                            positioning_route = f"{end_airport}-{reposition_to}"
                         if reposition_to:
                             notes = f"Positioning note found: {end_airport} → {reposition_to}"
                             if profile_home_base_airport and reposition_to == profile_home_base_airport:
@@ -778,9 +771,8 @@ def compute_hotac_coverage(
                 "Flight": leg.get("flight_number") or "",
                 "Flight ID": leg.get("flight_id") or "",
                 "End airport": end_airport,
+                "Positioning route": positioning_route,
                 "Profile home base": profile_home_base_airport,
-                "End ETD (local)": _local_time_label(leg.get("dep_utc"), end_airport, tz_lookup),
-                "End ETA (local)": _local_time_label(leg.get("arr_utc"), end_airport, tz_lookup),
                 "HOTAC status": status,
                 "Hotel company": company,
                 "Notes": notes,

@@ -345,8 +345,7 @@ def test_compute_hotac_coverage_extracts_tail_flight_and_times_from_nested_leg_d
     row = raw_df.iloc[0]
     assert row["Tail"] == "C-FXYZ"
     assert row["Flight"] == "AS777"
-    assert row["End ETD (local)"]
-    assert row["End ETA (local)"]
+    assert row["Positioning route"] == ""
 
 
 def test_compute_hotac_coverage_skips_add_remove_line_flights() -> None:
@@ -543,6 +542,7 @@ def test_compute_hotac_coverage_uses_positioning_roster_hotel_note() -> None:
 
     row = raw_df.iloc[0]
     assert row["HOTAC status"] == "Booked"
+    assert row["Positioning route"] == "CYVR-CYYZ"
     assert "Positioning hotel note" in row["Notes"]
 
 
@@ -596,6 +596,7 @@ def test_compute_hotac_coverage_uses_positioning_roster_to_home_base() -> None:
 
     row = raw_df.iloc[0]
     assert row["HOTAC status"] == "Home base"
+    assert row["Positioning route"] == "CYVR-CYYC"
     assert "Positioned to home base" in row["Notes"]
 
 
