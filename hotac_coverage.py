@@ -32,6 +32,99 @@ def _normalize_id(value: Any) -> Optional[str]:
     return text or None
 
 
+def _canonical_id(value: Any) -> Optional[str]:
+    """Return a comparison-friendly ID representation.
+
+    FL3XX payloads can expose person identifiers in different formats
+    (e.g., `"395655"`, `395655`, or values with leading labels). We keep
+    exact matching first, then fall back to a digits-only comparison key.
+    """
+
+    normalized = _normalize_id(value)
+    if not normalized:
+        return None
+    digits_only = "".join(ch for ch in normalized if ch.isdigit())
+    return digits_only or normalized
+
+
+def _extract_arrival_hotac_records(services_payload: Mapping[str, Any]) -> Tuple[List[Mapping[str, Any]], str]:
+    """Return candidate arrival HOTAC records and the source path used."""
+
+    candidate_paths: Sequence[Tuple[str, ...]] = (
+        ("arrivalHotac",),
+        ("arrivalHOTAC",),
+        ("arrival_hotac",),
+        ("arrival", "hotac"),
+        ("arrival", "hotacs"),
+        ("arr", "hotac"),
+        ("arr", "hotacs"),
+        ("flightDetails", "arr", "hotac"),
+        ("flightDetails", "arr", "hotacs"),
+        ("hotac",),
+        ("hotacs",),
+    )
+
+    for path in candidate_paths:
+        cursor: Any = services_payload
+        for segment in path:
+            if not isinstance(cursor, Mapping):
+                cursor = None
+                break
+            cursor = cursor.get(segment)
+
+        if isinstance(cursor, list):
+            return [item for item in cursor if isinstance(item, Mapping)], ".".join(path)
+
+    return [], "none"
+
+
+def _extract_person_identifiers(record: Mapping[str, Any]) -> Dict[str, Optional[str]]:
+    person = record.get("person") if isinstance(record.get("person"), Mapping) else {}
+    user = record.get("user") if isinstance(record.get("user"), Mapping) else {}
+    crew = record.get("crew") if isinstance(record.get("crew"), Mapping) else {}
+    pilot = record.get("pilot") if isinstance(record.get("pilot"), Mapping) else {}
+
+    return {
+        "id": _normalize_id(
+            person.get("id")
+            or person.get("userId")
+            or person.get("personId")
+            or person.get("crewId")
+            or user.get("id")
+            or user.get("userId")
+            or crew.get("id")
+            or crew.get("userId")
+            or pilot.get("id")
+            or pilot.get("userId")
+            or record.get("userId")
+            or record.get("personId")
+            or record.get("crewId")
+            or record.get("id")
+        ),
+        "personnel": _normalize_id(
+            record.get("personnelNumber")
+            or person.get("personnelNumber")
+            or user.get("personnelNumber")
+            or crew.get("personnelNumber")
+            or pilot.get("personnelNumber")
+        ),
+        "trigram": _normalize_id(
+            record.get("trigram")
+            or person.get("trigram")
+            or user.get("trigram")
+            or crew.get("trigram")
+            or pilot.get("trigram")
+        ),
+        "role": _normalize_status(
+            record.get("pilotRole")
+            or record.get("role")
+            or record.get("crewPosition")
+            or person.get("pilotRole")
+            or person.get("role")
+        ),
+    }
+
+
 def _normalize_status(value: Any) -> str:
     if value is None:
         return ""
@@ -111,7 +204,17 @@ def _is_pilot_member(member: Mapping[str, Any]) -> bool:
 
 def _normalize_pilot_member(member: Mapping[str, Any]) -> Dict[str, Any]:
     role = str(member.get("role") or member.get("seat") or "").strip().upper() or None
-    person_id = _normalize_id(member.get("id") or member.get("userId") or member.get("personId"))
+    person_block = member.get("person") if isinstance(member.get("person"), Mapping) else {}
+    person_id = _normalize_id(
+        member.get("id")
+        or member.get("pilotId")
+        or member.get("userId")
+        or member.get("personId")
+        or member.get("crewId")
+        or person_block.get("id")
+        or person_block.get("userId")
+        or person_block.get("personId")
+    )
 
     first_name = str(member.get("firstName") or "").strip()
     last_name = str(member.get("lastName") or "").strip()
@@ -126,6 +229,8 @@ def _normalize_pilot_member(member: Mapping[str, Any]) -> Dict[str, Any]:
     return {
         "person_id": person_id,
         "name": full_name,
+        "first_name": first_name or None,
+        "last_name": last_name or None,
         "personnel": str(member.get("personnelNumber") or "").strip() or None,
         "trigram": str(member.get("trigram") or "").strip() or None,
         "role": role,
@@ -154,6 +259,8 @@ def _dedupe_pilots(pilots: Iterable[Mapping[str, Any]]) -> List[Dict[str, Any]]:
         deduped[key] = {
             "person_id": person_id or None,
             "name": name,
+            "first_name": pilot.get("first_name"),
+            "last_name": pilot.get("last_name"),
             "personnel": pilot.get("personnel"),
             "trigram": pilot.get("trigram"),
             "role": pilot.get("role"),
@@ -330,26 +437,71 @@ def compute_hotac_coverage(
                 if not isinstance(services_payload, Mapping):
                     raise ValueError("Malformed services payload")
 
-                arrival_hotac = services_payload.get("arrivalHotac")
-                if not isinstance(arrival_hotac, list):
-                    arrival_hotac = []
+                arrival_hotac, hotac_source = _extract_arrival_hotac_records(services_payload)
 
                 pilot_person_id = _normalize_id(pilot.get("person_id"))
+                pilot_person_id_key = _canonical_id(pilot_person_id)
+                pilot_personnel = _normalize_id(pilot.get("personnel"))
+                pilot_trigram = _normalize_id(pilot.get("trigram"))
+                pilot_role = _normalize_status(pilot.get("role"))
+                pilot_first = _normalize_id(pilot.get("first_name"))
+                pilot_last = _normalize_id(pilot.get("last_name"))
+                pilot_name = _normalize_id(pilot.get("name"))
                 matching_records: List[Mapping[str, Any]] = []
 
                 for item in arrival_hotac:
-                    if not isinstance(item, Mapping):
-                        continue
-                    person = item.get("person")
-                    item_person_id = None
-                    if isinstance(person, Mapping):
-                        item_person_id = _normalize_id(person.get("id"))
+                    identifiers = _extract_person_identifiers(item)
+                    item_person_id = identifiers.get("id")
+                    item_person_id_key = _canonical_id(item_person_id)
+                    item_personnel = _normalize_id(identifiers.get("personnel"))
+                    item_trigram = _normalize_id(identifiers.get("trigram"))
+                    item_role = _normalize_status(identifiers.get("role"))
+                    person = item.get("person") if isinstance(item.get("person"), Mapping) else {}
+                    item_first = _normalize_id(person.get("firstName"))
+                    item_last = _normalize_id(person.get("lastName"))
+                    item_name = _normalize_id(
+                        " ".join(part for part in (item_first, item_last) if part) or person.get("name")
+                    )
 
-                    if pilot_person_id and item_person_id == pilot_person_id:
+                    id_match = pilot_person_id and (
+                        item_person_id == pilot_person_id
+                        or (
+                            pilot_person_id_key
+                            and item_person_id_key
+                            and item_person_id_key == pilot_person_id_key
+                        )
+                    )
+                    personnel_match = bool(
+                        pilot_personnel and item_personnel and pilot_personnel == item_personnel
+                    )
+                    trigram_match = bool(
+                        pilot_trigram and item_trigram and pilot_trigram.upper() == item_trigram.upper()
+                    )
+                    role_only_match = bool(
+                        pilot_role
+                        and item_role
+                        and pilot_role == item_role
+                        and not item_person_id
+                        and not item_personnel
+                        and not item_trigram
+                    )
+                    name_match = bool(
+                        (pilot_first and item_first and pilot_first.casefold() == item_first.casefold())
+                        and (pilot_last and item_last and pilot_last.casefold() == item_last.casefold())
+                    ) or bool(
+                        pilot_name and item_name and pilot_name.casefold() == item_name.casefold()
+                    )
+
+                    if id_match or personnel_match or trigram_match or role_only_match or name_match:
                         matching_records.append(item)
 
                 status, company_value, notes = _status_from_hotac_records(matching_records)
                 company = company_value or ""
+                if status == "Missing":
+                    notes = (
+                        f"No matched HOTAC in {hotac_source} "
+                        f"(arrival HOTAC records={len(arrival_hotac)}; pilot_id={pilot_person_id or 'n/a'})"
+                    )
 
             except requests.HTTPError as exc:
                 status = "Unknown"
