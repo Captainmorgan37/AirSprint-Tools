@@ -112,3 +112,43 @@ def test_compute_hotac_coverage_uses_crew_fetcher_and_last_leg_per_pilot() -> No
     assert sam_row["HOTAC status"] == "Missing"
 
     assert display_df.iloc[0]["HOTAC status"] == "Missing"
+
+
+def test_compute_hotac_coverage_matches_hotac_person_using_alternate_id_fields() -> None:
+    flights = [
+        {
+            "flightId": 44,
+            "tail": "C-GALT",
+            "flightNumber": "AS404",
+            "departureTimeUtc": "2026-02-01T18:00:00Z",
+            "arrivalTimeUtc": "2026-02-01T20:00:00Z",
+            "arrivalAirport": "CYVR",
+        }
+    ]
+
+    def fake_crew(_config, _flight_id):
+        return [{"role": "CMD", "crewId": "crew-395655", "firstName": "Alex", "lastName": "Pilot"}]
+
+    def fake_services(_config, _flight_id):
+        return {
+            "arrivalHotac": [
+                {
+                    "status": "OK",
+                    "person": {"userId": 395655},
+                    "hotacService": {"company": "River Hotel"},
+                    "documents": [{"id": 1}],
+                }
+            ]
+        }
+
+    _display_df, raw_df, _troubleshooting_df = compute_hotac_coverage(
+        Fl3xxApiConfig(),
+        date(2026, 2, 1),
+        flights=flights,
+        crew_fetcher=fake_crew,
+        services_fetcher=fake_services,
+    )
+
+    row = raw_df.iloc[0]
+    assert row["HOTAC status"] == "Booked"
+    assert row["Hotel company"] == "River Hotel"

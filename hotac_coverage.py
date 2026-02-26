@@ -32,6 +32,21 @@ def _normalize_id(value: Any) -> Optional[str]:
     return text or None
 
 
+def _canonical_id(value: Any) -> Optional[str]:
+    """Return a comparison-friendly ID representation.
+
+    FL3XX payloads can expose person identifiers in different formats
+    (e.g., `"395655"`, `395655`, or values with leading labels). We keep
+    exact matching first, then fall back to a digits-only comparison key.
+    """
+
+    normalized = _normalize_id(value)
+    if not normalized:
+        return None
+    digits_only = "".join(ch for ch in normalized if ch.isdigit())
+    return digits_only or normalized
+
+
 def _normalize_status(value: Any) -> str:
     if value is None:
         return ""
@@ -111,7 +126,16 @@ def _is_pilot_member(member: Mapping[str, Any]) -> bool:
 
 def _normalize_pilot_member(member: Mapping[str, Any]) -> Dict[str, Any]:
     role = str(member.get("role") or member.get("seat") or "").strip().upper() or None
-    person_id = _normalize_id(member.get("id") or member.get("userId") or member.get("personId"))
+    person_block = member.get("person") if isinstance(member.get("person"), Mapping) else {}
+    person_id = _normalize_id(
+        member.get("id")
+        or member.get("userId")
+        or member.get("personId")
+        or member.get("crewId")
+        or person_block.get("id")
+        or person_block.get("userId")
+        or person_block.get("personId")
+    )
 
     first_name = str(member.get("firstName") or "").strip()
     last_name = str(member.get("lastName") or "").strip()
@@ -335,6 +359,7 @@ def compute_hotac_coverage(
                     arrival_hotac = []
 
                 pilot_person_id = _normalize_id(pilot.get("person_id"))
+                pilot_person_id_key = _canonical_id(pilot_person_id)
                 matching_records: List[Mapping[str, Any]] = []
 
                 for item in arrival_hotac:
@@ -343,9 +368,22 @@ def compute_hotac_coverage(
                     person = item.get("person")
                     item_person_id = None
                     if isinstance(person, Mapping):
-                        item_person_id = _normalize_id(person.get("id"))
+                        item_person_id = _normalize_id(
+                            person.get("id")
+                            or person.get("userId")
+                            or person.get("personId")
+                            or person.get("crewId")
+                        )
+                    item_person_id_key = _canonical_id(item_person_id)
 
-                    if pilot_person_id and item_person_id == pilot_person_id:
+                    if pilot_person_id and (
+                        item_person_id == pilot_person_id
+                        or (
+                            pilot_person_id_key
+                            and item_person_id_key
+                            and item_person_id_key == pilot_person_id_key
+                        )
+                    ):
                         matching_records.append(item)
 
                 status, company_value, notes = _status_from_hotac_records(matching_records)
