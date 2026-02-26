@@ -530,6 +530,16 @@ def fetch_staff_roster(
         ("includeFlights", "true" if include_flights else "false"),
     ]
 
+    def _coerce_rows(value: Any) -> Optional[List[Dict[str, Any]]]:
+        if isinstance(value, list):
+            rows = [item for item in value if isinstance(item, MutableMapping)]
+            return rows
+        if isinstance(value, MutableMapping):
+            # Some payloads may return a single roster object directly.
+            if any(key in value for key in ("user", "entries", "flights")):
+                return [value]
+        return None
+
     http = session or requests.Session()
     close_session = session is None
     try:
@@ -542,13 +552,17 @@ def fetch_staff_roster(
         )
         response.raise_for_status()
         payload = response.json()
-        if isinstance(payload, list):
-            return [item for item in payload if isinstance(item, MutableMapping)]
+
+        direct_rows = _coerce_rows(payload)
+        if direct_rows is not None:
+            return direct_rows
+
         if isinstance(payload, MutableMapping):
-            items = payload.get("items")
-            if isinstance(items, list):
-                return [item for item in items if isinstance(item, MutableMapping)]
-            raise ValueError("Unsupported FL3XX staff roster payload structure")
+            for key in ("items", "data", "results", "rows", "roster", "staff"):
+                rows = _coerce_rows(payload.get(key))
+                if rows is not None:
+                    return rows
+
         raise ValueError("Unsupported FL3XX staff roster payload structure")
     finally:
         if close_session:
@@ -556,6 +570,7 @@ def fetch_staff_roster(
                 http.close()
             except AttributeError:
                 pass
+
 
 
 @dataclass(frozen=True)

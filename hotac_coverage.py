@@ -523,7 +523,7 @@ def compute_hotac_coverage(
     )
     tz_lookup = load_airport_tz_lookup()
 
-    roster_window_start = datetime.combine(target_date, datetime.min.time(), tzinfo=ZoneInfo("America/Edmonton")) + timedelta(hours=12)
+    roster_window_start = datetime.combine(target_date, datetime.min.time(), tzinfo=UTC) + timedelta(hours=12)
     roster_window_end = roster_window_start + timedelta(days=1)
     roster_events_by_personnel: Dict[str, List[Dict[str, Any]]] = {}
     troubleshooting_rows: List[Dict[str, Any]] = []

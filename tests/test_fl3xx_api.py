@@ -568,3 +568,25 @@ def test_fetch_staff_roster_builds_expected_endpoint_and_params() -> None:
         ("filter", "STAFF"),
         ("includeFlights", "true"),
     ]
+
+
+def test_fetch_staff_roster_accepts_mapping_data_payload() -> None:
+    class DummyResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"data": [{"user": {"personnelNumber": "999"}, "entries": []}]}
+
+    class DummySession:
+        def get(self, url, **kwargs):
+            return DummyResponse()
+
+    payload = fetch_staff_roster(
+        Fl3xxApiConfig(base_url="https://app.fl3xx.us/api/external/flight/flights"),
+        from_time=datetime(2026, 2, 26, 12, 0),
+        to_time=datetime(2026, 2, 27, 12, 0),
+        session=DummySession(),
+    )
+
+    assert payload[0]["user"]["personnelNumber"] == "999"

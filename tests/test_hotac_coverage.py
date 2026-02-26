@@ -597,3 +597,41 @@ def test_compute_hotac_coverage_uses_positioning_roster_to_home_base() -> None:
     row = raw_df.iloc[0]
     assert row["HOTAC status"] == "Home base"
     assert "Positioned to home base" in row["Notes"]
+
+
+def test_compute_hotac_coverage_uses_utc_1200_roster_window() -> None:
+    flights = [
+        {
+            "flightId": 130,
+            "tail": "C-GUTC",
+            "flightNumber": "AS130",
+            "departureTimeUtc": "2026-02-26T18:00:00Z",
+            "arrivalTimeUtc": "2026-02-26T20:00:00Z",
+            "arrivalAirport": "CYVR",
+        }
+    ]
+
+    captured = {}
+
+    def fake_crew(_config, _flight_id):
+        return [{"role": "CMD", "id": "100", "personnelNumber": "100", "firstName": "UTC", "lastName": "Pilot"}]
+
+    def fake_services(_config, _flight_id):
+        return {"arrivalHotac": []}
+
+    def fake_roster(_config, from_time, to_time):
+        captured["from"] = from_time.isoformat()
+        captured["to"] = to_time.isoformat()
+        return []
+
+    _display_df, _raw_df, _troubleshooting_df = compute_hotac_coverage(
+        Fl3xxApiConfig(),
+        date(2026, 2, 26),
+        flights=flights,
+        crew_fetcher=fake_crew,
+        services_fetcher=fake_services,
+        roster_fetcher=fake_roster,
+    )
+
+    assert captured["from"] == "2026-02-26T12:00:00+00:00"
+    assert captured["to"] == "2026-02-27T12:00:00+00:00"
