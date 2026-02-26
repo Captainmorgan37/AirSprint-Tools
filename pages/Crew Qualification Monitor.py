@@ -232,6 +232,7 @@ def _select_primary_leg(legs: Sequence[Mapping[str, Any]]) -> Mapping[str, Any]:
 
 
 _FETCH_RESULTS_KEY = "crew_qualification_fetch_results"
+_ANALYSIS_RESULTS_KEY = "crew_qualification_analysis_results"
 
 
 with st.sidebar:
@@ -288,6 +289,7 @@ if submit_fetch:
         "normalization_stats": normalization_stats,
     }
     st.session_state[_FETCH_RESULTS_KEY] = fetch_results
+    st.session_state.pop(_ANALYSIS_RESULTS_KEY, None)
 
 if not fetch_results:
     st.info('Select a departure window and press "Fetch flights" to retrieve data from FL3XX.')
@@ -329,98 +331,119 @@ if total_flights == 0:
     st.info("No flights with valid identifiers were available for qualification checks.")
     st.stop()
 
-status_placeholder = st.empty()
-progress_bar = st.progress(0)
+analysis_signature = {
+    "settings_digest": settings_digest,
+    "start_date": start_date.isoformat(),
+    "end_date": end_date.isoformat(),
+    "flight_ids": sorted(legs_by_flight.keys()),
+}
+analysis_digest = _settings_digest(analysis_signature)
 
-missing_rows: List[Dict[str, Any]] = []
-conflict_rows: List[Dict[str, Any]] = []
-errors: List[Dict[str, str]] = []
+analysis_results = st.session_state.get(_ANALYSIS_RESULTS_KEY)
+if analysis_results and analysis_results.get("analysis_digest") == analysis_digest:
+    missing_rows = list(analysis_results.get("missing_rows", []))
+    conflict_rows = list(analysis_results.get("conflict_rows", []))
+    errors = list(analysis_results.get("errors", []))
+else:
+    status_placeholder = st.empty()
+    progress_bar = st.progress(0)
 
-session: Optional[requests.Session] = None
-try:
-    for index, (flight_id, flight_legs) in enumerate(legs_by_flight.items(), start=1):
-        status_placeholder.info(f"Fetching preflight {index}/{total_flights} (Flight {flight_id})")
-        progress_bar.progress(index / total_flights)
+    missing_rows = []
+    conflict_rows = []
+    errors = []
 
-        if session is None:
-            session = requests.Session()
+    session: Optional[requests.Session] = None
+    try:
+        for index, (flight_id, flight_legs) in enumerate(legs_by_flight.items(), start=1):
+            status_placeholder.info(f"Fetching preflight {index}/{total_flights} (Flight {flight_id})")
+            progress_bar.progress(index / total_flights)
 
-        try:
-            payload = fetch_preflight(config, flight_id, session=session)
-        except requests.HTTPError as exc:
-            errors.append({"flight_id": flight_id, "error": str(exc)})
-            continue
-        except Exception as exc:  # pragma: no cover - defensive path
-            errors.append({"flight_id": flight_id, "error": str(exc)})
-            continue
+            if session is None:
+                session = requests.Session()
 
-        alerts = extract_missing_qualifications_from_preflight(payload)
-        conflicts = extract_conflicts_from_preflight(payload)
-        if not alerts and not conflicts:
-            continue
-
-        primary_leg = _select_primary_leg(flight_legs)
-        booking_identifier = _normalise_identifier(
-            primary_leg.get("bookingIdentifier") or primary_leg.get("booking_identifier")
-        )
-        dep_airport = _coerce_code(
-            primary_leg.get("departure_airport")
-            or primary_leg.get("departureAirport")
-            or primary_leg.get("airportFrom")
-        )
-        arr_airport = _coerce_code(
-            primary_leg.get("arrival_airport")
-            or primary_leg.get("arrivalAirport")
-            or primary_leg.get("airportTo")
-        )
-        dep_local = _parse_leg_time(primary_leg.get("dep_time"), dep_airport)
-        arr_local = _parse_leg_time(primary_leg.get("arrival_time"), arr_airport)
-        tail = str(primary_leg.get("tail") or "").strip()
-        leg_id = primary_leg.get("leg_id") or primary_leg.get("legId") or ""
-
-        display_identifier = booking_identifier or flight_id
-
-        for alert in alerts:
-            if not _should_include_missing_qualification(
-                alert.qualification_name,
-                departure_airport=dep_airport or "",
-                arrival_airport=arr_airport or "",
-            ):
+            try:
+                payload = fetch_preflight(config, flight_id, session=session)
+            except requests.HTTPError as exc:
+                errors.append({"flight_id": flight_id, "error": str(exc)})
                 continue
-            missing_rows.append(
-                {
-                    "Booking Identifier": display_identifier,
-                    "Leg": leg_id,
-                    "Tail": tail or "—",
-                    "Route": f"{dep_airport or 'UNK'} → {arr_airport or 'UNK'}",
-                    "Departure": _format_local(dep_local),
-                    "Arrival": _format_local(arr_local),
-                    "Seat": alert.seat,
-                    "Crew member": alert.pilot_name or "Unknown",
-                    "Missing qualification": alert.qualification_name,
-                }
-            )
+            except Exception as exc:  # pragma: no cover - defensive path
+                errors.append({"flight_id": flight_id, "error": str(exc)})
+                continue
 
-        for conflict in conflicts:
-            conflict_rows.append(
-                {
-                    "Booking Identifier": display_identifier,
-                    "Leg": leg_id,
-                    "Tail": tail or "—",
-                    "Route": f"{dep_airport or 'UNK'} → {arr_airport or 'UNK'}",
-                    "Departure": _format_local(dep_local),
-                    "Arrival": _format_local(arr_local),
-                    "Seat": conflict.seat or "—",
-                    "Type": conflict.category,
-                    "Status": conflict.status,
-                    "Conflict": conflict.description,
-                }
+            alerts = extract_missing_qualifications_from_preflight(payload)
+            conflicts = extract_conflicts_from_preflight(payload)
+            if not alerts and not conflicts:
+                continue
+
+            primary_leg = _select_primary_leg(flight_legs)
+            booking_identifier = _normalise_identifier(
+                primary_leg.get("bookingIdentifier") or primary_leg.get("booking_identifier")
             )
-finally:
-    status_placeholder.empty()
-    progress_bar.empty()
-    if session is not None:
-        session.close()
+            dep_airport = _coerce_code(
+                primary_leg.get("departure_airport")
+                or primary_leg.get("departureAirport")
+                or primary_leg.get("airportFrom")
+            )
+            arr_airport = _coerce_code(
+                primary_leg.get("arrival_airport")
+                or primary_leg.get("arrivalAirport")
+                or primary_leg.get("airportTo")
+            )
+            dep_local = _parse_leg_time(primary_leg.get("dep_time"), dep_airport)
+            arr_local = _parse_leg_time(primary_leg.get("arrival_time"), arr_airport)
+            tail = str(primary_leg.get("tail") or "").strip()
+            leg_id = primary_leg.get("leg_id") or primary_leg.get("legId") or ""
+
+            display_identifier = booking_identifier or flight_id
+
+            for alert in alerts:
+                if not _should_include_missing_qualification(
+                    alert.qualification_name,
+                    departure_airport=dep_airport or "",
+                    arrival_airport=arr_airport or "",
+                ):
+                    continue
+                missing_rows.append(
+                    {
+                        "Booking Identifier": display_identifier,
+                        "Leg": leg_id,
+                        "Tail": tail or "—",
+                        "Route": f"{dep_airport or 'UNK'} → {arr_airport or 'UNK'}",
+                        "Departure": _format_local(dep_local),
+                        "Arrival": _format_local(arr_local),
+                        "Seat": alert.seat,
+                        "Crew member": alert.pilot_name or "Unknown",
+                        "Missing qualification": alert.qualification_name,
+                    }
+                )
+
+            for conflict in conflicts:
+                conflict_rows.append(
+                    {
+                        "Booking Identifier": display_identifier,
+                        "Leg": leg_id,
+                        "Tail": tail or "—",
+                        "Route": f"{dep_airport or 'UNK'} → {arr_airport or 'UNK'}",
+                        "Departure": _format_local(dep_local),
+                        "Arrival": _format_local(arr_local),
+                        "Seat": conflict.seat or "—",
+                        "Type": conflict.category,
+                        "Status": conflict.status,
+                        "Conflict": conflict.description,
+                    }
+                )
+    finally:
+        status_placeholder.empty()
+        progress_bar.empty()
+        if session is not None:
+            session.close()
+
+    st.session_state[_ANALYSIS_RESULTS_KEY] = {
+        "analysis_digest": analysis_digest,
+        "missing_rows": missing_rows,
+        "conflict_rows": conflict_rows,
+        "errors": errors,
+    }
 
 if errors:
     with st.expander("Preflight request errors", expanded=False):
