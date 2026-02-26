@@ -492,3 +492,108 @@ def test_compute_hotac_coverage_skips_home_base_lookup_for_non_canadian_missing_
     assert row["HOTAC status"] == "Missing"
     assert row["Profile home base"] == ""
     assert troubleshooting_df.empty
+
+def test_compute_hotac_coverage_uses_positioning_roster_hotel_note() -> None:
+    flights = [
+        {
+            "flightId": 120,
+            "tail": "C-GPOS",
+            "flightNumber": "AS120",
+            "departureTimeUtc": "2026-02-26T18:00:00Z",
+            "arrivalTimeUtc": "2026-02-26T20:00:00Z",
+            "arrivalAirport": "CYVR",
+        }
+    ]
+
+    def fake_crew(_config, _flight_id):
+        return [{"role": "CMD", "id": "395519", "personnelNumber": "248", "firstName": "Craig", "lastName": "Berntzen"}]
+
+    def fake_services(_config, _flight_id):
+        return {"arrivalHotac": []}
+
+    def fake_crew_member(_config, _crew_id):
+        return {"homeAirport": {"icao": "CYYC"}}
+
+    def fake_roster(_config, _from_time, _to_time):
+        return [
+            {
+                "user": {"personnelNumber": "248"},
+                "entries": [
+                    {
+                        "type": "P",
+                        "from": 1772139600000,
+                        "to": 1772150400000,
+                        "fromAirport": {"icao": "CYVR"},
+                        "toAirport": {"icao": "CYYZ"},
+                        "notes": "Flight: ...\nHotel: Doubletree Toronto Airport/ CONF#54590540",
+                    }
+                ],
+            }
+        ]
+
+    _display_df, raw_df, _troubleshooting_df = compute_hotac_coverage(
+        Fl3xxApiConfig(),
+        date(2026, 2, 26),
+        flights=flights,
+        crew_fetcher=fake_crew,
+        services_fetcher=fake_services,
+        crew_member_fetcher=fake_crew_member,
+        roster_fetcher=fake_roster,
+    )
+
+    row = raw_df.iloc[0]
+    assert row["HOTAC status"] == "Booked"
+    assert "Positioning hotel note" in row["Notes"]
+
+
+def test_compute_hotac_coverage_uses_positioning_roster_to_home_base() -> None:
+    flights = [
+        {
+            "flightId": 121,
+            "tail": "C-GPOS",
+            "flightNumber": "AS121",
+            "departureTimeUtc": "2026-02-26T18:00:00Z",
+            "arrivalTimeUtc": "2026-02-26T20:00:00Z",
+            "arrivalAirport": "CYVR",
+        }
+    ]
+
+    def fake_crew(_config, _flight_id):
+        return [{"role": "CMD", "id": "395519", "personnelNumber": "248", "firstName": "Craig", "lastName": "Berntzen"}]
+
+    def fake_services(_config, _flight_id):
+        return {"arrivalHotac": []}
+
+    def fake_crew_member(_config, _crew_id):
+        return {"homeAirport": {"icao": "CYYC"}}
+
+    def fake_roster(_config, _from_time, _to_time):
+        return [
+            {
+                "user": {"personnelNumber": "248"},
+                "entries": [
+                    {
+                        "type": "P",
+                        "from": 1772139600000,
+                        "to": 1772150400000,
+                        "fromAirport": {"icao": "CYVR"},
+                        "toAirport": {"icao": "CYYC"},
+                        "notes": "Flight: ...",
+                    }
+                ],
+            }
+        ]
+
+    _display_df, raw_df, _troubleshooting_df = compute_hotac_coverage(
+        Fl3xxApiConfig(),
+        date(2026, 2, 26),
+        flights=flights,
+        crew_fetcher=fake_crew,
+        services_fetcher=fake_services,
+        crew_member_fetcher=fake_crew_member,
+        roster_fetcher=fake_roster,
+    )
+
+    row = raw_df.iloc[0]
+    assert row["HOTAC status"] == "Home base"
+    assert "Positioned to home base" in row["Notes"]
