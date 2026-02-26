@@ -519,6 +519,7 @@ def fetch_staff_roster(
     to_time: datetime,
     filter_value: str = "STAFF",
     include_flights: bool = True,
+    drop_empty_rows: bool = True,
     session: Optional[requests.Session] = None,
 ) -> List[Dict[str, Any]]:
     """Return roster rows from the ``/staff/roster`` endpoint."""
@@ -553,15 +554,28 @@ def fetch_staff_roster(
         response.raise_for_status()
         payload = response.json()
 
+        def _row_has_activity(row: Mapping[str, Any]) -> bool:
+            entries = row.get("entries")
+            flights = row.get("flights")
+
+            has_entries = isinstance(entries, list) and len(entries) > 0
+            has_flights = isinstance(flights, list) and len(flights) > 0
+            return has_entries or has_flights
+
+        def _finalise_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+            if not drop_empty_rows:
+                return rows
+            return [row for row in rows if _row_has_activity(row)]
+
         direct_rows = _coerce_rows(payload)
         if direct_rows is not None:
-            return direct_rows
+            return _finalise_rows(direct_rows)
 
         if isinstance(payload, MutableMapping):
             for key in ("items", "data", "results", "rows", "roster", "staff"):
                 rows = _coerce_rows(payload.get(key))
                 if rows is not None:
-                    return rows
+                    return _finalise_rows(rows)
 
         raise ValueError("Unsupported FL3XX staff roster payload structure")
     finally:

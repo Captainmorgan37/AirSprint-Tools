@@ -538,7 +538,7 @@ def test_fetch_staff_roster_builds_expected_endpoint_and_params() -> None:
             return None
 
         def json(self):
-            return [{"user": {"personnelNumber": "248"}, "entries": []}]
+            return [{"user": {"personnelNumber": "248"}, "entries": [{"type": "P"}]}]
 
     class DummySession:
         def __init__(self):
@@ -576,7 +576,7 @@ def test_fetch_staff_roster_accepts_mapping_data_payload() -> None:
             return None
 
         def json(self):
-            return {"data": [{"user": {"personnelNumber": "999"}, "entries": []}]}
+            return {"data": [{"user": {"personnelNumber": "999"}, "entries": [{"type": "A"}]}]}
 
     class DummySession:
         def get(self, url, **kwargs):
@@ -590,3 +590,54 @@ def test_fetch_staff_roster_accepts_mapping_data_payload() -> None:
     )
 
     assert payload[0]["user"]["personnelNumber"] == "999"
+
+
+def test_fetch_staff_roster_drops_rows_with_no_entries_or_flights_by_default() -> None:
+    class DummyResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "data": [
+                    {"user": {"personnelNumber": "100"}, "entries": [], "flights": []},
+                    {"user": {"personnelNumber": "200"}, "entries": [{"type": "P"}], "flights": []},
+                    {"user": {"personnelNumber": "300"}, "entries": [], "flights": [{"id": 1}]},
+                ]
+            }
+
+    class DummySession:
+        def get(self, url, **kwargs):
+            return DummyResponse()
+
+    payload = fetch_staff_roster(
+        Fl3xxApiConfig(base_url="https://app.fl3xx.us/api/external/flight/flights"),
+        from_time=datetime(2026, 2, 26, 12, 0),
+        to_time=datetime(2026, 2, 27, 12, 0),
+        session=DummySession(),
+    )
+
+    assert [row["user"]["personnelNumber"] for row in payload] == ["200", "300"]
+
+
+def test_fetch_staff_roster_can_keep_empty_rows_when_requested() -> None:
+    class DummyResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return [{"user": {"personnelNumber": "100"}, "entries": [], "flights": []}]
+
+    class DummySession:
+        def get(self, url, **kwargs):
+            return DummyResponse()
+
+    payload = fetch_staff_roster(
+        Fl3xxApiConfig(base_url="https://app.fl3xx.us/api/external/flight/flights"),
+        from_time=datetime(2026, 2, 26, 12, 0),
+        to_time=datetime(2026, 2, 27, 12, 0),
+        drop_empty_rows=False,
+        session=DummySession(),
+    )
+
+    assert [row["user"]["personnelNumber"] for row in payload] == ["100"]
