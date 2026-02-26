@@ -202,7 +202,33 @@ def _extract_tail(flight: Mapping[str, Any]) -> str:
     return ""
 
 
+_PLACEHOLDER_PREFIXES = {"ADD", "REMOVE"}
+
+
+def _is_add_remove_line(flight: Mapping[str, Any]) -> bool:
+    for key in ("tail", "tailNumber", "flightNumber", "flightNo", "flightNumberCompany", "number", "tripNumber"):
+        value = _extract_nested_value(flight, key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if not text:
+            continue
+        first_word = text.split()[0].upper()
+        if first_word in _PLACEHOLDER_PREFIXES:
+            return True
+    return False
+
+
 def _extract_flight_number(flight: Mapping[str, Any]) -> str:
+    def _is_missing_segment(segment: str) -> bool:
+        return segment.strip().casefold() in {"", "null", "none", "nan"}
+
+    booking_identifier = _extract_nested_value(flight, "bookingIdentifier")
+    if booking_identifier not in (None, ""):
+        booking_text = str(booking_identifier).strip()
+        if booking_text:
+            return booking_text
+
     for key in (
         "flightNumber",
         "flightNo",
@@ -213,8 +239,15 @@ def _extract_flight_number(flight: Mapping[str, Any]) -> str:
         "flightDetails.flightNo",
     ):
         value = _extract_nested_value(flight, key)
-        if value not in (None, ""):
-            return str(value)
+        if value in (None, ""):
+            continue
+        text = str(value).strip()
+        if not text:
+            continue
+        parts = [part.strip() for part in text.split("-")]
+        if any(_is_missing_segment(part) for part in parts) or _is_missing_segment(text):
+            continue
+        return text
     return ""
 
 
@@ -415,6 +448,9 @@ def compute_hotac_coverage(
     troubleshooting_rows: List[Dict[str, Any]] = []
 
     for index, flight in enumerate(fetched_flights):
+        if _is_add_remove_line(flight):
+            continue
+
         flight_id = flight.get("flightId") or flight.get("id")
         tail = _extract_tail(flight)
 

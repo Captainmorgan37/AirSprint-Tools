@@ -349,6 +349,76 @@ def test_compute_hotac_coverage_extracts_tail_flight_and_times_from_nested_leg_d
     assert row["End ETA (local)"]
 
 
+def test_compute_hotac_coverage_skips_add_remove_line_flights() -> None:
+    flights = [
+        {
+            "flightId": 701,
+            "tail": "ADD LINE",
+            "flightNumber": "ADD-209",
+            "departureTimeUtc": "2026-03-01T10:00:00Z",
+            "arrivalTimeUtc": "2026-03-01T12:00:00Z",
+            "arrivalAirport": "CYVR",
+        },
+        {
+            "flightId": 702,
+            "tail": "C-GREAL",
+            "flightNumber": "AS702",
+            "departureTimeUtc": "2026-03-01T13:00:00Z",
+            "arrivalTimeUtc": "2026-03-01T15:00:00Z",
+            "arrivalAirport": "CYVR",
+        },
+    ]
+
+    def fake_crew(_config, flight_id):
+        assert flight_id == 702
+        return [{"role": "CMD", "id": "702", "firstName": "Riley", "lastName": "Pilot"}]
+
+    def fake_services(_config, _flight_id):
+        return {"arrivalHotac": []}
+
+    _display_df, raw_df, _troubleshooting_df = compute_hotac_coverage(
+        Fl3xxApiConfig(),
+        date(2026, 3, 1),
+        flights=flights,
+        crew_fetcher=fake_crew,
+        services_fetcher=fake_services,
+    )
+
+    assert len(raw_df) == 1
+    assert raw_df.iloc[0]["Flight ID"] == 702
+
+
+def test_compute_hotac_coverage_uses_booking_identifier_when_flight_number_is_null_like() -> None:
+    flights = [
+        {
+            "flightId": 703,
+            "tail": "C-GASL",
+            "flightNumber": "209-null",
+            "bookingIdentifier": "IPDOG",
+            "departureTimeUtc": "2026-03-01T10:00:00Z",
+            "arrivalTimeUtc": "2026-03-01T12:00:00Z",
+            "arrivalAirport": "CYVR",
+        }
+    ]
+
+    def fake_crew(_config, _flight_id):
+        return [{"role": "CMD", "id": "703", "firstName": "Alex", "lastName": "Pilot"}]
+
+    def fake_services(_config, _flight_id):
+        return {"arrivalHotac": []}
+
+    _display_df, raw_df, _troubleshooting_df = compute_hotac_coverage(
+        Fl3xxApiConfig(),
+        date(2026, 3, 1),
+        flights=flights,
+        crew_fetcher=fake_crew,
+        services_fetcher=fake_services,
+    )
+
+    row = raw_df.iloc[0]
+    assert row["Flight"] == "IPDOG"
+
+
 
 def test_compute_hotac_coverage_marks_home_base_for_missing_canadian_hotac() -> None:
     flights = [
