@@ -545,6 +545,7 @@ def compute_hotac_coverage(
     for leg in pilot_last_leg.values():
         flight_id = leg.get("flight_id")
         pilot = leg.get("pilot", {})
+        profile_home_base_airport = ""
 
         status = "Unknown"
         company = ""
@@ -628,6 +629,7 @@ def compute_hotac_coverage(
                         try:
                             crew_member_payload = fetch_crew_member_details(config, pilot_person_id)
                             home_airport_icao = _extract_home_airport_icao(crew_member_payload)
+                            profile_home_base_airport = home_airport_icao or ""
                             if home_airport_icao and home_airport_icao == end_airport:
                                 status = "Home base"
                                 notes = f"Pilot ending at home base ({home_airport_icao})"
@@ -657,6 +659,7 @@ def compute_hotac_coverage(
                 "Flight": leg.get("flight_number") or "",
                 "Flight ID": leg.get("flight_id") or "",
                 "End airport": end_airport,
+                "Profile home base": profile_home_base_airport,
                 "End ETD (local)": _local_time_label(leg.get("dep_utc"), end_airport, tz_lookup),
                 "End ETA (local)": _local_time_label(leg.get("arr_utc"), end_airport, tz_lookup),
                 "HOTAC status": status,
