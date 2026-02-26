@@ -93,12 +93,16 @@ def test_compute_hotac_coverage_uses_crew_fetcher_and_last_leg_per_pilot() -> No
             }
         return {"arrivalHotac": []}
 
+    def fake_crew_member(_config, _crew_id):
+        return {"homeAirport": {"icao": "CYVR"}}
+
     display_df, raw_df, troubleshooting_df = compute_hotac_coverage(
         Fl3xxApiConfig(),
         date(2026, 1, 1),
         flights=flights,
         crew_fetcher=fake_crew,
         services_fetcher=fake_services,
+        crew_member_fetcher=fake_crew_member,
     )
 
     assert len(raw_df) == 2
@@ -343,3 +347,76 @@ def test_compute_hotac_coverage_extracts_tail_flight_and_times_from_nested_leg_d
     assert row["Flight"] == "AS777"
     assert row["End ETD (local)"]
     assert row["End ETA (local)"]
+
+
+
+def test_compute_hotac_coverage_marks_home_base_for_missing_canadian_hotac() -> None:
+    flights = [
+        {
+            "flightId": 90,
+            "tail": "C-GHOME",
+            "flightNumber": "AS900",
+            "departureTimeUtc": "2026-03-01T18:00:00Z",
+            "arrivalTimeUtc": "2026-03-01T20:00:00Z",
+            "arrivalAirport": "CYUL",
+        }
+    ]
+
+    def fake_crew(_config, _flight_id):
+        return [{"role": "CMD", "pilotId": 545362, "firstName": "Alexandre", "lastName": "Carriere"}]
+
+    def fake_services(_config, _flight_id):
+        return {"arrivalHotac": []}
+
+    def fake_crew_member(_config, crew_id):
+        assert str(crew_id) == "545362"
+        return {"homeAirport": {"icao": "CYUL"}}
+
+    _display_df, raw_df, troubleshooting_df = compute_hotac_coverage(
+        Fl3xxApiConfig(),
+        date(2026, 3, 1),
+        flights=flights,
+        crew_fetcher=fake_crew,
+        services_fetcher=fake_services,
+        crew_member_fetcher=fake_crew_member,
+    )
+
+    row = raw_df.iloc[0]
+    assert row["HOTAC status"] == "Home base"
+    assert "home base" in row["Notes"].lower()
+    assert troubleshooting_df.empty
+
+
+def test_compute_hotac_coverage_skips_home_base_lookup_for_non_canadian_missing_hotac() -> None:
+    flights = [
+        {
+            "flightId": 91,
+            "tail": "C-GINTL",
+            "flightNumber": "AS901",
+            "departureTimeUtc": "2026-03-01T18:00:00Z",
+            "arrivalTimeUtc": "2026-03-01T20:00:00Z",
+            "arrivalAirport": "KJFK",
+        }
+    ]
+
+    def fake_crew(_config, _flight_id):
+        return [{"role": "CMD", "id": "777", "firstName": "Pat", "lastName": "Pilot"}]
+
+    def fake_services(_config, _flight_id):
+        return {"arrivalHotac": []}
+
+    def fake_crew_member(_config, _crew_id):
+        raise AssertionError("crew member lookup should not happen for non-Canadian arrivals")
+
+    _display_df, raw_df, troubleshooting_df = compute_hotac_coverage(
+        Fl3xxApiConfig(),
+        date(2026, 3, 1),
+        flights=flights,
+        crew_fetcher=fake_crew,
+        services_fetcher=fake_services,
+        crew_member_fetcher=fake_crew_member,
+    )
+
+    row = raw_df.iloc[0]
+    assert row["HOTAC status"] == "Missing"
+    assert troubleshooting_df.empty
