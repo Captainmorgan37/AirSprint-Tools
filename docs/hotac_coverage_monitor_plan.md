@@ -1,5 +1,8 @@
 # HOTAC Coverage Monitor – Implementation Plan
 
+## Status
+- 🔄 **In progress**: `Hotel Check` (initial MVP implementation)
+
 ## Goal
 Build a Streamlit app that answers one operational question quickly for **today** or **tomorrow**:
 
@@ -134,14 +137,14 @@ All of these should be surfaced in a troubleshooting table instead of silently d
 
 ---
 
-## Questions to confirm before build
-1. **Scope of crew**: pilots only (`pilot == true`) or include cabin crew later?
-2. **Source of truth for assigned crew**: flight crew endpoint vs preflight payload crew block?
-3. **Definition of “booked”**: is `status == OK` enough, or should a document/itinerary be required?
-4. **Cancelled handling**: should `CNL` count as missing (red) or a separate warning state (amber)?
-5. **Airport logic**: arrival HOTAC only, or consider departure HOTAC for special cases?
-6. **Notification flow**: just dashboard for now, or export/Slack/email list of missing hotels?
-7. **Time zone display**: show all times in local airport time, MT, or both?
+## Confirmed build decisions
+1. **Scope of crew**: pilots only (`pilot == true`) for MVP.
+2. **Source of truth for assigned crew**: no expected difference between sources, so use the more lightweight option.
+3. **Definition of “booked”**: `status == OK` is sufficient; if itinerary/documents are missing while status is OK, flag it in notes for follow-up.
+4. **Cancelled handling**: keep cancelled as a separate warning state (`Cancelled-only`) instead of merging into missing.
+5. **Airport logic**: arrival HOTAC only.
+6. **Notification flow**: dashboard only for now.
+7. **Time zone display**: local airport time.
 
 ---
 
@@ -155,6 +158,6 @@ All of these should be surfaced in a troubleshooting table instead of silently d
 ---
 
 ## Next step
-Once answers to the questions above are confirmed, implementation can be delivered in two small PRs:
+With decisions confirmed, implementation can be delivered in two small PRs under the **Hotel Check** effort:
 1. backend logic module + unit tests for status mapping,
 2. Streamlit page wiring + UX polish.

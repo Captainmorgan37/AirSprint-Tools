@@ -195,6 +195,7 @@ def _sidebar_links() -> list[dict[str, Any]]:
                 {"path": "pages/Foreflight Test.py", "label": "ForeFlight Test"},
                 {"path": "pages/Fuel Planning Assistant.py", "label": "Fuel Planning Assistant"},
                 {"path": "pages/Fuel Stop Advisor.py", "label": "Fuel Stop Advisor"},
+                {"path": "pages/HOTAC Coverage Monitor.py", "label": "Hotel Check (HOTAC)"},
             ],
         },
         {
