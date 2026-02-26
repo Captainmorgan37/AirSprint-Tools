@@ -83,7 +83,10 @@ st.caption(
 
 run_check = st.button("Run Reserve Day Check", type="primary")
 
-if not run_check:
+if run_check:
+    st.session_state["reserve_day_check_should_run"] = True
+
+if not st.session_state.get("reserve_day_check_should_run"):
     st.info("Select the reserve days you want to inspect, then press the button above.")
     st.stop()
 
@@ -104,8 +107,12 @@ except FlightDataError as exc:
     st.error(str(exc))
     st.stop()
 
-with st.spinner("Fetching flights and planning notes from FL3XX..."):
-    result = run_reserve_day_check(config, target_dates=upcoming_dates)
+if run_check or "reserve_day_check_result" not in st.session_state:
+    with st.spinner("Fetching flights and planning notes from FL3XX..."):
+        result = run_reserve_day_check(config, target_dates=upcoming_dates)
+    st.session_state["reserve_day_check_result"] = result
+else:
+    result = st.session_state["reserve_day_check_result"]
 
 if not result.dates:
     st.info("No reserve days were evaluated.")

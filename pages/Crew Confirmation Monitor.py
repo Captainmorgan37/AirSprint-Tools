@@ -73,7 +73,14 @@ with st.form("duty-clearance-form"):
     )
     submitted = st.form_submit_button("Fetch duty clearance", type="primary")
 
-if not submitted:
+if submitted:
+    st.session_state["crew_confirmation_last_target_date"] = target_date
+
+stored_target_date = st.session_state.get("crew_confirmation_last_target_date")
+if isinstance(stored_target_date, date):
+    target_date = stored_target_date
+
+if not submitted and "crew_confirmation_last_results" not in st.session_state:
     st.info("Select a duty date and run the report to load the latest crew readiness status.")
     st.stop()
 
@@ -94,15 +101,27 @@ except FlightDataError as exc:
     st.error(str(exc))
     st.stop()
 
-with st.spinner("Fetching duty clearance data from FL3XX…"):
-    try:
-        display_df, raw_df, troubleshooting_df = compute_clearance_table(
-            config,
-            target_date,
-        )
-    except Exception as exc:
-        st.error(f"Unable to load duty clearance data: {exc}")
-        st.stop()
+if submitted or "crew_confirmation_last_results" not in st.session_state:
+    with st.spinner("Fetching duty clearance data from FL3XX…"):
+        try:
+            display_df, raw_df, troubleshooting_df = compute_clearance_table(
+                config,
+                target_date,
+            )
+        except Exception as exc:
+            st.error(f"Unable to load duty clearance data: {exc}")
+            st.stop()
+
+    st.session_state["crew_confirmation_last_results"] = {
+        "display_df": display_df,
+        "raw_df": raw_df,
+        "troubleshooting_df": troubleshooting_df,
+    }
+else:
+    stored_results = st.session_state.get("crew_confirmation_last_results", {})
+    display_df = stored_results.get("display_df", pd.DataFrame())
+    raw_df = stored_results.get("raw_df", pd.DataFrame())
+    troubleshooting_df = stored_results.get("troubleshooting_df", pd.DataFrame())
 
 if raw_df.empty:
     st.success(

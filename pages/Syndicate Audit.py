@@ -62,11 +62,18 @@ with tabs[0]:
 
     run_check = st.button("Run Syndicate Audit", type="primary")
 
-    if not run_check:
+    if run_check:
+        st.session_state["syndicate_daily_should_render"] = True
+
+    if not run_check and "syndicate_daily_result" not in st.session_state:
         st.info("Choose a date and run the audit to review syndicate bookings.")
     else:
-        with st.spinner("Fetching flights and syndicate booking notes..."):
-            result = run_syndicate_audit(config, target_date=selected_date)
+        if run_check or "syndicate_daily_result" not in st.session_state:
+            with st.spinner("Fetching flights and syndicate booking notes..."):
+                result = run_syndicate_audit(config, target_date=selected_date)
+            st.session_state["syndicate_daily_result"] = result
+        else:
+            result = st.session_state["syndicate_daily_result"]
 
         summary = result.diagnostics
 
@@ -153,13 +160,21 @@ with tabs[1]:
     quote_id = st.text_input("Quote ID")
     run_quote = st.button("Fetch Syndicate Quote", type="primary")
 
-    if not run_quote:
+    if run_quote:
+        st.session_state["syndicate_quote_last_id"] = quote_id.strip()
+
+    if not run_quote and "syndicate_quote_result" not in st.session_state:
         st.info("Enter a quote ID and fetch the syndicate audit for that quote.")
-    elif not quote_id.strip():
+    elif run_quote and not quote_id.strip():
         st.error("Please enter a quote ID to continue.")
     else:
-        with st.spinner("Fetching syndicate details for the quote..."):
-            quote_result = run_syndicate_quote_audit(config, quote_id=quote_id.strip())
+        if run_quote or "syndicate_quote_result" not in st.session_state:
+            quote_id_to_fetch = st.session_state.get("syndicate_quote_last_id", quote_id.strip())
+            with st.spinner("Fetching syndicate details for the quote..."):
+                quote_result = run_syndicate_quote_audit(config, quote_id=quote_id_to_fetch)
+            st.session_state["syndicate_quote_result"] = quote_result
+        else:
+            quote_result = st.session_state["syndicate_quote_result"]
 
         if quote_result.warnings:
             for warning in quote_result.warnings:
