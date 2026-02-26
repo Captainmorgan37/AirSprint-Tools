@@ -390,6 +390,7 @@ if submit_fetch:
         "normalization_stats": normalization_stats,
     }
     st.session_state[_FETCH_RESULTS_KEY] = fetch_results
+    st.session_state.pop(_ANALYSIS_RESULTS_KEY, None)
 
 if not fetch_results:
     st.info('Select a departure window and press "Fetch flights" to retrieve data from FL3XX.')
