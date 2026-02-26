@@ -133,7 +133,7 @@ def _normalize_status(value: Any) -> str:
 
 def _extract_timestamp(payload: Mapping[str, Any], keys: Sequence[str]) -> Optional[datetime]:
     for key in keys:
-        value = payload.get(key)
+        value = _extract_nested_value(payload, key)
         if value in (None, ""):
             continue
         try:
@@ -141,6 +141,19 @@ def _extract_timestamp(payload: Mapping[str, Any], keys: Sequence[str]) -> Optio
         except Exception:
             continue
     return None
+
+
+def _extract_nested_value(payload: Mapping[str, Any], key: str) -> Any:
+    if key in payload:
+        return payload.get(key)
+
+    segments = key.split(".")
+    cursor: Any = payload
+    for segment in segments:
+        if not isinstance(cursor, Mapping):
+            return None
+        cursor = cursor.get(segment)
+    return cursor
 
 
 def _extract_airport(payload: Mapping[str, Any], keys: Sequence[str]) -> Optional[str]:
@@ -163,8 +176,17 @@ def _extract_airport(payload: Mapping[str, Any], keys: Sequence[str]) -> Optiona
 
 
 def _extract_tail(flight: Mapping[str, Any]) -> str:
-    for key in ("tail", "aircraftReg", "registration", "tailNumber"):
-        value = flight.get(key)
+    for key in (
+        "tail",
+        "tailNumber",
+        "aircraftReg",
+        "aircraftRegistration",
+        "registration",
+        "registrationNumber",
+        "flightDetails.tail",
+        "flightDetails.tailNumber",
+    ):
+        value = _extract_nested_value(flight, key)
         if isinstance(value, str) and value.strip():
             return value.strip().upper()
 
@@ -179,8 +201,16 @@ def _extract_tail(flight: Mapping[str, Any]) -> str:
 
 
 def _extract_flight_number(flight: Mapping[str, Any]) -> str:
-    for key in ("flightNumber", "flightNo", "number", "tripNumber"):
-        value = flight.get(key)
+    for key in (
+        "flightNumber",
+        "flightNo",
+        "flightNumberCompany",
+        "number",
+        "tripNumber",
+        "flightDetails.flightNumber",
+        "flightDetails.flightNo",
+    ):
+        value = _extract_nested_value(flight, key)
         if value not in (None, ""):
             return str(value)
     return ""
@@ -359,11 +389,35 @@ def compute_hotac_coverage(
 
         dep_utc = _extract_timestamp(
             flight,
-            ["departureTimeUtc", "dep_time", "depTime", "departureUtc", "scheduledOutUtc"],
+            [
+                "departureTimeUtc",
+                "dep_time",
+                "depTime",
+                "departureUtc",
+                "scheduledOutUtc",
+                "scheduledOut",
+                "departureTime",
+                "detailsDeparture.scheduledOut",
+                "detailsDeparture.scheduledOutUtc",
+                "flightDetails.dep.scheduledOut",
+                "flightDetails.dep.scheduledOutUtc",
+            ],
         )
         arr_utc = _extract_timestamp(
             flight,
-            ["arrivalTimeUtc", "arrival_time", "arrTime", "arrivalUtc", "scheduledInUtc"],
+            [
+                "arrivalTimeUtc",
+                "arrival_time",
+                "arrTime",
+                "arrivalUtc",
+                "scheduledInUtc",
+                "scheduledIn",
+                "arrivalTime",
+                "detailsArrival.scheduledIn",
+                "detailsArrival.scheduledInUtc",
+                "flightDetails.arr.scheduledIn",
+                "flightDetails.arr.scheduledInUtc",
+            ],
         )
 
         crew_payload: List[Dict[str, Any]] = []
