@@ -453,6 +453,7 @@ def test_compute_hotac_coverage_marks_home_base_for_missing_canadian_hotac() -> 
 
     row = raw_df.iloc[0]
     assert row["HOTAC status"] == "Home base"
+    assert row["Profile home base"] == "CYUL"
     assert "home base" in row["Notes"].lower()
     assert troubleshooting_df.empty
 
@@ -489,4 +490,5 @@ def test_compute_hotac_coverage_skips_home_base_lookup_for_non_canadian_missing_
 
     row = raw_df.iloc[0]
     assert row["HOTAC status"] == "Missing"
+    assert row["Profile home base"] == ""
     assert troubleshooting_df.empty
