@@ -44,6 +44,21 @@ def test_status_mapping_cancelled_only_when_no_active_records() -> None:
     assert "cancelled" in notes.lower()
 
 
+def test_status_mapping_unknown_includes_unrecognized_status_and_note() -> None:
+    status, company, notes = _status_from_hotac_records(
+        [
+            {
+                "status": "REQ",
+                "notes": "NAME CHANGE FROM TFH TO DIJ REQUESTED WITH ELITE // SEE EMAIL 2042805",
+            }
+        ]
+    )
+
+    assert status == "Unsure - unconfirmed status"
+    assert company is None
+    assert notes == "REQ - NAME CHANGE FROM TFH TO DIJ REQUESTED WITH ELITE // SEE EMAIL 2042805"
+
+
 def test_compute_hotac_coverage_uses_crew_fetcher_and_last_leg_per_pilot() -> None:
     flights = [
         {
