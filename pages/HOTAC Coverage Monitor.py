@@ -103,16 +103,27 @@ if raw_df.empty:
     st.stop()
 
 status_counts = raw_df["HOTAC status"].value_counts(dropna=False)
-metric_cols = st.columns(6)
+metric_cols = st.columns(7)
 metric_cols[0].metric("Pilots ending day", int(len(raw_df)))
 metric_cols[1].metric("Booked", int(status_counts.get("Booked", 0)))
 metric_cols[2].metric("Home base", int(status_counts.get("Home base", 0)))
-metric_cols[3].metric("Missing", int(status_counts.get("Missing", 0)))
-metric_cols[4].metric("Cancelled-only", int(status_counts.get("Cancelled-only", 0)))
-metric_cols[5].metric("Unknown", int(status_counts.get("Unknown", 0)))
+metric_cols[3].metric(
+    "Unsure CYHU/CYUL",
+    int(status_counts.get("Unsure - crew based at CYUL and may be staying at home", 0)),
+)
+metric_cols[4].metric("Missing", int(status_counts.get("Missing", 0)))
+metric_cols[5].metric("Cancelled-only", int(status_counts.get("Cancelled-only", 0)))
+metric_cols[6].metric("Unknown", int(status_counts.get("Unknown", 0)))
 
 airport_options = sorted({value for value in raw_df["End airport"].dropna().astype(str) if value})
-preferred_status_order = ["Missing", "Cancelled-only", "Unknown", "Home base", "Booked"]
+preferred_status_order = [
+    "Missing",
+    "Unsure - crew based at CYUL and may be staying at home",
+    "Cancelled-only",
+    "Unknown",
+    "Home base",
+    "Booked",
+]
 status_options = [status for status in preferred_status_order if status in set(raw_df["HOTAC status"].dropna().astype(str))]
 if not status_options:
     status_options = preferred_status_order

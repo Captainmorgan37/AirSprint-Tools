@@ -376,7 +376,14 @@ def _status_from_hotac_records(records: Sequence[Mapping[str, Any]]) -> Tuple[st
 
 
 def _rank_status(status: str) -> int:
-    order = {"Missing": 0, "Cancelled-only": 1, "Unknown": 2, "Home base": 3, "Booked": 4}
+    order = {
+        "Missing": 0,
+        "Unsure - crew based at CYUL and may be staying at home": 1,
+        "Cancelled-only": 2,
+        "Unknown": 3,
+        "Home base": 4,
+        "Booked": 5,
+    }
     return order.get(status, 9)
 
 
@@ -718,6 +725,9 @@ def compute_hotac_coverage(
                             if home_airport_icao and home_airport_icao == end_airport:
                                 status = "Home base"
                                 notes = f"Pilot ending at home base ({home_airport_icao})"
+                            elif end_airport == "CYHU" and home_airport_icao == "CYUL":
+                                status = "Unsure - crew based at CYUL and may be staying at home"
+                                notes = "Crew ended at CYHU and is CYUL based; may be staying at home"
                         except Exception as exc:
                             troubleshooting_rows.append(
                                 {
