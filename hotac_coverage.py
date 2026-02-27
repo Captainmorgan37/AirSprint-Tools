@@ -394,6 +394,17 @@ def _extract_hotac_unrecognized_note(record: Mapping[str, Any]) -> Optional[str]
     return None
 
 
+def _extract_hotac_unrecognized_note(record: Mapping[str, Any]) -> Optional[str]:
+    service = record.get("hotacService") if isinstance(record.get("hotacService"), Mapping) else {}
+
+    for source in (record, service):
+        for key in ("note", "notes", "remark", "remarks", "comment", "comments"):
+            value = source.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return None
+
+
 def _rank_status(status: str) -> int:
     order = {
         "Missing": 0,
