@@ -343,6 +343,7 @@ def _status_from_hotac_records(records: Sequence[Mapping[str, Any]]) -> Tuple[st
     cancelled_only = True
     company: Optional[str] = None
     itinerary_missing = False
+    unrecognized_details: List[str] = []
 
     for record in records:
         status = _normalize_status(record.get("status"))
@@ -363,6 +364,11 @@ def _status_from_hotac_records(records: Sequence[Mapping[str, Any]]) -> Tuple[st
             continue
         else:
             cancelled_only = False
+            detail_note = _extract_hotac_unrecognized_note(record)
+            if detail_note:
+                unrecognized_details.append(f"{status} - {detail_note}")
+            elif status:
+                unrecognized_details.append(status)
 
     if has_ok:
         if itinerary_missing:
@@ -372,7 +378,20 @@ def _status_from_hotac_records(records: Sequence[Mapping[str, Any]]) -> Tuple[st
     if cancelled_only:
         return "Cancelled-only", company, "All matching HOTAC records are cancelled"
 
+    if unrecognized_details:
+        return "Unknown", company, "; ".join(unrecognized_details)
     return "Unknown", company, "Unrecognized HOTAC statuses for pilot"
+
+
+def _extract_hotac_unrecognized_note(record: Mapping[str, Any]) -> Optional[str]:
+    service = record.get("hotacService") if isinstance(record.get("hotacService"), Mapping) else {}
+
+    for source in (record, service):
+        for key in ("note", "notes", "remark", "remarks", "comment", "comments"):
+            value = source.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return None
 
 
 def _rank_status(status: str) -> int:
