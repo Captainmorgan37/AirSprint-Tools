@@ -22,6 +22,25 @@ st.write(
 )
 
 
+def _row_background_for_status(status: Any) -> str:
+    status_text = str(status).strip().lower()
+    if status_text in {"booked", "home base"}:
+        return "background-color: rgba(34, 197, 94, 0.18);"
+    if status_text == "missing":
+        return "background-color: rgba(239, 68, 68, 0.18);"
+    return "background-color: rgba(234, 179, 8, 0.2);"
+
+
+def _style_hotac_rows(frame: pd.DataFrame) -> pd.io.formats.style.Styler:
+    if frame.empty:
+        return frame.style
+
+    return frame.style.apply(
+        lambda row: [_row_background_for_status(row.get("HOTAC status"))] * len(row),
+        axis=1,
+    )
+
+
 def _load_fl3xx_settings() -> Optional[Dict[str, Any]]:
     try:
         secrets = st.secrets  # type: ignore[attr-defined]
@@ -103,16 +122,28 @@ if raw_df.empty:
     st.stop()
 
 status_counts = raw_df["HOTAC status"].value_counts(dropna=False)
-metric_cols = st.columns(6)
+metric_cols = st.columns(7)
 metric_cols[0].metric("Pilots ending day", int(len(raw_df)))
 metric_cols[1].metric("Booked", int(status_counts.get("Booked", 0)))
 metric_cols[2].metric("Home base", int(status_counts.get("Home base", 0)))
-metric_cols[3].metric("Missing", int(status_counts.get("Missing", 0)))
-metric_cols[4].metric("Cancelled-only", int(status_counts.get("Cancelled-only", 0)))
-metric_cols[5].metric("Unknown", int(status_counts.get("Unknown", 0)))
+metric_cols[3].metric(
+    "Unsure CYHU/CYUL",
+    int(status_counts.get("Unsure - crew based at CYUL and may be staying at home", 0)),
+)
+metric_cols[4].metric("Missing", int(status_counts.get("Missing", 0)))
+metric_cols[5].metric("Cancelled-only", int(status_counts.get("Cancelled-only", 0)))
+metric_cols[6].metric("Unsure (unconfirmed)", int(status_counts.get("Unsure - unconfirmed status", 0)))
 
 airport_options = sorted({value for value in raw_df["End airport"].dropna().astype(str) if value})
-preferred_status_order = ["Missing", "Cancelled-only", "Unknown", "Home base", "Booked"]
+preferred_status_order = [
+    "Missing",
+    "Unsure - crew based at CYUL and may be staying at home",
+    "Unsure - unconfirmed status",
+    "Cancelled-only",
+    "Unknown",
+    "Home base",
+    "Booked",
+]
 status_options = [status for status in preferred_status_order if status in set(raw_df["HOTAC status"].dropna().astype(str))]
 if not status_options:
     status_options = preferred_status_order
@@ -131,7 +162,15 @@ if selected_statuses:
 if selected_tails:
     filtered_df = filtered_df[filtered_df["Tail"].isin(selected_tails)]
 
-st.dataframe(filtered_df, width="stretch", hide_index=True)
+default_hidden_columns = {"Personnel/Trigram", "Flight ID"}
+visible_columns = [column for column in filtered_df.columns if column not in default_hidden_columns]
+
+st.dataframe(
+    _style_hotac_rows(filtered_df),
+    width="stretch",
+    hide_index=True,
+    column_order=visible_columns,
+)
 
 with st.expander("Troubleshooting details"):
     if troubleshooting_df.empty:

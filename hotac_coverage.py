@@ -335,6 +335,18 @@ def _dedupe_pilots(pilots: Iterable[Mapping[str, Any]]) -> List[Dict[str, Any]]:
     return list(deduped.values())
 
 
+
+
+def _extract_hotac_company(record: Mapping[str, Any]) -> Optional[str]:
+    service = record.get("hotacService") if isinstance(record.get("hotacService"), Mapping) else {}
+
+    for source in (record, service):
+        for key in ("company", "hotelCompany", "hotel_company", "provider", "hotelProvider"):
+            value = source.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return None
+
 def _status_from_hotac_records(records: Sequence[Mapping[str, Any]]) -> Tuple[str, Optional[str], str]:
     if not records:
         return "Missing", None, "No matching arrival HOTAC record for pilot"
@@ -343,17 +355,17 @@ def _status_from_hotac_records(records: Sequence[Mapping[str, Any]]) -> Tuple[st
     cancelled_only = True
     company: Optional[str] = None
     itinerary_missing = False
+    unrecognized_details: List[str] = []
 
     for record in records:
         status = _normalize_status(record.get("status"))
-        service = record.get("hotacService") if isinstance(record.get("hotacService"), Mapping) else {}
+        company_value = _extract_hotac_company(record)
+        if status not in CANCELLED_STATUSES and company_value and (status == "OK" or not company):
+            company = company_value
 
         if status == "OK":
             has_ok = True
             cancelled_only = False
-            company_value = service.get("company") if isinstance(service, Mapping) else None
-            if isinstance(company_value, str) and company_value.strip():
-                company = company_value.strip()
 
             documents = record.get("documents")
             if not (isinstance(documents, list) and len(documents) > 0):
@@ -363,6 +375,11 @@ def _status_from_hotac_records(records: Sequence[Mapping[str, Any]]) -> Tuple[st
             continue
         else:
             cancelled_only = False
+            detail_note = _extract_hotac_unrecognized_note(record)
+            if detail_note:
+                unrecognized_details.append(f"{status} - {detail_note}")
+            elif status:
+                unrecognized_details.append(status)
 
     if has_ok:
         if itinerary_missing:
@@ -372,11 +389,43 @@ def _status_from_hotac_records(records: Sequence[Mapping[str, Any]]) -> Tuple[st
     if cancelled_only:
         return "Cancelled-only", company, "All matching HOTAC records are cancelled"
 
-    return "Unknown", company, "Unrecognized HOTAC statuses for pilot"
+    if unrecognized_details:
+        return "Unsure - unconfirmed status", company, "; ".join(unrecognized_details)
+    return "Unsure - unconfirmed status", company, "Unrecognized HOTAC statuses for pilot"
+
+
+def _extract_hotac_unrecognized_note(record: Mapping[str, Any]) -> Optional[str]:
+    service = record.get("hotacService") if isinstance(record.get("hotacService"), Mapping) else {}
+
+    for source in (record, service):
+        for key in ("note", "notes", "remark", "remarks", "comment", "comments"):
+            value = source.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return None
+
+
+def _extract_hotac_unrecognized_note(record: Mapping[str, Any]) -> Optional[str]:
+    service = record.get("hotacService") if isinstance(record.get("hotacService"), Mapping) else {}
+
+    for source in (record, service):
+        for key in ("note", "notes", "remark", "remarks", "comment", "comments"):
+            value = source.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return None
 
 
 def _rank_status(status: str) -> int:
-    order = {"Missing": 0, "Cancelled-only": 1, "Unknown": 2, "Home base": 3, "Booked": 4}
+    order = {
+        "Missing": 0,
+        "Unsure - crew based at CYUL and may be staying at home": 1,
+        "Unsure - unconfirmed status": 2,
+        "Cancelled-only": 3,
+        "Unknown": 4,
+        "Home base": 5,
+        "Booked": 6,
+    }
     return order.get(status, 9)
 
 
@@ -718,6 +767,9 @@ def compute_hotac_coverage(
                             if home_airport_icao and home_airport_icao == end_airport:
                                 status = "Home base"
                                 notes = f"Pilot ending at home base ({home_airport_icao})"
+                            elif end_airport == "CYHU" and home_airport_icao == "CYUL":
+                                status = "Unsure - crew based at CYUL and may be staying at home"
+                                notes = "Crew ended at CYHU and is CYUL based; may be staying at home"
                         except Exception as exc:
                             troubleshooting_rows.append(
                                 {
