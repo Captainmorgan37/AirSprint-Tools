@@ -335,6 +335,18 @@ def _dedupe_pilots(pilots: Iterable[Mapping[str, Any]]) -> List[Dict[str, Any]]:
     return list(deduped.values())
 
 
+
+
+def _extract_hotac_company(record: Mapping[str, Any]) -> Optional[str]:
+    service = record.get("hotacService") if isinstance(record.get("hotacService"), Mapping) else {}
+
+    for source in (record, service):
+        for key in ("company", "hotelCompany", "hotel_company", "provider", "hotelProvider"):
+            value = source.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return None
+
 def _status_from_hotac_records(records: Sequence[Mapping[str, Any]]) -> Tuple[str, Optional[str], str]:
     if not records:
         return "Missing", None, "No matching arrival HOTAC record for pilot"
@@ -347,14 +359,13 @@ def _status_from_hotac_records(records: Sequence[Mapping[str, Any]]) -> Tuple[st
 
     for record in records:
         status = _normalize_status(record.get("status"))
-        service = record.get("hotacService") if isinstance(record.get("hotacService"), Mapping) else {}
+        company_value = _extract_hotac_company(record)
+        if status not in CANCELLED_STATUSES and company_value and (status == "OK" or not company):
+            company = company_value
 
         if status == "OK":
             has_ok = True
             cancelled_only = False
-            company_value = service.get("company") if isinstance(service, Mapping) else None
-            if isinstance(company_value, str) and company_value.strip():
-                company = company_value.strip()
 
             documents = record.get("documents")
             if not (isinstance(documents, list) and len(documents) > 0):

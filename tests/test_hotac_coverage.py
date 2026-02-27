@@ -59,6 +59,22 @@ def test_status_mapping_unknown_includes_unrecognized_status_and_note() -> None:
     assert notes == "REQ - NAME CHANGE FROM TFH TO DIJ REQUESTED WITH ELITE // SEE EMAIL 2042805"
 
 
+def test_status_mapping_unknown_includes_company_when_present() -> None:
+    status, company, notes = _status_from_hotac_records(
+        [
+            {
+                "status": "REQ",
+                "hotacService": {"company": "Elite Hotels"},
+                "notes": "Awaiting confirmation",
+            }
+        ]
+    )
+
+    assert status == "Unsure - unconfirmed status"
+    assert company == "Elite Hotels"
+    assert notes == "REQ - Awaiting confirmation"
+
+
 def test_compute_hotac_coverage_uses_crew_fetcher_and_last_leg_per_pilot() -> None:
     flights = [
         {
