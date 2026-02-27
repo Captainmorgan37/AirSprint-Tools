@@ -379,8 +379,19 @@ def _status_from_hotac_records(records: Sequence[Mapping[str, Any]]) -> Tuple[st
         return "Cancelled-only", company, "All matching HOTAC records are cancelled"
 
     if unrecognized_details:
-        return "Unknown", company, "; ".join(unrecognized_details)
-    return "Unknown", company, "Unrecognized HOTAC statuses for pilot"
+        return "Unsure - unconfirmed status", company, "; ".join(unrecognized_details)
+    return "Unsure - unconfirmed status", company, "Unrecognized HOTAC statuses for pilot"
+
+
+def _extract_hotac_unrecognized_note(record: Mapping[str, Any]) -> Optional[str]:
+    service = record.get("hotacService") if isinstance(record.get("hotacService"), Mapping) else {}
+
+    for source in (record, service):
+        for key in ("note", "notes", "remark", "remarks", "comment", "comments"):
+            value = source.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return None
 
 
 def _extract_hotac_unrecognized_note(record: Mapping[str, Any]) -> Optional[str]:
@@ -398,10 +409,11 @@ def _rank_status(status: str) -> int:
     order = {
         "Missing": 0,
         "Unsure - crew based at CYUL and may be staying at home": 1,
-        "Cancelled-only": 2,
-        "Unknown": 3,
-        "Home base": 4,
-        "Booked": 5,
+        "Unsure - unconfirmed status": 2,
+        "Cancelled-only": 3,
+        "Unknown": 4,
+        "Home base": 5,
+        "Booked": 6,
     }
     return order.get(status, 9)
 

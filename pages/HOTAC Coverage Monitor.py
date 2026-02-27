@@ -113,12 +113,13 @@ metric_cols[3].metric(
 )
 metric_cols[4].metric("Missing", int(status_counts.get("Missing", 0)))
 metric_cols[5].metric("Cancelled-only", int(status_counts.get("Cancelled-only", 0)))
-metric_cols[6].metric("Unknown", int(status_counts.get("Unknown", 0)))
+metric_cols[6].metric("Unsure (unconfirmed)", int(status_counts.get("Unsure - unconfirmed status", 0)))
 
 airport_options = sorted({value for value in raw_df["End airport"].dropna().astype(str) if value})
 preferred_status_order = [
     "Missing",
     "Unsure - crew based at CYUL and may be staying at home",
+    "Unsure - unconfirmed status",
     "Cancelled-only",
     "Unknown",
     "Home base",

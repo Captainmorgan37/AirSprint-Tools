@@ -54,7 +54,7 @@ def test_status_mapping_unknown_includes_unrecognized_status_and_note() -> None:
         ]
     )
 
-    assert status == "Unknown"
+    assert status == "Unsure - unconfirmed status"
     assert company is None
     assert notes == "REQ - NAME CHANGE FROM TFH TO DIJ REQUESTED WITH ELITE // SEE EMAIL 2042805"
 
