@@ -22,6 +22,25 @@ st.write(
 )
 
 
+def _row_background_for_status(status: Any) -> str:
+    status_text = str(status).strip().lower()
+    if status_text in {"booked", "home base"}:
+        return "background-color: rgba(34, 197, 94, 0.18);"
+    if status_text == "missing":
+        return "background-color: rgba(239, 68, 68, 0.18);"
+    return "background-color: rgba(234, 179, 8, 0.2);"
+
+
+def _style_hotac_rows(frame: pd.DataFrame) -> pd.io.formats.style.Styler:
+    if frame.empty:
+        return frame.style
+
+    return frame.style.apply(
+        lambda row: [_row_background_for_status(row.get("HOTAC status"))] * len(row),
+        axis=1,
+    )
+
+
 def _load_fl3xx_settings() -> Optional[Dict[str, Any]]:
     try:
         secrets = st.secrets  # type: ignore[attr-defined]
@@ -143,7 +162,7 @@ if selected_statuses:
 if selected_tails:
     filtered_df = filtered_df[filtered_df["Tail"].isin(selected_tails)]
 
-st.dataframe(filtered_df, width="stretch", hide_index=True)
+st.dataframe(_style_hotac_rows(filtered_df), width="stretch", hide_index=True)
 
 with st.expander("Troubleshooting details"):
     if troubleshooting_df.empty:
