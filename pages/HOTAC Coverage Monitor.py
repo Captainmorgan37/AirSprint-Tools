@@ -162,7 +162,15 @@ if selected_statuses:
 if selected_tails:
     filtered_df = filtered_df[filtered_df["Tail"].isin(selected_tails)]
 
-st.dataframe(_style_hotac_rows(filtered_df), width="stretch", hide_index=True)
+default_hidden_columns = {"Personnel/Trigram", "Flight ID"}
+visible_columns = [column for column in filtered_df.columns if column not in default_hidden_columns]
+
+st.dataframe(
+    _style_hotac_rows(filtered_df),
+    width="stretch",
+    hide_index=True,
+    column_order=visible_columns,
+)
 
 with st.expander("Troubleshooting details"):
     if troubleshooting_df.empty:
