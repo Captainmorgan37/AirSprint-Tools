@@ -267,6 +267,13 @@ def format_iso_timestamp(value: Any) -> Tuple[str, datetime | None]:
         dt_utc = dt_obj.astimezone(timezone.utc)
         return dt_utc.strftime("%b %d %Y, %H:%MZ"), dt_utc
 
+    def _format_epoch_seconds(seconds: float) -> Tuple[str, datetime | None]:
+        try:
+            dt_obj = datetime.fromtimestamp(seconds, tz=timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            return str(value), None
+        return _format(dt_obj)
+
     if isinstance(value, (int, float)):
         try:
             seconds = float(value)
@@ -274,8 +281,7 @@ def format_iso_timestamp(value: Any) -> Tuple[str, datetime | None]:
             return str(value), None
         if seconds > 1e12:
             seconds /= 1000.0
-        dt = datetime.fromtimestamp(seconds, tz=timezone.utc)
-        return _format(dt)
+        return _format_epoch_seconds(seconds)
 
     value_str = str(value).strip()
     if not value_str:
@@ -313,8 +319,7 @@ def format_iso_timestamp(value: Any) -> Tuple[str, datetime | None]:
         if seconds is not None:
             if len(normalized) > 10:
                 seconds /= 1000.0
-            dt = datetime.fromtimestamp(seconds, tz=timezone.utc)
-            return _format(dt)
+            return _format_epoch_seconds(seconds)
 
     try:
         dt = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
