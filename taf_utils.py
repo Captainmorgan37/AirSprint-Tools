@@ -268,6 +268,10 @@ def format_iso_timestamp(value: Any) -> Tuple[str, datetime | None]:
         return dt_utc.strftime("%b %d %Y, %H:%MZ"), dt_utc
 
     def _format_epoch_seconds(seconds: float) -> Tuple[str, datetime | None]:
+        if not math.isfinite(seconds):
+            return str(value), None
+        if abs(seconds) > 1e12:
+            seconds /= 1000.0
         try:
             dt_obj = datetime.fromtimestamp(seconds, tz=timezone.utc)
         except (OverflowError, OSError, ValueError):
@@ -279,8 +283,6 @@ def format_iso_timestamp(value: Any) -> Tuple[str, datetime | None]:
             seconds = float(value)
         except (TypeError, ValueError):
             return str(value), None
-        if seconds > 1e12:
-            seconds /= 1000.0
         return _format_epoch_seconds(seconds)
 
     value_str = str(value).strip()
@@ -311,14 +313,12 @@ def format_iso_timestamp(value: Any) -> Tuple[str, datetime | None]:
     if re.search(r"[+-]\d{4}$", normalized) and not re.search(r"[+-]\d{2}:\d{2}$", normalized):
         normalized = normalized[:-4] + normalized[-4:-2] + ":" + normalized[-2:]
 
-    if normalized.isdigit():
+    if re.fullmatch(r"[+-]?\d+", normalized):
         try:
-            seconds = int(normalized)
+            seconds = float(int(normalized))
         except ValueError:
             seconds = None
         if seconds is not None:
-            if len(normalized) > 10:
-                seconds /= 1000.0
             return _format_epoch_seconds(seconds)
 
     try:
@@ -1352,7 +1352,12 @@ def get_taf_reports(icao_codes: Sequence[str]) -> Dict[str, List[Dict[str, Any]]
     for props in _normalize_aviationweather_features(data):
         if not isinstance(props, MutableMapping):
             continue
-        report = _build_report_from_props(props)
+        try:
+            report = _build_report_from_props(props)
+        except (OverflowError, OSError, ValueError, TypeError):
+            # Skip malformed reports so a single bad entry does not abort the
+            # entire response normalization for every station.
+            continue
         if not report:
             continue
         grouped.setdefault(report["station"], []).append(report)

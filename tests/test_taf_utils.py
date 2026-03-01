@@ -128,6 +128,13 @@ def test_format_iso_timestamp_handles_out_of_range_epoch_value():
     assert dt is None
 
 
+def test_format_iso_timestamp_handles_negative_millisecond_string_epoch():
+    display, dt = taf_utils.format_iso_timestamp("-1700000000000")
+
+    assert display == "Feb 18 1916, 01:46Z"
+    assert dt == datetime(1916, 2, 18, 1, 46, 40, tzinfo=timezone.utc)
+
+
 def test_iter_forecast_candidates_handles_json_string():
     segment = _build_forecast_segment("2024-10-24T11:00:00Z", "2024-10-24T17:00:00Z", windSpeed=12)
     json_blob = json.dumps([segment])
@@ -196,6 +203,47 @@ def test_get_taf_reports_normalises_nested_structures(monkeypatch: pytest.Monkey
     assert second_period["details"]
     weather_entries = dict(second_period["details"])
     assert weather_entries.get("Weather") == "-RA"
+
+
+def test_get_taf_reports_skips_malformed_entry_and_keeps_valid_reports(monkeypatch: pytest.MonkeyPatch):
+    payload = {
+        "features": [
+            {
+                "properties": {
+                    "station": "CYUL",
+                    "issueTime": "2024-10-24T09:00:00Z",
+                    "validTimeFrom": "2024-10-24T09:00:00Z",
+                    "validTimeTo": "2024-10-25T09:00:00Z",
+                    "rawTAF": "TAF CYUL 240900Z 2409/2515 22012KT P6SM BKN020",
+                    "forecast": ["bad forecast payload"],
+                }
+            },
+            {
+                "properties": {
+                    "station": "CYYZ",
+                    "issueTime": "2024-10-24T09:00:00Z",
+                    "validTimeFrom": "2024-10-24T09:00:00Z",
+                    "validTimeTo": "2024-10-25T09:00:00Z",
+                    "rawTAF": "TAF CYYZ 240900Z 2409/2515 20012KT P6SM BKN020",
+                }
+            },
+        ]
+    }
+
+    def fake_get(url: str, params: Dict[str, Any], timeout: int) -> DummyResponse:
+        assert "CYYZ" in params["ids"].upper()
+        assert "CYUL" in params["ids"].upper()
+        return DummyResponse(payload)
+
+    monkeypatch.setattr(taf_utils.requests, "get", fake_get)
+    monkeypatch.setattr(taf_utils, "_fetch_nearby_taf_report", lambda code: None)
+
+    reports = taf_utils.get_taf_reports(["cyyz", "cyul"])
+
+    assert reports["CYYZ"]
+    assert reports["CYYZ"][0]["station"] == "CYYZ"
+    assert reports["CYUL"]
+    assert reports["CYUL"][0]["station"] == "CYUL"
 
 
 def test_get_taf_reports_strips_station_from_weather(monkeypatch: pytest.MonkeyPatch):
