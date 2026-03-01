@@ -121,6 +121,13 @@ def test_format_iso_timestamp_handles_compact_zulu():
     assert dt == datetime(2024, 10, 24, 9, 0, tzinfo=timezone.utc)
 
 
+def test_format_iso_timestamp_handles_out_of_range_epoch_value():
+    display, dt = taf_utils.format_iso_timestamp(-999999999999999999)
+
+    assert display == "-999999999999999999"
+    assert dt is None
+
+
 def test_iter_forecast_candidates_handles_json_string():
     segment = _build_forecast_segment("2024-10-24T11:00:00Z", "2024-10-24T17:00:00Z", windSpeed=12)
     json_blob = json.dumps([segment])
