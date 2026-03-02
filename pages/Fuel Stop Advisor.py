@@ -26,7 +26,8 @@ DEFAULT_MAX_FLIGHT_TIME_BY_PAX_HOURS = (
 )
 CJ_NEAR_SHORE_LIMIT_NM = 200
 CJ_NEAR_SHORE_AIRCRAFT = {"CITATION CJ2+", "CITATION CJ3+"}
-NEAR_SHORE_SAMPLES_PER_LEG = 21
+NEAR_SHORE_SAMPLES_PER_LEG = 9
+MAX_TWO_STOP_ENDPOINT_CANDIDATES = 140
 MIN_RUNWAY_LENGTH_FT = 5000
 PREFERRED_RUNWAY_LENGTH_FT = 7500
 MAX_RECOMMENDED_OPTIONS = 3
@@ -193,6 +194,7 @@ def _max_distance_from_airport_proxy_nm(
     end_lat: float,
     end_lon: float,
     airport_points: list[tuple[float, float]],
+    stop_if_above_nm: float | None = None,
 ) -> float:
     """Estimate route remoteness by sampling the leg and measuring nearest-airport distance.
 
@@ -206,6 +208,8 @@ def _max_distance_from_airport_proxy_nm(
             for airport_lat, airport_lon in airport_points
         )
         max_nearest_nm = max(max_nearest_nm, nearest_nm)
+        if stop_if_above_nm is not None and max_nearest_nm > stop_if_above_nm:
+            return max_nearest_nm
     return max_nearest_nm
 
 
@@ -541,10 +545,7 @@ if departure_code and arrival_code:
 
     speed_kts = direct_distance_nm / planned_time_hours
     max_leg_distance_nm = max_flight_time_hours * speed_kts
-    airport_points = [
-        (float(row["lat"]), float(row["lon"]))
-        for _, row in AIRPORTS[["lat", "lon"]].dropna().iterrows()
-    ]
+    airport_points_df = AIRPORTS[["lat", "lon"]].dropna().copy()
     offshore_leg_cache: dict[tuple[str, str], float] = {}
 
     def offshore_leg_nm(
@@ -559,12 +560,30 @@ if departure_code and arrival_code:
         cached = offshore_leg_cache.get(key)
         if cached is not None:
             return cached
+
+        max_margin_deg = (CJ_NEAR_SHORE_LIMIT_NM / 60.0) + 2.0
+        lat_low = min(start_lat, end_lat) - max_margin_deg
+        lat_high = max(start_lat, end_lat) + max_margin_deg
+        lon_low = min(start_lon, end_lon) - max_margin_deg
+        lon_high = max(start_lon, end_lon) + max_margin_deg
+        local_airports = airport_points_df.loc[
+            airport_points_df["lat"].between(lat_low, lat_high)
+            & airport_points_df["lon"].between(lon_low, lon_high)
+        ]
+        if local_airports.empty:
+            local_airports = airport_points_df
+
+        local_points = [
+            (float(row["lat"]), float(row["lon"]))
+            for _, row in local_airports.iterrows()
+        ]
         leg_offshore_nm = _max_distance_from_airport_proxy_nm(
             start_lat,
             start_lon,
             end_lat,
             end_lon,
-            airport_points,
+            local_points,
+            stop_if_above_nm=CJ_NEAR_SHORE_LIMIT_NM,
         )
         offshore_leg_cache[key] = leg_offshore_nm
         offshore_leg_cache[(end_code, start_code)] = leg_offshore_nm
@@ -795,72 +814,90 @@ if departure_code and arrival_code:
             near_arrival = candidates.loc[candidates["leg2_nm"] <= max_leg_distance_nm].copy()
             near_arrival = near_arrival.sort_values("leg2_nm")
 
-            two_stop_rows = []
-            for _, first in near_departure.iterrows():
-                for _, second in near_arrival.iterrows():
-                    if first["icao"] == second["icao"]:
-                        continue
-                    leg2_nm = _haversine_nm(
-                        float(first["lat"]),
-                        float(first["lon"]),
-                        float(second["lat"]),
-                        float(second["lon"]),
-                    )
-                    if leg2_nm > max_leg_distance_nm:
-                        continue
-                    if near_shore_limit_applies:
-                        first_leg_offshore_nm = offshore_leg_nm(
-                            departure.icao,
-                            departure.lat,
-                            departure.lon,
-                            str(first["icao"]),
-                            float(first["lat"]),
-                            float(first["lon"]),
-                        )
-                        middle_leg_offshore_nm = offshore_leg_nm(
-                            str(first["icao"]),
-                            float(first["lat"]),
-                            float(first["lon"]),
-                            str(second["icao"]),
-                            float(second["lat"]),
-                            float(second["lon"]),
-                        )
-                        final_leg_offshore_nm = offshore_leg_nm(
-                            str(second["icao"]),
-                            float(second["lat"]),
-                            float(second["lon"]),
-                            arrival.icao,
-                            arrival.lat,
-                            arrival.lon,
-                        )
-                        if (
-                            first_leg_offshore_nm > CJ_NEAR_SHORE_LIMIT_NM
-                            or middle_leg_offshore_nm > CJ_NEAR_SHORE_LIMIT_NM
-                            or final_leg_offshore_nm > CJ_NEAR_SHORE_LIMIT_NM
-                        ):
+            if len(near_departure) > MAX_TWO_STOP_ENDPOINT_CANDIDATES:
+                near_departure = near_departure.head(MAX_TWO_STOP_ENDPOINT_CANDIDATES).copy()
+            if len(near_arrival) > MAX_TWO_STOP_ENDPOINT_CANDIDATES:
+                near_arrival = near_arrival.head(MAX_TWO_STOP_ENDPOINT_CANDIDATES).copy()
+
+            def _build_two_stop_rows(apply_detour_cap: bool = True) -> tuple[list[dict[str, Any]], float | None]:
+                rows: list[dict[str, Any]] = []
+                best_total_nm_any: float | None = None
+                for _, first in near_departure.iterrows():
+                    for _, second in near_arrival.iterrows():
+                        if first["icao"] == second["icao"]:
                             continue
-                    total_nm = float(first["leg1_nm"]) + leg2_nm + float(second["leg2_nm"])
-                    if total_nm > direct_distance_nm * detour_ratio:
-                        continue
-                    two_stop_rows.append(
-                        {
-                            "stop_1": first["icao"],
-                            "stop_2": second["icao"],
-                            "stop_1_name": first["name"],
-                            "stop_2_name": second["name"],
-                            "stop_1_country": first["country"],
-                            "stop_2_country": second["country"],
-                            "stop_1_customs": bool(first["customs_available"]),
-                            "stop_2_customs": bool(second["customs_available"]),
-                            "leg1_nm": float(first["leg1_nm"]),
-                            "leg2_nm": leg2_nm,
-                            "leg3_nm": float(second["leg2_nm"]),
-                            "total_nm": total_nm,
-                        }
-                    )
+                        leg2_nm = _haversine_nm(
+                            float(first["lat"]),
+                            float(first["lon"]),
+                            float(second["lat"]),
+                            float(second["lon"]),
+                        )
+                        if leg2_nm > max_leg_distance_nm:
+                            continue
+                        if near_shore_limit_applies:
+                            first_leg_offshore_nm = offshore_leg_nm(
+                                departure.icao,
+                                departure.lat,
+                                departure.lon,
+                                str(first["icao"]),
+                                float(first["lat"]),
+                                float(first["lon"]),
+                            )
+                            middle_leg_offshore_nm = offshore_leg_nm(
+                                str(first["icao"]),
+                                float(first["lat"]),
+                                float(first["lon"]),
+                                str(second["icao"]),
+                                float(second["lat"]),
+                                float(second["lon"]),
+                            )
+                            final_leg_offshore_nm = offshore_leg_nm(
+                                str(second["icao"]),
+                                float(second["lat"]),
+                                float(second["lon"]),
+                                arrival.icao,
+                                arrival.lat,
+                                arrival.lon,
+                            )
+                            if (
+                                first_leg_offshore_nm > CJ_NEAR_SHORE_LIMIT_NM
+                                or middle_leg_offshore_nm > CJ_NEAR_SHORE_LIMIT_NM
+                                or final_leg_offshore_nm > CJ_NEAR_SHORE_LIMIT_NM
+                            ):
+                                continue
+                        total_nm = float(first["leg1_nm"]) + leg2_nm + float(second["leg2_nm"])
+                        if best_total_nm_any is None or total_nm < best_total_nm_any:
+                            best_total_nm_any = total_nm
+                        if apply_detour_cap and total_nm > direct_distance_nm * detour_ratio:
+                            continue
+                        rows.append(
+                            {
+                                "stop_1": first["icao"],
+                                "stop_2": second["icao"],
+                                "stop_1_name": first["name"],
+                                "stop_2_name": second["name"],
+                                "stop_1_country": first["country"],
+                                "stop_2_country": second["country"],
+                                "stop_1_customs": bool(first["customs_available"]),
+                                "stop_2_customs": bool(second["customs_available"]),
+                                "leg1_nm": float(first["leg1_nm"]),
+                                "leg2_nm": leg2_nm,
+                                "leg3_nm": float(second["leg2_nm"]),
+                                "total_nm": total_nm,
+                            }
+                        )
+                return rows, best_total_nm_any
+
+            two_stop_rows, best_two_stop_total_nm = _build_two_stop_rows(apply_detour_cap=True)
+            if not two_stop_rows and near_shore_limit_applies and best_two_stop_total_nm is not None:
+                minimum_detour_ratio = best_two_stop_total_nm / max(1.0, direct_distance_nm)
+                st.info(
+                    "No two-stop options fit the current detour cap. "
+                    f"Increase Max detour ratio to at least **{minimum_detour_ratio:.2f}** to unlock near-shore CJ routings."
+                )
 
             if not two_stop_rows:
-                st.info("No two-stop options met the runway/customs/detour criteria.")
+                st.info("No two-stop options met the runway/customs/near-shore criteria.")
             else:
                 two_stop_df = pd.DataFrame(two_stop_rows)
                 two_stop_df["max_leg_gap_nm"] = two_stop_df[["leg1_nm", "leg2_nm", "leg3_nm"]].max(axis=1) - two_stop_df[
