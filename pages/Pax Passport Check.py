@@ -44,7 +44,6 @@ st.write(
 
 DEFAULT_EXPIRY_SOON_CUTOFF = date(2026, 7, 20)
 DEFAULT_EXPIRY_WINDOW_DAYS = 60
-EXPIRY_FAR_CUTOFF = date(2036, 1, 1)
 CHUNK_DAYS = 3
 EXPIRY_MODE_DATE = "Date cutoff"
 EXPIRY_MODE_DAYS = "Days before expiry from flight"
@@ -117,12 +116,17 @@ def _future_date_presets(start: date, *, include_weekend: bool = False) -> Dict[
     }
 
 
+def _expiry_far_cutoff(reference_date: Optional[date] = None) -> date:
+    base_date = reference_date or date.today()
+    return base_date + relativedelta(years=10)
+
+
 def _passport_expiry_info(
     expiration_ms: Optional[int],
     *,
     expiry_soon_cutoff: date,
     expiry_soon_label: str,
-    expiry_far_cutoff: date = EXPIRY_FAR_CUTOFF,
+    expiry_far_cutoff: date,
 ) -> Tuple[Optional[date], Optional[str], Optional[str]]:
     if expiration_ms is None:
         return None, "Missing passport expiration", "missing"
@@ -135,7 +139,11 @@ def _passport_expiry_info(
     if expiry_date < expiry_soon_cutoff:
         return expiry_date, expiry_soon_label, "expiring"
     if expiry_date > expiry_far_cutoff:
-        return expiry_date, "Expires after 1 Jan 2036", "missing"
+        return (
+            expiry_date,
+            f"Expires more than 10 years in the future (after {_format_display_date(expiry_far_cutoff)})",
+            "missing",
+        )
     return expiry_date, None, None
 
 
@@ -370,6 +378,7 @@ def _collect_flagged_passports(
     missing: list[dict[str, Any]] = []
     missing_address: list[dict[str, Any]] = []
     errors: list[str] = []
+    expiry_far_cutoff = _expiry_far_cutoff()
 
     for leg in legs:
         if not (is_customs_leg(leg, airport_lookup) and _is_pax_leg(leg)):
@@ -453,6 +462,7 @@ def _collect_flagged_passports(
                 pax.document_expiration,
                 expiry_soon_cutoff=cutoff_date,
                 expiry_soon_label=cutoff_label,
+                expiry_far_cutoff=expiry_far_cutoff,
             )
             if flag_reason is None:
                 continue
@@ -529,6 +539,8 @@ def _render_results(
     expiry_soon_cutoff: Optional[date],
     expiry_window_days: Optional[int],
 ) -> None:
+    expiry_far_cutoff = _expiry_far_cutoff()
+    expiry_far_cutoff_label = _format_display_date(expiry_far_cutoff)
     summary_cols = st.columns(4)
     summary_cols[0].metric("Legs fetched", fetch_metadata.get("legs_after_filter", 0))
     if scan_label is None:
@@ -549,7 +561,8 @@ def _render_results(
         else:
             cutoff_label = f"before {_format_display_date(expiry_soon_cutoff)}"
         success_message = (
-            f"No passports expiring {cutoff_label} or after 1 Jan 2036 "
+            f"No passports expiring {cutoff_label} or more than 10 years in the future "
+            f"(after {expiry_far_cutoff_label}) "
             "matched the alert thresholds in the selected window."
         )
         if include_us_focus:
@@ -584,7 +597,8 @@ def _render_results(
         )
     caption = (
         f"Flights were retrieved in {CHUNK_DAYS}-day chunks to cover the full date range without API limits. "
-        f"{expiry_caption} Passports expiring after 1 Jan 2036 are flagged."
+        f"{expiry_caption} Passports expiring more than 10 years in the future "
+        f"(after {expiry_far_cutoff_label}) are flagged."
     )
     if include_us_focus:
         caption = f"{caption} US arrivals without destination addresses are flagged."
@@ -612,7 +626,8 @@ with tabs[0]:
         Scan upcoming customs legs for passengers whose passport expiration dates look risky.
         The tool batches flight searches into 3-day windows, then pulls passenger passport
         details for each pax leg that crosses an international border. Any passports expiring
-        before your selected cutoff or **after 1 Jan 2036** are flagged for review.
+        before your selected cutoff or **more than 10 years in the future** are flagged
+        for review.
         """
     )
     expiry_mode = st.radio(
