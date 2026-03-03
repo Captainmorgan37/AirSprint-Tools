@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import pandas as pd
 import streamlit as st
 from streamlit.errors import StreamlitSecretNotFoundError
@@ -24,8 +26,8 @@ def _load_fl3xx_settings() -> dict[str, object]:
     except Exception:
         secrets_section = None
 
-    if isinstance(secrets_section, dict):
-        return dict(secrets_section)
+    if isinstance(secrets_section, Mapping):
+        return {str(key): secrets_section[key] for key in secrets_section}
     return {}
 
 
@@ -49,7 +51,7 @@ def _build_fl3xx_config():
 def _format_note_text(note: object) -> str:
     if isinstance(note, str):
         return note.strip()
-    if isinstance(note, dict):
+    if isinstance(note, Mapping):
         for key in ("note", "body", "title", "category", "type"):
             value = note.get(key)
             if isinstance(value, str) and value.strip():
