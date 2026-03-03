@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 import pandas as pd
 import streamlit as st
@@ -9,7 +10,7 @@ from streamlit.errors import StreamlitSecretNotFoundError
 from feasibility.operational_notes import fetch_airport_notes
 from flight_leg_utils import FlightDataError, build_fl3xx_api_config
 from Home import configure_page, password_gate, render_sidebar
-from airport_proximity import GeocodingError, geocode_address_mapbox, nearest_airports
+from airport_proximity import GeocodingError, nearest_airports, geocode_address_mapbox
 
 configure_page(page_title="Nearby Airport Finder")
 password_gate()
@@ -82,6 +83,97 @@ def _render_fl3xx_notes(icao: str, notes: list[dict[str, object]]) -> None:
     st.caption(f"FL3XX operational notes for {icao}")
     st.dataframe(notes_df.style.apply(_highlight_alert, axis=1), use_container_width=True, hide_index=True)
 
+
+def _serialize_results(results: Sequence[Any]) -> list[dict[str, Any]]:
+    serialized: list[dict[str, Any]] = []
+    for airport in results:
+        serialized.append(
+            {
+                "icao": airport.icao,
+                "name": airport.name,
+                "city": airport.city,
+                "distance_nm": airport.distance_nm,
+                "max_runway_length_ft": airport.max_runway_length_ft,
+                "airport_category": airport.airport_category,
+                "latitude": airport.latitude,
+                "longitude": airport.longitude,
+            }
+        )
+    return serialized
+
+
+def _render_results(airport_rows: list[dict[str, Any]], *, lat: float | None = None, lon: float | None = None) -> None:
+    if lat is not None and lon is not None:
+        st.success(f"Geocoded to lat/lon: {lat:.6f}, {lon:.6f}")
+
+    table = pd.DataFrame(
+        {
+            "ICAO": [r.get("icao") for r in airport_rows],
+            "Airport": [r.get("name") for r in airport_rows],
+            "City": [r.get("city") for r in airport_rows],
+            "Distance (nm)": [round(float(r.get("distance_nm") or 0), 1) for r in airport_rows],
+            "Max Runway (ft)": [r.get("max_runway_length_ft") for r in airport_rows],
+            "Category": [r.get("airport_category") for r in airport_rows],
+            "Latitude": [r.get("latitude") for r in airport_rows],
+            "Longitude": [r.get("longitude") for r in airport_rows],
+        }
+    )
+    st.dataframe(table, use_container_width=True, hide_index=True)
+    st.download_button(
+        "Download CSV",
+        data=table.to_csv(index=False).encode("utf-8"),
+        file_name="airport_proximity_results.csv",
+        mime="text/csv",
+    )
+
+    airports_with_category = [r for r in airport_rows if r.get("airport_category")]
+    if not airports_with_category:
+        st.caption("No returned airports have an airport category, so FL3XX note buttons are hidden.")
+        return
+
+    st.markdown("### FL3XX Airport Notes")
+    st.caption("Click an airport to fetch its FL3XX operational notes. Alert notes are highlighted.")
+
+    notes_cache = st.session_state.setdefault("airport_proximity_notes_cache", {})
+    notes_error_cache = st.session_state.setdefault("airport_proximity_notes_error_cache", {})
+
+    config = _build_fl3xx_config()
+    if config is None:
+        st.warning("FL3XX API credentials are unavailable, so airport note lookups are disabled.")
+
+    for airport in airports_with_category:
+        airport_icao = str(airport.get("icao") or "").upper()
+        airport_name = airport.get("name") or "Airport"
+        airport_category = airport.get("airport_category")
+
+        button_col, detail_col = st.columns([1, 3], vertical_alignment="center")
+        with button_col:
+            fetch_clicked = st.button(
+                f"Fetch notes for {airport_icao}",
+                key=f"fetch-notes-{airport_icao}",
+                disabled=config is None,
+                use_container_width=True,
+            )
+        with detail_col:
+            st.markdown(f"**{airport_icao}** · {airport_name} · Category `{airport_category}`")
+
+        if fetch_clicked and config is not None:
+            try:
+                notes_cache[airport_icao] = [dict(note) for note in fetch_airport_notes(config, airport_icao)]
+                notes_error_cache.pop(airport_icao, None)
+            except Exception as exc:  # pragma: no cover
+                notes_cache.pop(airport_icao, None)
+                notes_error_cache[airport_icao] = str(exc)
+
+        error_message = notes_error_cache.get(airport_icao)
+        if isinstance(error_message, str) and error_message:
+            st.error(f"Could not load FL3XX notes for {airport_icao}: {error_message}")
+
+        cached_notes = notes_cache.get(airport_icao)
+        if isinstance(cached_notes, list):
+            _render_fl3xx_notes(airport_icao, cached_notes)
+
+
 try:
     mapbox_token = st.secrets.get("mapbox_token")  # type: ignore[attr-defined]
 except StreamlitSecretNotFoundError:
@@ -97,7 +189,9 @@ with st.form("airport-proximity-form"):
     with col1:
         max_results = st.number_input("Max results", min_value=1, max_value=25, value=5, step=1)
     with col2:
-        min_runway_ft = st.number_input("Minimum runway length (ft)", min_value=0, max_value=25000, value=4500, step=100)
+        min_runway_ft = st.number_input(
+            "Minimum runway length (ft)", min_value=0, max_value=25000, value=4500, step=100
+        )
     with col3:
         allowed_categories = st.multiselect(
             "Allowed categories",
@@ -110,87 +204,35 @@ with st.form("airport-proximity-form"):
 if submitted:
     try:
         lat, lon = geocode_address_mapbox(address, token=mapbox_token)
+        results = nearest_airports(
+            lat,
+            lon,
+            limit=int(max_results),
+            min_runway_ft=int(min_runway_ft) if min_runway_ft else None,
+            allowed_categories=allowed_categories or None,
+        )
     except GeocodingError as exc:
         st.error(str(exc))
-        st.stop()
     except Exception as exc:  # pragma: no cover
         st.error(f"Mapbox geocoding failed: {exc}")
-        st.stop()
+    else:
+        if not results:
+            st.info("No airports matched the selected runway/category filters.")
+            st.session_state.pop("airport_proximity_last_results", None)
+            st.session_state.pop("airport_proximity_last_geocode", None)
+        else:
+            st.session_state["airport_proximity_last_results"] = _serialize_results(results)
+            st.session_state["airport_proximity_last_geocode"] = {"lat": lat, "lon": lon}
 
-    st.success(f"Geocoded to lat/lon: {lat:.6f}, {lon:.6f}")
-    results = nearest_airports(
-        lat,
-        lon,
-        limit=int(max_results),
-        min_runway_ft=int(min_runway_ft) if min_runway_ft else None,
-        allowed_categories=allowed_categories or None,
-    )
-
-    if not results:
-        st.info("No airports matched the selected runway/category filters.")
-        st.stop()
-
-    table = pd.DataFrame(
-        {
-            "ICAO": [r.icao for r in results],
-            "Airport": [r.name for r in results],
-            "City": [r.city for r in results],
-            "Distance (nm)": [round(r.distance_nm, 1) for r in results],
-            "Max Runway (ft)": [r.max_runway_length_ft for r in results],
-            "Category": [r.airport_category for r in results],
-            "Latitude": [r.latitude for r in results],
-            "Longitude": [r.longitude for r in results],
-        }
-    )
-    st.dataframe(table, use_container_width=True, hide_index=True)
-    st.download_button(
-        "Download CSV",
-        data=table.to_csv(index=False).encode("utf-8"),
-        file_name="airport_proximity_results.csv",
-        mime="text/csv",
-    )
-
-    airports_with_category = [r for r in results if r.airport_category]
-    if not airports_with_category:
-        st.caption("No returned airports have an airport category, so FL3XX note buttons are hidden.")
-        st.stop()
-
-    st.markdown("### FL3XX Airport Notes")
-    st.caption("Click an airport to fetch its FL3XX operational notes. Alert notes are highlighted.")
-
-    notes_cache = st.session_state.setdefault("airport_proximity_notes_cache", {})
-    notes_error_cache = st.session_state.setdefault("airport_proximity_notes_error_cache", {})
-
-    config = _build_fl3xx_config()
-    if config is None:
-        st.warning("FL3XX API credentials are unavailable, so airport note lookups are disabled.")
-
-    for airport in airports_with_category:
-        button_col, detail_col = st.columns([1, 3], vertical_alignment="center")
-        with button_col:
-            fetch_clicked = st.button(
-                f"Fetch notes for {airport.icao}",
-                key=f"fetch-notes-{airport.icao}",
-                disabled=config is None,
-                use_container_width=True,
-            )
-        with detail_col:
-            st.markdown(
-                f"**{airport.icao}** · {airport.name or 'Airport'} · Category `{airport.airport_category}`"
-            )
-
-        if fetch_clicked and config is not None:
-            try:
-                notes_cache[airport.icao] = [dict(note) for note in fetch_airport_notes(config, airport.icao)]
-                notes_error_cache.pop(airport.icao, None)
-            except Exception as exc:  # pragma: no cover
-                notes_cache.pop(airport.icao, None)
-                notes_error_cache[airport.icao] = str(exc)
-
-        error_message = notes_error_cache.get(airport.icao)
-        if isinstance(error_message, str) and error_message:
-            st.error(f"Could not load FL3XX notes for {airport.icao}: {error_message}")
-
-        cached_notes = notes_cache.get(airport.icao)
-        if isinstance(cached_notes, list):
-            _render_fl3xx_notes(airport.icao, cached_notes)
+stored_results = st.session_state.get("airport_proximity_last_results")
+stored_geocode = st.session_state.get("airport_proximity_last_geocode")
+if isinstance(stored_results, list) and stored_results:
+    lat = None
+    lon = None
+    if isinstance(stored_geocode, Mapping):
+        lat_value = stored_geocode.get("lat")
+        lon_value = stored_geocode.get("lon")
+        if isinstance(lat_value, (int, float)) and isinstance(lon_value, (int, float)):
+            lat = float(lat_value)
+            lon = float(lon_value)
+    _render_results(stored_results, lat=lat, lon=lon)
