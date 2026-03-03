@@ -463,6 +463,25 @@ def _extract_home_airport_icao(crew_payload: Any) -> Optional[str]:
 
 
 
+def _extract_roster_home_base_airports(
+    roster_rows: Iterable[Mapping[str, Any]],
+) -> Dict[str, str]:
+    home_airports_by_personnel: Dict[str, str] = {}
+    for row in roster_rows:
+        user = row.get("user") if isinstance(row.get("user"), Mapping) else {}
+        personnel = _normalize_id(user.get("personnelNumber"))
+        if not personnel:
+            continue
+
+        home_airport = _extract_home_airport_icao(user)
+        if not home_airport:
+            home_airport = _extract_home_airport_icao(row)
+        if home_airport:
+            home_airports_by_personnel[personnel] = home_airport
+
+    return home_airports_by_personnel
+
+
 def _extract_roster_positioning_events(
     roster_rows: Iterable[Mapping[str, Any]],
 ) -> Dict[str, List[Dict[str, Any]]]:
@@ -568,12 +587,14 @@ def compute_hotac_coverage(
     roster_window_start = datetime.combine(target_date, datetime.min.time(), tzinfo=UTC) + timedelta(hours=12)
     roster_window_end = roster_window_start + timedelta(days=1)
     roster_events_by_personnel: Dict[str, List[Dict[str, Any]]] = {}
+    roster_home_base_by_personnel: Dict[str, str] = {}
     troubleshooting_rows: List[Dict[str, Any]] = []
     should_fetch_roster = roster_fetcher is not None or bool(config.api_token or config.auth_header)
     if should_fetch_roster:
         try:
             roster_rows = fetch_roster(config, roster_window_start, roster_window_end)
             roster_events_by_personnel = _extract_roster_positioning_events(roster_rows)
+            roster_home_base_by_personnel = _extract_roster_home_base_airports(roster_rows)
         except Exception as exc:
             troubleshooting_rows.append(
                 {
@@ -685,6 +706,9 @@ def compute_hotac_coverage(
         flight_id = leg.get("flight_id")
         pilot = leg.get("pilot", {})
         profile_home_base_airport = str(pilot.get("home_base_airport") or "").strip().upper()
+        if not profile_home_base_airport:
+            pilot_personnel = _normalize_id(pilot.get("personnel"))
+            profile_home_base_airport = str(roster_home_base_by_personnel.get(pilot_personnel or "") or "").strip().upper()
         positioning_route = ""
 
         status = "Unknown"
