@@ -4,10 +4,14 @@ import pandas as pd
 import streamlit as st
 from streamlit.errors import StreamlitSecretNotFoundError
 
+from Home import configure_page, password_gate, render_sidebar
 from airport_proximity import GeocodingError, geocode_address_mapbox, nearest_airports
 
-st.set_page_config(page_title="Airport Proximity Finder", layout="wide")
-st.title("Airport Proximity Finder")
+configure_page(page_title="Nearby Airport Finder")
+password_gate()
+render_sidebar()
+
+st.title("🌍 Nearby Airport Finder")
 st.caption("Find nearest airports from an address with runway/category filters.")
 
 try:
