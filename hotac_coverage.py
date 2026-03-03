@@ -789,6 +789,23 @@ def compute_hotac_coverage(
                         f"(arrival HOTAC records={len(arrival_hotac)}; pilot_id={pilot_person_id or 'n/a'})"
                     )
                     end_airport = str(leg.get("end_airport") or "").strip().upper()
+
+                    pilot_personnel = _normalize_id(pilot.get("personnel"))
+                    positioning_events = roster_events_by_personnel.get(pilot_personnel or "", [])
+                    positioning_event = _find_positioning_event_for_leg(
+                        positioning_events,
+                        end_airport,
+                        leg.get("arr_utc"),
+                    )
+                    reposition_to = ""
+                    if positioning_event:
+                        reposition_from = str(positioning_event.get("from_airport") or "").strip().upper()
+                        reposition_to = str(positioning_event.get("to_airport") or "").strip().upper()
+                        if reposition_from and reposition_to:
+                            positioning_route = f"{reposition_from}-{reposition_to}"
+                        elif reposition_to:
+                            positioning_route = f"{end_airport}-{reposition_to}"
+
                     if profile_home_base_airport and end_airport:
                         if profile_home_base_airport == end_airport:
                             status = "Home base"
@@ -797,12 +814,16 @@ def compute_hotac_coverage(
                             status = "Unsure - crew based at CYUL and may be staying at home"
                             notes = "Crew ended at CYHU and is CYUL based; may be staying at home"
 
-                    if (
+                    should_lookup_home_base = (
                         status == "Missing"
                         and pilot_person_id
                         and end_airport
-                        and _is_canadian_airport(end_airport)
-                    ):
+                        and (
+                            _is_canadian_airport(end_airport)
+                            or (reposition_to and _is_canadian_airport(reposition_to))
+                        )
+                    )
+                    if should_lookup_home_base:
                         try:
                             crew_member_payload = fetch_crew_member_details(config, pilot_person_id)
                             home_airport_icao = _extract_home_airport_icao(crew_member_payload)
@@ -823,32 +844,18 @@ def compute_hotac_coverage(
                             }
                         )
 
-                    pilot_personnel = _normalize_id(pilot.get("personnel"))
-                    positioning_events = roster_events_by_personnel.get(pilot_personnel or "", [])
-                    positioning_event = _find_positioning_event_for_leg(
-                        positioning_events,
-                        end_airport,
-                        leg.get("arr_utc"),
-                    )
-                    if positioning_event:
-                        reposition_from = str(positioning_event.get("from_airport") or "").strip().upper()
-                        reposition_to = str(positioning_event.get("to_airport") or "").strip().upper()
-                        if reposition_from and reposition_to:
-                            positioning_route = f"{reposition_from}-{reposition_to}"
-                        elif reposition_to:
-                            positioning_route = f"{end_airport}-{reposition_to}"
-                        if reposition_to:
-                            notes = f"Positioning note found: {end_airport} → {reposition_to}"
-                            if profile_home_base_airport and reposition_to == profile_home_base_airport:
-                                status = "Home base"
-                                notes = f"Positioned to home base ({reposition_to})"
+                    if positioning_event and reposition_to:
+                        notes = f"Positioning note found: {end_airport} → {reposition_to}"
+                        if profile_home_base_airport and reposition_to == profile_home_base_airport:
+                            status = "Home base"
+                            notes = f"Positioned to home base ({reposition_to})"
+                        else:
+                            hotel_note = _extract_hotel_from_positioning_notes(str(positioning_event.get("notes") or ""))
+                            if hotel_note:
+                                status = "Booked"
+                                notes = f"Positioning hotel note: {hotel_note}"
                             else:
-                                hotel_note = _extract_hotel_from_positioning_notes(str(positioning_event.get("notes") or ""))
-                                if hotel_note:
-                                    status = "Booked"
-                                    notes = f"Positioning hotel note: {hotel_note}"
-                                else:
-                                    notes = f"Positioned {end_airport} → {reposition_to}; hotel required at {reposition_to}"
+                                notes = f"Positioned {end_airport} → {reposition_to}; hotel required at {reposition_to}"
 
             except requests.HTTPError as exc:
                 status = "Unknown"

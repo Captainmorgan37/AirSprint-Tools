@@ -676,6 +676,127 @@ def test_compute_hotac_coverage_uses_roster_user_home_base_without_crew_member_l
     assert troubleshooting_df.empty
 
 
+def test_compute_hotac_coverage_looks_up_home_base_for_non_canadian_end_when_positioning_to_canada() -> None:
+    flights = [
+        {
+            "flightId": 95,
+            "tail": "C-GASK",
+            "flightNumber": "ZAIBK",
+            "departureTimeUtc": "2026-03-03T16:00:00Z",
+            "arrivalTimeUtc": "2026-03-03T20:00:00Z",
+            "arrivalAirport": "KMIA",
+        }
+    ]
+
+    def fake_crew(_config, _flight_id):
+        return [
+            {
+                "role": "CMD",
+                "pilotId": "545364",
+                "personnelNumber": "778",
+                "firstName": "Michael",
+                "lastName": "Pelletier",
+            }
+        ]
+
+    def fake_services(_config, _flight_id):
+        return {"arrivalHotac": []}
+
+    def fake_crew_member(_config, crew_id):
+        assert str(crew_id) == "545364"
+        return {"homeAirport": {"icao": "CYYC"}}
+
+    def fake_roster(_config, _from_time, _to_time):
+        return [
+            {
+                "user": {"personnelNumber": "778"},
+                "entries": [
+                    {
+                        "type": "P",
+                        "from": 1772558400000,
+                        "to": 1772580000000,
+                        "fromAirport": {"icao": "KMIA"},
+                        "toAirport": {"icao": "CYYC"},
+                        "notes": "Positioning",
+                    }
+                ],
+            }
+        ]
+
+    _display_df, raw_df, troubleshooting_df = compute_hotac_coverage(
+        Fl3xxApiConfig(),
+        date(2026, 3, 3),
+        flights=flights,
+        crew_fetcher=fake_crew,
+        services_fetcher=fake_services,
+        crew_member_fetcher=fake_crew_member,
+        roster_fetcher=fake_roster,
+    )
+
+    row = raw_df.iloc[0]
+    assert row["Profile home base"] == "CYYC"
+    assert row["Positioning route"] == "KMIA-CYYC"
+    assert row["HOTAC status"] == "Home base"
+    assert "Positioned to home base" in row["Notes"]
+    assert troubleshooting_df.empty
+
+
+def test_compute_hotac_coverage_skips_home_base_lookup_for_non_canadian_missing_hotac_without_canadian_positioning() -> None:
+    flights = [
+        {
+            "flightId": 96,
+            "tail": "C-GINTL",
+            "flightNumber": "AS901",
+            "departureTimeUtc": "2026-03-01T18:00:00Z",
+            "arrivalTimeUtc": "2026-03-01T20:00:00Z",
+            "arrivalAirport": "KJFK",
+        }
+    ]
+
+    def fake_crew(_config, _flight_id):
+        return [{"role": "CMD", "pilotId": "546000", "personnelNumber": "779", "firstName": "Pat", "lastName": "Pilot"}]
+
+    def fake_services(_config, _flight_id):
+        return {"arrivalHotac": []}
+
+    def fake_crew_member(_config, _crew_id):
+        raise AssertionError("crew member lookup should not happen without Canadian end/positioning")
+
+    def fake_roster(_config, _from_time, _to_time):
+        return [
+            {
+                "user": {"personnelNumber": "779"},
+                "entries": [
+                    {
+                        "type": "P",
+                        "from": 1772558400000,
+                        "to": 1772580000000,
+                        "fromAirport": {"icao": "KJFK"},
+                        "toAirport": {"icao": "KLAX"},
+                        "notes": "Positioning",
+                    }
+                ],
+            }
+        ]
+
+    _display_df, raw_df, troubleshooting_df = compute_hotac_coverage(
+        Fl3xxApiConfig(),
+        date(2026, 3, 1),
+        flights=flights,
+        crew_fetcher=fake_crew,
+        services_fetcher=fake_services,
+        crew_member_fetcher=fake_crew_member,
+        roster_fetcher=fake_roster,
+    )
+
+    row = raw_df.iloc[0]
+    assert row["HOTAC status"] == "Missing"
+    assert row["Profile home base"] == ""
+    assert row["Positioning route"] == "KJFK-KLAX"
+    assert "hotel required at KLAX" in row["Notes"]
+    assert troubleshooting_df.empty
+
+
 def test_compute_hotac_coverage_skips_home_base_lookup_for_non_canadian_missing_hotac() -> None:
     flights = [
         {
