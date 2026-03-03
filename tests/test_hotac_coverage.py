@@ -566,6 +566,50 @@ def test_compute_hotac_coverage_marks_cyhu_cyul_missing_hotac_as_unsure() -> Non
     assert troubleshooting_df.empty
 
 
+def test_compute_hotac_coverage_uses_crew_payload_home_base_without_lookup() -> None:
+    flights = [
+        {
+            "flightId": 93,
+            "tail": "C-GYYC",
+            "flightNumber": "AS903",
+            "departureTimeUtc": "2026-03-01T18:00:00Z",
+            "arrivalTimeUtc": "2026-03-01T20:00:00Z",
+            "arrivalAirport": "CYYC",
+        }
+    ]
+
+    def fake_crew(_config, _flight_id):
+        return [
+            {
+                "role": "CMD",
+                "firstName": "Taylor",
+                "lastName": "Pilot",
+                "homeAirport": {"icao": "CYYC"},
+            }
+        ]
+
+    def fake_services(_config, _flight_id):
+        return {"arrivalHotac": []}
+
+    def fake_crew_member(_config, _crew_id):
+        raise AssertionError("crew member lookup should not happen when crew payload has home base")
+
+    _display_df, raw_df, troubleshooting_df = compute_hotac_coverage(
+        Fl3xxApiConfig(),
+        date(2026, 3, 1),
+        flights=flights,
+        crew_fetcher=fake_crew,
+        services_fetcher=fake_services,
+        crew_member_fetcher=fake_crew_member,
+    )
+
+    row = raw_df.iloc[0]
+    assert row["HOTAC status"] == "Home base"
+    assert row["Profile home base"] == "CYYC"
+    assert "home base" in row["Notes"].lower()
+    assert troubleshooting_df.empty
+
+
 def test_compute_hotac_coverage_skips_home_base_lookup_for_non_canadian_missing_hotac() -> None:
     flights = [
         {
