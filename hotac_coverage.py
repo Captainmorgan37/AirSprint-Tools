@@ -293,6 +293,10 @@ def _normalize_pilot_member(member: Mapping[str, Any]) -> Dict[str, Any]:
     if not full_name:
         full_name = str(member.get("email") or member.get("trigram") or "Unknown pilot").strip() or "Unknown pilot"
 
+    home_base_airport = _extract_home_airport_icao(member)
+    if not home_base_airport and person_block:
+        home_base_airport = _extract_home_airport_icao(person_block)
+
     return {
         "person_id": person_id,
         "name": full_name,
@@ -301,6 +305,7 @@ def _normalize_pilot_member(member: Mapping[str, Any]) -> Dict[str, Any]:
         "personnel": str(member.get("personnelNumber") or "").strip() or None,
         "trigram": str(member.get("trigram") or "").strip() or None,
         "role": role,
+        "home_base_airport": home_base_airport,
     }
 
 
@@ -331,6 +336,7 @@ def _dedupe_pilots(pilots: Iterable[Mapping[str, Any]]) -> List[Dict[str, Any]]:
             "personnel": pilot.get("personnel"),
             "trigram": pilot.get("trigram"),
             "role": pilot.get("role"),
+            "home_base_airport": pilot.get("home_base_airport"),
         }
     return list(deduped.values())
 
@@ -678,7 +684,7 @@ def compute_hotac_coverage(
     for leg in pilot_last_leg.values():
         flight_id = leg.get("flight_id")
         pilot = leg.get("pilot", {})
-        profile_home_base_airport = ""
+        profile_home_base_airport = str(pilot.get("home_base_airport") or "").strip().upper()
         positioning_route = ""
 
         status = "Unknown"
@@ -759,7 +765,20 @@ def compute_hotac_coverage(
                         f"(arrival HOTAC records={len(arrival_hotac)}; pilot_id={pilot_person_id or 'n/a'})"
                     )
                     end_airport = str(leg.get("end_airport") or "").strip().upper()
-                    if pilot_person_id and end_airport and _is_canadian_airport(end_airport):
+                    if profile_home_base_airport and end_airport:
+                        if profile_home_base_airport == end_airport:
+                            status = "Home base"
+                            notes = f"Pilot ending at home base ({profile_home_base_airport})"
+                        elif end_airport == "CYHU" and profile_home_base_airport == "CYUL":
+                            status = "Unsure - crew based at CYUL and may be staying at home"
+                            notes = "Crew ended at CYHU and is CYUL based; may be staying at home"
+
+                    if (
+                        status == "Missing"
+                        and pilot_person_id
+                        and end_airport
+                        and _is_canadian_airport(end_airport)
+                    ):
                         try:
                             crew_member_payload = fetch_crew_member_details(config, pilot_person_id)
                             home_airport_icao = _extract_home_airport_icao(crew_member_payload)
