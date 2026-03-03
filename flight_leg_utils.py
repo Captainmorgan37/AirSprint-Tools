@@ -197,6 +197,11 @@ def load_airport_metadata_lookup() -> Dict[str, Dict[str, Optional[Any]]]:
                     "subd": subdivision,
                     "lat": latitude,
                     "lon": longitude,
+                    "name": (str(row.get("name")).strip() if isinstance(row.get("name"), str) and row.get("name").strip() else None),
+                    "city": (str(row.get("city")).strip() if isinstance(row.get("city"), str) and row.get("city").strip() else None),
+                    "icao": (str(row.get("icao")).strip().upper() if isinstance(row.get("icao"), str) and row.get("icao").strip() else None),
+                    "iata": (str(row.get("iata")).strip().upper() if isinstance(row.get("iata"), str) and row.get("iata").strip() else None),
+                    "lid": (str(row.get("lid")).strip().upper() if isinstance(row.get("lid"), str) and row.get("lid").strip() else None),
                 }
     return lookup
 

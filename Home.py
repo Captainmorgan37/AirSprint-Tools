@@ -183,6 +183,7 @@ def _sidebar_links() -> list[dict[str, Any]]:
                 {"path": "pages/Owner Services Dashboard.py", "label": "Owner Services Dashboard"},
                 {"path": "pages/Catering GT Calculator.py", "label": "Catering/GT Calculator"},
                 {"path": "pages/Cargo Juggler.py", "label": "Cargo Juggler"},
+                {"path": "pages/Airport Proximity Finder.py", "label": "Nearby Airport Finder"},
             ],
         },
         {
@@ -197,6 +198,7 @@ def _sidebar_links() -> list[dict[str, Any]]:
                 {"path": "pages/Fuel Planning Assistant.py", "label": "Fuel Planning Assistant"},
                 {"path": "pages/Fuel Stop Advisor.py", "label": "Fuel Stop Advisor"},
                 {"path": "pages/Roster Pull Explorer.py", "label": "Roster Pull Explorer"},
+                {"path": "pages/Airport Proximity Finder.py", "label": "Airport Proximity Finder"},
             ],
         },
         {
