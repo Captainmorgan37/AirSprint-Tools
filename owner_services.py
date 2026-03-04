@@ -143,7 +143,19 @@ def _is_owner_services_transport(item: Mapping[str, Any]) -> bool:
     by_value = _coerce_text(item.get("by") or item.get("arrangedBy") or item.get("bookedBy"))
     if not by_value:
         return True
-    return by_value.strip().lower() == "owner services"
+
+    normalized = by_value.strip().lower()
+    normalized_code = normalized.replace(" ", "").replace("_", "")
+
+    if normalized_code == "custom1":
+        return False
+    if normalized_code == "custom2":
+        return True
+
+    if "flight support" in normalized:
+        return False
+
+    return "owner" in normalized and "service" in normalized
 
 
 def extract_owner_service_audit_entries(payload: Any) -> List[OwnerServiceAuditEntry]:

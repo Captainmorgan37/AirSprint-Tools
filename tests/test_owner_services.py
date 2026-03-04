@@ -168,3 +168,45 @@ def test_extract_owner_service_audit_entries_filters_transport_by_owner_services
 
     assert len(entries) == 1
     assert entries[0].description.startswith("SUV")
+
+
+def test_extract_owner_service_audit_entries_keeps_owner_services_variants():
+    payload = {
+        "arrivalGroundTransportation": [
+            {
+                "status": "CONFIRMED",
+                "type": "SUV",
+                "person": {"firstName": "Owner", "lastName": "Rider", "pilot": False},
+                "by": "Owner Services Team",
+            },
+        ]
+    }
+
+    entries = extract_owner_service_audit_entries(payload)
+
+    assert len(entries) == 1
+    assert entries[0].description.startswith("SUV")
+
+
+def test_extract_owner_service_audit_entries_filters_custom1_and_keeps_custom2():
+    payload = {
+        "arrivalGroundTransportation": [
+            {
+                "status": "CONFIRMED",
+                "type": "SUV",
+                "person": {"firstName": "Owner", "lastName": "Rider", "pilot": False},
+                "by": "CUSTOM2",
+            },
+            {
+                "status": "CONFIRMED",
+                "type": "Sedan",
+                "person": {"firstName": "Crew", "lastName": "Ride", "pilot": False},
+                "by": "CUSTOM1",
+            },
+        ]
+    }
+
+    entries = extract_owner_service_audit_entries(payload)
+
+    assert len(entries) == 1
+    assert entries[0].description.startswith("SUV")
