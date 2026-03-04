@@ -26,6 +26,7 @@ from flight_leg_utils import (
 from Home import configure_page, password_gate, render_sidebar
 from owner_services import (
     OwnerServicesSummary,
+    extract_owner_service_audit_entries,
     format_owner_service_entries,
 )
 
@@ -61,6 +62,11 @@ _NOTES_FROM_KEY = "owner_services_sensitive_from"
 _NOTES_TO_KEY = "owner_services_sensitive_to"
 _NOTES_RESULTS_KEY = "owner_services_sensitive_results"
 _NOTES_ERROR_KEY = "owner_services_sensitive_error"
+
+_AUDIT_FROM_KEY = "owner_services_audit_from"
+_AUDIT_TO_KEY = "owner_services_audit_to"
+_AUDIT_RESULTS_KEY = "owner_services_audit_results"
+_AUDIT_ERROR_KEY = "owner_services_audit_error"
 
 _DEFAULT_SENSITIVE_KEYWORDS: tuple[str, ...] = (
     "gun",
@@ -140,6 +146,26 @@ def _initialise_sensitive_state() -> None:
         st.session_state[_NOTES_TO_KEY] = default_to_exclusive - timedelta(days=1)
 
     _ensure_sensitive_keywords_state()
+
+
+def _initialise_audit_state() -> None:
+    st.session_state.setdefault(_AUDIT_RESULTS_KEY, None)
+    st.session_state.setdefault(_AUDIT_ERROR_KEY, None)
+    if _AUDIT_FROM_KEY not in st.session_state or _AUDIT_TO_KEY not in st.session_state:
+        default_from, default_to_exclusive = compute_fetch_dates(
+            datetime.now(timezone.utc), inclusive_days=30
+        )
+        st.session_state[_AUDIT_FROM_KEY] = default_from
+        st.session_state[_AUDIT_TO_KEY] = default_to_exclusive - timedelta(days=1)
+
+
+def _get_audit_selected_dates() -> tuple[date, date]:
+    from_date = st.session_state.get(_AUDIT_FROM_KEY)
+    to_date = st.session_state.get(_AUDIT_TO_KEY)
+    if isinstance(from_date, date) and isinstance(to_date, date):
+        return from_date, to_date
+    today = datetime.now(timezone.utc).date()
+    return today - timedelta(days=30), today
 
 
 def _normalise_keyword(term: Any) -> Optional[str]:
@@ -605,6 +631,102 @@ def _build_dashboard_rows(
         row.pop("_sort_key", None)
 
     return display_rows, warnings, stats
+
+
+def _build_audit_rows(
+    rows: List[Mapping[str, Any]],
+    config: Fl3xxApiConfig,
+) -> tuple[List[Dict[str, Any]], List[str], Dict[str, Any]]:
+    report_rows: List[Dict[str, Any]] = []
+    warnings: List[str] = []
+    stats = {
+        "legs_considered": len(rows),
+        "service_requests": 0,
+        "service_failures": 0,
+        "services_found": 0,
+        "rows_with_cost": 0,
+        "rows_missing_cost": 0,
+        "receipt_provided": 0,
+        "receipt_missing": 0,
+        "receipt_unknown": 0,
+    }
+
+    services_cache: Dict[str, Optional[Any]] = {}
+    session = requests.Session()
+    try:
+        for leg in rows:
+            flight_id = leg.get("flightId") or leg.get("flight_id")
+            if not flight_id:
+                warnings.append("Encountered a leg without flight ID; skipped service lookup.")
+                continue
+
+            flight_key = str(flight_id)
+            if flight_key not in services_cache:
+                stats["service_requests"] += 1
+                try:
+                    services_cache[flight_key] = fetch_flight_services(
+                        config, flight_key, session=session
+                    )
+                except Exception as exc:
+                    stats["service_failures"] += 1
+                    services_cache[flight_key] = None
+                    warnings.append(f"Failed to fetch services for flight {flight_key}: {exc}")
+
+            payload = services_cache.get(flight_key)
+            entries = extract_owner_service_audit_entries(payload)
+            if not entries:
+                continue
+
+            departure_label, sort_key = _format_datetime(
+                leg.get("dep_time") or leg.get("departureTimeUtc")
+            )
+            account_label = _extract_account_label(leg)
+            booking_identifier = _extract_booking_identifier(leg) or "—"
+            tail = str(leg.get("tail") or "Unknown")
+            dep_ap = _extract_airport_code(leg.get("departure_airport") or leg.get("departureAirport"))
+            arr_ap = _extract_airport_code(leg.get("arrival_airport") or leg.get("arrivalAirport"))
+
+            for entry in entries:
+                stats["services_found"] += 1
+                if entry.amount is not None:
+                    stats["rows_with_cost"] += 1
+                else:
+                    stats["rows_missing_cost"] += 1
+
+                if entry.receipt_status == "Provided":
+                    stats["receipt_provided"] += 1
+                elif entry.receipt_status == "Missing":
+                    stats["receipt_missing"] += 1
+                else:
+                    stats["receipt_unknown"] += 1
+
+                report_rows.append(
+                    {
+                        "_sort_key": sort_key or departure_label,
+                        "Departure (UTC)": departure_label,
+                        "Tail": tail,
+                        "Booking Identifier": booking_identifier,
+                        "Account Name": account_label,
+                        "Route": f"{dep_ap or '?'} → {arr_ap or '?'}",
+                        "Category": entry.category,
+                        "Direction": entry.direction,
+                        "Status": entry.status,
+                        "Vendor": entry.vendor or "—",
+                        "Service Description": entry.description,
+                        "Cost": entry.amount,
+                        "Currency": entry.currency or "—",
+                        "Receipt Status": entry.receipt_status,
+                        "Notes": entry.notes or "",
+                    }
+                )
+    finally:
+        session.close()
+
+    report_rows.sort(key=lambda row: row.get("_sort_key") or "")
+    for row in report_rows:
+        row.pop("_sort_key", None)
+
+    return report_rows, warnings, stats
 
 
 def _iter_leg_details(payload: Any) -> List[Mapping[str, Any]]:
@@ -1129,6 +1251,63 @@ def _handle_sensitive_notes_fetch(
     st.session_state[_NOTES_ERROR_KEY] = None
 
 
+def _handle_audit_fetch(
+    settings: Mapping[str, Any],
+    *,
+    from_date: date,
+    to_date_inclusive: date,
+) -> None:
+    try:
+        config = build_fl3xx_api_config(settings)
+    except FlightDataError as exc:
+        st.session_state[_AUDIT_RESULTS_KEY] = None
+        st.session_state[_AUDIT_ERROR_KEY] = str(exc)
+        return
+
+    to_date_exclusive = to_date_inclusive + timedelta(days=1)
+
+    try:
+        with st.spinner("Fetching flights for audit report..."):
+            flights, metadata = fetch_flights(
+                config,
+                from_date=from_date,
+                to_date=to_date_exclusive,
+            )
+    except Exception as exc:
+        st.session_state[_AUDIT_RESULTS_KEY] = None
+        st.session_state[_AUDIT_ERROR_KEY] = f"Failed to fetch flights: {exc}"
+        return
+
+    try:
+        normalized_rows, normalization_stats = normalize_fl3xx_payload({"items": flights})
+    except Exception as exc:
+        st.session_state[_AUDIT_RESULTS_KEY] = None
+        st.session_state[_AUDIT_ERROR_KEY] = f"Failed to normalise flight data: {exc}"
+        return
+
+    normalized_rows, skipped_subcharter = filter_out_subcharter_rows(normalized_rows)
+
+    with st.spinner("Building service cost audit report..."):
+        report_rows, warnings, audit_stats = _build_audit_rows(normalized_rows, config)
+
+    metadata_payload = {
+        **metadata,
+        "normalized_leg_count": len(normalized_rows),
+        "normalization_stats": normalization_stats,
+        "skipped_subcharter": skipped_subcharter,
+        "selected_from": from_date.isoformat(),
+        "selected_to": to_date_inclusive.isoformat(),
+    }
+
+    st.session_state[_AUDIT_RESULTS_KEY] = {
+        "rows": report_rows,
+        "warnings": warnings,
+        "stats": audit_stats,
+        "metadata": metadata_payload,
+    }
+    st.session_state[_AUDIT_ERROR_KEY] = None
+
+
 def _render_results() -> None:
     error_message = st.session_state.get(_ERROR_KEY)
     results = st.session_state.get(_RESULTS_KEY)
@@ -1486,6 +1665,109 @@ def _render_sensitive_keyword_manager() -> None:
                 st.session_state[_SENSITIVE_REMOVE_SELECT_KEY] = []
 
 
+def _render_audit_results() -> None:
+    error_message = st.session_state.get(_AUDIT_ERROR_KEY)
+    results = st.session_state.get(_AUDIT_RESULTS_KEY)
+
+    if error_message:
+        st.error(error_message)
+
+    if not results:
+        if not error_message:
+            st.info("Press **Fetch Service Cost Audit** to generate a month-ready audit report.")
+        return
+
+    metadata: Mapping[str, Any] = results.get("metadata", {})
+    stats: Mapping[str, Any] = results.get("stats", {})
+    warnings: List[str] = list(results.get("warnings", []))
+    rows: List[Mapping[str, Any]] = list(results.get("rows", []))
+
+    cols = st.columns(5)
+    cols[0].metric("Service rows", int(stats.get("services_found", 0)))
+    cols[1].metric("Rows with cost", int(stats.get("rows_with_cost", 0)))
+    cols[2].metric("Receipt provided", int(stats.get("receipt_provided", 0)))
+    cols[3].metric("Receipt missing", int(stats.get("receipt_missing", 0)))
+    cols[4].metric("Receipt unknown", int(stats.get("receipt_unknown", 0)))
+
+    for warning in warnings:
+        st.warning(warning)
+
+    df = pd.DataFrame(rows)
+    if df.empty:
+        st.info("No owner service rows were returned for the selected range.")
+    else:
+        if "Cost" in df.columns:
+            df["Cost"] = pd.to_numeric(df["Cost"], errors="coerce")
+
+        st.dataframe(df, width="stretch")
+
+        if {"Currency", "Cost"}.issubset(df.columns):
+            totals = (
+                df.dropna(subset=["Cost"])
+                .groupby("Currency", dropna=False, as_index=False)["Cost"]
+                .sum()
+                .sort_values("Cost", ascending=False)
+            )
+            if not totals.empty:
+                st.markdown("#### Totals by currency")
+                st.dataframe(totals, width="content")
+
+        csv_bytes = df.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            "Download audit report CSV",
+            data=csv_bytes,
+            file_name="owner_services_cost_audit.csv",
+            mime="text/csv",
+        )
+
+    with st.expander("Fetch metadata", expanded=False):
+        st.json(metadata)
+
+
+def _render_audit_tab(api_settings: Optional[Mapping[str, Any]]) -> None:
+    st.markdown(
+        """
+        Audit owner services for cost controls and receipt follow-up. This report is optimized for
+        month-long ranges and includes one row per service line item with cost and receipt fields.
+        """
+    )
+
+    selected_from, selected_to = _get_audit_selected_dates()
+    date_input = st.date_input(
+        "Service cost audit date range",
+        value=(selected_from, selected_to),
+        help="Choose the inclusive date range to audit (e.g. one month).",
+        key="owner_services_audit_date_input",
+    )
+
+    if isinstance(date_input, tuple) and len(date_input) == 2:
+        selected_from, selected_to = date_input
+    elif isinstance(date_input, date):
+        selected_from = date_input
+        selected_to = date_input
+
+    st.session_state[_AUDIT_FROM_KEY] = selected_from
+    st.session_state[_AUDIT_TO_KEY] = selected_to
+
+    if st.button("Fetch Service Cost Audit", width="content"):
+        if selected_to < selected_from:
+            st.session_state[_AUDIT_RESULTS_KEY] = None
+            st.session_state[_AUDIT_ERROR_KEY] = "The audit end date must be on or after the start date."
+        elif api_settings is None:
+            st.session_state[_AUDIT_RESULTS_KEY] = None
+            st.session_state[_AUDIT_ERROR_KEY] = (
+                "FL3XX API secrets are not configured; provide credentials before fetching."
+            )
+        else:
+            _handle_audit_fetch(
+                api_settings,
+                from_date=selected_from,
+                to_date_inclusive=selected_to,
+            )
+
+    _render_audit_results()
+
+
 def _render_sensitive_notes_tab(api_settings: Optional[Mapping[str, Any]]) -> None:
     st.markdown(
         """
@@ -1548,15 +1830,19 @@ def _render_sensitive_notes_tab(api_settings: Optional[Mapping[str, Any]]) -> No
 def main() -> None:
     _initialise_state()
     _initialise_sensitive_state()
+    _initialise_audit_state()
 
     api_settings = _get_api_settings()
 
-    owner_tab, notes_tab = st.tabs(
-        ["Owner Services Dashboard", "Sensitive Notes Monitor"]
+    owner_tab, audit_tab, notes_tab = st.tabs(
+        ["Owner Services Dashboard", "Service Cost Audit Report", "Sensitive Notes Monitor"]
     )
 
     with owner_tab:
         _render_owner_services_tab(api_settings)
+
+    with audit_tab:
+        _render_audit_tab(api_settings)
 
     with notes_tab:
         _render_sensitive_notes_tab(api_settings)
