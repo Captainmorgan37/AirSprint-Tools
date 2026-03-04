@@ -125,6 +125,20 @@ _ACCOUNT_KEYS: tuple[str, ...] = (
 )
 
 
+def _is_pos_leg(row: Mapping[str, Any]) -> bool:
+    flight_type = row.get("flightType") or row.get("flight_type")
+    if flight_type is None:
+        return False
+
+    normalized = str(flight_type).strip().upper()
+    return normalized == "POS"
+
+
+def _exclude_pos_rows(rows: Sequence[Mapping[str, Any]]) -> tuple[List[Mapping[str, Any]], int]:
+    filtered_rows = [row for row in rows if not _is_pos_leg(row)]
+    return filtered_rows, len(rows) - len(filtered_rows)
+
+
 def _initialise_state() -> None:
     st.session_state.setdefault(_RESULTS_KEY, None)
     st.session_state.setdefault(_ERROR_KEY, None)
@@ -1267,6 +1281,7 @@ def _handle_audit_fetch(
         return
 
     normalized_rows, skipped_subcharter = filter_out_subcharter_rows(normalized_rows)
+    normalized_rows, skipped_pos = _exclude_pos_rows(normalized_rows)
 
     with st.spinner("Building service cost audit report..."):
         report_rows, warnings, audit_stats = _build_audit_rows(normalized_rows, config)
@@ -1276,6 +1291,8 @@ def _handle_audit_fetch(
         "normalized_leg_count": len(normalized_rows),
         "normalization_stats": normalization_stats,
         "skipped_subcharter": skipped_subcharter,
+        "skipped_pos": skipped_pos,
+        "skipped_ocs": skipped_pos,
         "selected_from": from_date.isoformat(),
         "selected_to": to_date_inclusive.isoformat(),
     }
