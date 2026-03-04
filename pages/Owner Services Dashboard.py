@@ -67,6 +67,7 @@ _AUDIT_FROM_KEY = "owner_services_audit_from"
 _AUDIT_TO_KEY = "owner_services_audit_to"
 _AUDIT_RESULTS_KEY = "owner_services_audit_results"
 _AUDIT_ERROR_KEY = "owner_services_audit_error"
+_ACTIVE_TAB_KEY = "owner_services_active_tab"
 
 _DEFAULT_SENSITIVE_KEYWORDS: tuple[str, ...] = (
     "gun",
@@ -644,11 +645,6 @@ def _build_audit_rows(
         "service_requests": 0,
         "service_failures": 0,
         "services_found": 0,
-        "rows_with_cost": 0,
-        "rows_missing_cost": 0,
-        "receipt_provided": 0,
-        "receipt_missing": 0,
-        "receipt_unknown": 0,
     }
 
     services_cache: Dict[str, Optional[Any]] = {}
@@ -688,17 +684,6 @@ def _build_audit_rows(
 
             for entry in entries:
                 stats["services_found"] += 1
-                if entry.amount is not None:
-                    stats["rows_with_cost"] += 1
-                else:
-                    stats["rows_missing_cost"] += 1
-
-                if entry.receipt_status == "Provided":
-                    stats["receipt_provided"] += 1
-                elif entry.receipt_status == "Missing":
-                    stats["receipt_missing"] += 1
-                else:
-                    stats["receipt_unknown"] += 1
 
                 report_rows.append(
                     {
@@ -711,11 +696,7 @@ def _build_audit_rows(
                         "Category": entry.category,
                         "Direction": entry.direction,
                         "Status": entry.status,
-                        "Vendor": entry.vendor or "—",
                         "Service Description": entry.description,
-                        "Cost": entry.amount,
-                        "Currency": entry.currency or "—",
-                        "Receipt Status": entry.receipt_status,
                         "Notes": entry.notes or "",
                     }
                 )
@@ -1682,12 +1663,9 @@ def _render_audit_results() -> None:
     warnings: List[str] = list(results.get("warnings", []))
     rows: List[Mapping[str, Any]] = list(results.get("rows", []))
 
-    cols = st.columns(5)
+    cols = st.columns(2)
     cols[0].metric("Service rows", int(stats.get("services_found", 0)))
-    cols[1].metric("Rows with cost", int(stats.get("rows_with_cost", 0)))
-    cols[2].metric("Receipt provided", int(stats.get("receipt_provided", 0)))
-    cols[3].metric("Receipt missing", int(stats.get("receipt_missing", 0)))
-    cols[4].metric("Receipt unknown", int(stats.get("receipt_unknown", 0)))
+    cols[1].metric("Flights scanned", int(stats.get("service_requests", 0)))
 
     for warning in warnings:
         st.warning(warning)
@@ -1696,21 +1674,7 @@ def _render_audit_results() -> None:
     if df.empty:
         st.info("No owner service rows were returned for the selected range.")
     else:
-        if "Cost" in df.columns:
-            df["Cost"] = pd.to_numeric(df["Cost"], errors="coerce")
-
         st.dataframe(df, width="stretch")
-
-        if {"Currency", "Cost"}.issubset(df.columns):
-            totals = (
-                df.dropna(subset=["Cost"])
-                .groupby("Currency", dropna=False, as_index=False)["Cost"]
-                .sum()
-                .sort_values("Cost", ascending=False)
-            )
-            if not totals.empty:
-                st.markdown("#### Totals by currency")
-                st.dataframe(totals, width="content")
 
         csv_bytes = df.to_csv(index=False).encode("utf-8")
         st.download_button(
@@ -1727,8 +1691,8 @@ def _render_audit_results() -> None:
 def _render_audit_tab(api_settings: Optional[Mapping[str, Any]]) -> None:
     st.markdown(
         """
-        Audit owner services for cost controls and receipt follow-up. This report is optimized for
-        month-long ranges and includes one row per service line item with cost and receipt fields.
+        Audit owner services activity across catering and ground transport. This report is optimized
+        for month-long ranges and includes one row per owner-facing service line item.
         """
     )
 
@@ -1834,17 +1798,24 @@ def main() -> None:
 
     api_settings = _get_api_settings()
 
-    owner_tab, audit_tab, notes_tab = st.tabs(
-        ["Owner Services Dashboard", "Service Cost Audit Report", "Sensitive Notes Monitor"]
+    tab_options = [
+        "Owner Services Dashboard",
+        "Service Cost Audit Report",
+        "Sensitive Notes Monitor",
+    ]
+    active_tab = st.radio(
+        "View",
+        tab_options,
+        key=_ACTIVE_TAB_KEY,
+        horizontal=True,
+        label_visibility="collapsed",
     )
 
-    with owner_tab:
+    if active_tab == "Owner Services Dashboard":
         _render_owner_services_tab(api_settings)
-
-    with audit_tab:
+    elif active_tab == "Service Cost Audit Report":
         _render_audit_tab(api_settings)
-
-    with notes_tab:
+    else:
         _render_sensitive_notes_tab(api_settings)
 
 
