@@ -145,6 +145,13 @@ def _is_owner_services_transport(item: Mapping[str, Any]) -> bool:
         return True
 
     normalized = by_value.strip().lower()
+    normalized_code = normalized.replace(" ", "").replace("_", "")
+
+    if normalized_code == "custom1":
+        return False
+    if normalized_code == "custom2":
+        return True
+
     if "flight support" in normalized:
         return False
 
