@@ -158,7 +158,7 @@ def fetch_flights(
                     to_date=midpoint,
                     session=http,
                     now=reference_time,
-                    _allow_split_retry=False,
+                    _allow_split_retry=True,
                 )
                 right_flights, right_meta = fetch_flights(
                     config,
@@ -166,7 +166,7 @@ def fetch_flights(
                     to_date=to_date,
                     session=http,
                     now=reference_time,
-                    _allow_split_retry=False,
+                    _allow_split_retry=True,
                 )
 
                 flights = left_flights + right_flights
