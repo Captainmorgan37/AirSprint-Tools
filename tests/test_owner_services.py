@@ -1,5 +1,6 @@
 from owner_services import (
     OwnerServicesSummary,
+    extract_owner_service_audit_entries,
     format_owner_service_entries,
 )
 
@@ -92,3 +93,120 @@ def test_invalid_payload_yields_empty_summary():
     assert not summary.needs_attention
     assert format_owner_service_entries(summary.departure_catering) == "—"
 
+
+
+def test_extract_owner_service_audit_entries_includes_cost_and_receipt():
+    payload = {
+        "catering": [
+            {
+                "status": "OK",
+                "serviceFor": "Pax",
+                "details": "Lunch",
+                "cost": {"amount": 125.5, "currency": "USD"},
+                "receiptAttached": True,
+                "vendor": "Sky Catering",
+            }
+        ]
+    }
+
+    entries = extract_owner_service_audit_entries(payload)
+
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry.category == "Catering"
+    assert entry.direction == "Departure"
+    assert entry.amount == 125.5
+    assert entry.currency == "USD"
+    assert entry.receipt_status == "Provided"
+    assert entry.vendor == "Sky Catering"
+
+
+def test_extract_owner_service_audit_entries_handles_missing_receipt_status():
+    payload = {
+        "arrivalGroundTransportation": [
+            {
+                "status": "CONFIRMED",
+                "type": "SUV",
+                "person": {"firstName": "Pat", "lastName": "Case", "pilot": False},
+                "amount": 90,
+                "currencyCode": "CAD",
+                "missingReceipt": True,
+            }
+        ]
+    }
+
+    entries = extract_owner_service_audit_entries(payload)
+
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry.category == "Ground Transport"
+    assert entry.direction == "Arrival"
+    assert entry.amount == 90
+    assert entry.currency == "CAD"
+    assert entry.receipt_status == "Missing"
+
+
+def test_extract_owner_service_audit_entries_filters_transport_by_owner_services():
+    payload = {
+        "arrivalGroundTransportation": [
+            {
+                "status": "CONFIRMED",
+                "type": "SUV",
+                "person": {"firstName": "Owner", "lastName": "Rider", "pilot": False},
+                "by": "Owner Services",
+            },
+            {
+                "status": "CONFIRMED",
+                "type": "Sedan",
+                "person": {"firstName": "Crew", "lastName": "Ride", "pilot": False},
+                "by": "Flight support",
+            },
+        ]
+    }
+
+    entries = extract_owner_service_audit_entries(payload)
+
+    assert len(entries) == 1
+    assert entries[0].description.startswith("SUV")
+
+
+def test_extract_owner_service_audit_entries_keeps_owner_services_variants():
+    payload = {
+        "arrivalGroundTransportation": [
+            {
+                "status": "CONFIRMED",
+                "type": "SUV",
+                "person": {"firstName": "Owner", "lastName": "Rider", "pilot": False},
+                "by": "Owner Services Team",
+            },
+        ]
+    }
+
+    entries = extract_owner_service_audit_entries(payload)
+
+    assert len(entries) == 1
+    assert entries[0].description.startswith("SUV")
+
+
+def test_extract_owner_service_audit_entries_filters_custom1_and_keeps_custom2():
+    payload = {
+        "arrivalGroundTransportation": [
+            {
+                "status": "CONFIRMED",
+                "type": "SUV",
+                "person": {"firstName": "Owner", "lastName": "Rider", "pilot": False},
+                "by": "CUSTOM2",
+            },
+            {
+                "status": "CONFIRMED",
+                "type": "Sedan",
+                "person": {"firstName": "Crew", "lastName": "Ride", "pilot": False},
+                "by": "CUSTOM1",
+            },
+        ]
+    }
+
+    entries = extract_owner_service_audit_entries(payload)
+
+    assert len(entries) == 1
+    assert entries[0].description.startswith("SUV")

@@ -266,3 +266,73 @@ def test_extract_leg_note_blocks_reads_all_items_from_multi_leg_payload():
             "Please bill KSFO superbowl special event fee to owner - $7,050.00 USD",
         ),
     ]
+
+
+def test_exclude_pos_rows_removes_only_pos_flight_types():
+    module = _load_dashboard_module()
+
+    rows = [
+        {"flightType": "POS", "flightId": "F-1"},
+        {"flightType": "PAX", "flightId": "F-2"},
+        {"flightType": " pos ", "flightId": "F-3"},
+        {"flightType": "CARGO", "flightId": "F-4"},
+        {"flightId": "F-5"},
+    ]
+
+    filtered, skipped = module._exclude_pos_rows(rows)
+
+    assert skipped == 2
+    assert [row["flightId"] for row in filtered] == ["F-2", "F-4", "F-5"]
+
+
+def test_handle_audit_fetch_excludes_pos_rows_before_audit_calls(monkeypatch):
+    module = _load_dashboard_module()
+
+    module.st.session_state.clear()
+
+    class DummyConfig:
+        pass
+
+    def fake_build_config(_settings):
+        return DummyConfig()
+
+    def fake_fetch_flights(_config, *, from_date, to_date):
+        return (
+            [
+                {"flightType": "POS", "flightId": "F-1", "tail": "C-GAAA", "departureTimeUtc": "2025-01-01T01:00:00Z"},
+                {"flightType": "PAX", "flightId": "F-2", "tail": "C-GBBB", "departureTimeUtc": "2025-01-01T02:00:00Z"},
+            ],
+            {"fetched_at": "now"},
+        )
+
+    def fake_normalize(_payload):
+        return (
+            [
+                {"flightType": "POS", "flightId": "F-1", "tail": "C-GAAA", "dep_time": "2025-01-01T01:00:00Z"},
+                {"flightType": "PAX", "flightId": "F-2", "tail": "C-GBBB", "dep_time": "2025-01-01T02:00:00Z"},
+            ],
+            {"legs_normalized": 2},
+        )
+
+    captured = {}
+
+    def fake_build_audit_rows(rows, _config):
+        captured["rows"] = rows
+        return ([{"Departure (UTC)": "2025-01-01 02:00", "Tail": "C-GBBB"}], [], {"services_found": 1})
+
+    monkeypatch.setattr(module, "build_fl3xx_api_config", fake_build_config)
+    monkeypatch.setattr(module, "fetch_flights", fake_fetch_flights)
+    monkeypatch.setattr(module, "normalize_fl3xx_payload", fake_normalize)
+    monkeypatch.setattr(module, "filter_out_subcharter_rows", lambda rows: (rows, 0))
+    monkeypatch.setattr(module, "_build_audit_rows", fake_build_audit_rows)
+
+    module._handle_audit_fetch(
+        {"api_key": "x"},
+        from_date=module.date(2025, 1, 1),
+        to_date_inclusive=module.date(2025, 1, 1),
+    )
+
+    assert [row["flightId"] for row in captured["rows"]] == ["F-2"]
+    metadata = module.st.session_state[module._AUDIT_RESULTS_KEY]["metadata"]
+    assert metadata["skipped_pos"] == 1
+    assert metadata["skipped_ocs"] == 1

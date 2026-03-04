@@ -1,6 +1,5 @@
 from datetime import date, datetime, timezone
 
-import pytest
 import requests
 
 from fl3xx_client import Fl3xxApiConfig, fetch_flights
@@ -61,23 +60,30 @@ def test_fetch_flights_retries_on_400_with_split():
     assert len(session.calls) == 3
 
 
-def test_fetch_flights_propagates_second_400_after_split_attempt():
+def test_fetch_flights_recursively_splits_until_ranges_succeed():
     session = FakeSession(
         [
             FakeResponse(status_code=400),
             FakeResponse(status_code=400),
+            FakeResponse(payload=[{"id": "left-left"}]),
+            FakeResponse(payload=[{"id": "left-right"}]),
+            FakeResponse(payload=[{"id": "right"}]),
         ]
     )
     config = Fl3xxApiConfig(api_token="token")
     reference_time = datetime(2024, 1, 1, tzinfo=timezone.utc)
 
-    with pytest.raises(requests.HTTPError):
-        fetch_flights(
-            config,
-            from_date=date(2024, 1, 1),
-            to_date=date(2024, 1, 5),
-            session=session,
-            now=reference_time,
-        )
+    flights, metadata = fetch_flights(
+        config,
+        from_date=date(2024, 1, 1),
+        to_date=date(2024, 1, 5),
+        session=session,
+        now=reference_time,
+    )
 
-    assert len(session.calls) == 2
+    assert flights == [{"id": "left-left"}, {"id": "left-right"}, {"id": "right"}]
+    assert len(session.calls) == 5
+    assert metadata["partial_requests"][0]["partial_requests"][0]["from_date"] == "2024-01-01"
+    assert metadata["partial_requests"][0]["partial_requests"][0]["to_date"] == "2024-01-02"
+    assert metadata["partial_requests"][0]["partial_requests"][1]["from_date"] == "2024-01-02"
+    assert metadata["partial_requests"][0]["partial_requests"][1]["to_date"] == "2024-01-03"

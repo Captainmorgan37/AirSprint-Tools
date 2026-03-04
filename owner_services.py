@@ -124,6 +124,186 @@ class OwnerServicesSummary:
         return any(not entry.is_complete for entry in self.all_entries())
 
 
+@dataclass
+class OwnerServiceAuditEntry:
+    """Row-level audit representation for service cost and receipt follow-up."""
+
+    category: str
+    direction: str
+    status: str
+    description: str
+    notes: Optional[str] = None
+    amount: Optional[float] = None
+    currency: Optional[str] = None
+    receipt_status: str = "Unknown"
+    vendor: Optional[str] = None
+
+
+def _is_owner_services_transport(item: Mapping[str, Any]) -> bool:
+    by_value = _coerce_text(item.get("by") or item.get("arrangedBy") or item.get("bookedBy"))
+    if not by_value:
+        return True
+
+    normalized = by_value.strip().lower()
+    normalized_code = normalized.replace(" ", "").replace("_", "")
+
+    if normalized_code == "custom1":
+        return False
+    if normalized_code == "custom2":
+        return True
+
+    if "flight support" in normalized:
+        return False
+
+    return "owner" in normalized and "service" in normalized
+
+
+def extract_owner_service_audit_entries(payload: Any) -> List[OwnerServiceAuditEntry]:
+    """Extract owner-facing services into audit-ready rows."""
+
+    if not isinstance(payload, Mapping):
+        return []
+
+    entries: List[OwnerServiceAuditEntry] = []
+    service_sections = (
+        ("Departure Catering", payload.get("catering"), "Departure", "Catering"),
+        ("Arrival Catering", payload.get("arrivalCatering"), "Arrival", "Catering"),
+        (
+            "Departure Transport",
+            payload.get("departureGroundTransportation"),
+            "Departure",
+            "Ground Transport",
+        ),
+        (
+            "Arrival Transport",
+            payload.get("arrivalGroundTransportation"),
+            "Arrival",
+            "Ground Transport",
+        ),
+    )
+
+    for label, raw_items, direction, category in service_sections:
+        for item in _iter_mappings(raw_items):
+            if category == "Catering":
+                service_for = _coerce_text(item.get("serviceFor") or item.get("service_for"))
+                if service_for is None or service_for.lower() != "pax":
+                    continue
+            if category == "Ground Transport" and not _is_owner_services_transport(item):
+                continue
+
+            description = _coerce_text(
+                item.get("details")
+                or item.get("description")
+                or item.get("type")
+                or item.get("label")
+                or label
+            ) or label
+
+            if category == "Ground Transport":
+                person_name = _format_person_name(item.get("person", {})) if isinstance(item.get("person"), Mapping) else None
+                if person_name:
+                    description = f"{description} – {person_name}"
+
+            amount, currency = _extract_amount_and_currency(item)
+
+            entries.append(
+                OwnerServiceAuditEntry(
+                    category=category,
+                    direction=direction,
+                    status=_normalise_status(item.get("status")),
+                    description=description,
+                    notes=_coerce_text(item.get("notes") or item.get("paxNotes")),
+                    amount=amount,
+                    currency=currency,
+                    receipt_status=_extract_receipt_status(item),
+                    vendor=_coerce_text(
+                        item.get("vendor")
+                        or item.get("supplier")
+                        or item.get("provider")
+                        or item.get("company")
+                    ),
+                )
+            )
+
+    return entries
+
+
+def _extract_amount_and_currency(item: Mapping[str, Any]) -> tuple[Optional[float], Optional[str]]:
+    amount_candidates = (
+        item.get("cost"),
+        item.get("price"),
+        item.get("amount"),
+        item.get("totalCost"),
+        item.get("estimatedCost"),
+        item.get("quotedCost"),
+    )
+
+    amount: Optional[float] = None
+    for candidate in amount_candidates:
+        amount = _coerce_number(candidate)
+        if amount is not None:
+            break
+
+    currency = _coerce_text(item.get("currency") or item.get("currencyCode"))
+
+    for nested_key in ("cost", "price", "quote"):
+        nested = item.get(nested_key)
+        if not isinstance(nested, Mapping):
+            continue
+        if amount is None:
+            amount = _coerce_number(
+                nested.get("amount") or nested.get("value") or nested.get("total")
+            )
+        if currency is None:
+            currency = _coerce_text(
+                nested.get("currency") or nested.get("currencyCode") or nested.get("code")
+            )
+
+    return amount, currency
+
+
+def _coerce_number(value: Any) -> Optional[float]:
+    if value in (None, ""):
+        return None
+    try:
+        return float(str(value).replace(",", "").strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _extract_receipt_status(item: Mapping[str, Any]) -> str:
+    truthy_keys = (
+        "hasReceipt",
+        "receiptAttached",
+        "receiptProvided",
+        "invoiceAttached",
+        "hasInvoice",
+    )
+    falsy_keys = ("missingReceipt", "receiptMissing")
+
+    for key in truthy_keys:
+        if item.get(key) is True:
+            return "Provided"
+    for key in falsy_keys:
+        if item.get(key) is True:
+            return "Missing"
+
+    receipt_value = _coerce_text(item.get("receipt") or item.get("invoice"))
+    if receipt_value:
+        normalized = receipt_value.lower()
+        if normalized in {"yes", "true", "attached", "provided"}:
+            return "Provided"
+        if normalized in {"no", "false", "missing", "not provided"}:
+            return "Missing"
+
+    attachments = item.get("attachments")
+    if isinstance(attachments, Sequence) and not isinstance(attachments, (str, bytes, bytearray)):
+        if len(list(attachments)) > 0:
+            return "Provided"
+
+    return "Unknown"
+
+
 def _extract_owner_catering(payload: Any) -> List[OwnerServiceEntry]:
     entries: List[OwnerServiceEntry] = []
 
@@ -211,4 +391,3 @@ def format_owner_service_entries(entries: Sequence[OwnerServiceEntry]) -> str:
 
     body = "\n".join(lines)
     return f"{header}\n{body}" if body else header
-
