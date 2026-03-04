@@ -268,24 +268,24 @@ def test_extract_leg_note_blocks_reads_all_items_from_multi_leg_payload():
     ]
 
 
-def test_exclude_ocs_rows_removes_only_ocs_flight_types():
+def test_exclude_pos_rows_removes_only_pos_flight_types():
     module = _load_dashboard_module()
 
     rows = [
-        {"flightType": "OCS", "flightId": "F-1"},
+        {"flightType": "POS", "flightId": "F-1"},
         {"flightType": "PAX", "flightId": "F-2"},
-        {"flightType": " ocs ", "flightId": "F-3"},
+        {"flightType": " pos ", "flightId": "F-3"},
         {"flightType": "CARGO", "flightId": "F-4"},
         {"flightId": "F-5"},
     ]
 
-    filtered, skipped = module._exclude_ocs_rows(rows)
+    filtered, skipped = module._exclude_pos_rows(rows)
 
     assert skipped == 2
     assert [row["flightId"] for row in filtered] == ["F-2", "F-4", "F-5"]
 
 
-def test_handle_audit_fetch_excludes_ocs_rows_before_audit_calls(monkeypatch):
+def test_handle_audit_fetch_excludes_pos_rows_before_audit_calls(monkeypatch):
     module = _load_dashboard_module()
 
     module.st.session_state.clear()
@@ -299,7 +299,7 @@ def test_handle_audit_fetch_excludes_ocs_rows_before_audit_calls(monkeypatch):
     def fake_fetch_flights(_config, *, from_date, to_date):
         return (
             [
-                {"flightType": "OCS", "flightId": "F-1", "tail": "C-GAAA", "departureTimeUtc": "2025-01-01T01:00:00Z"},
+                {"flightType": "POS", "flightId": "F-1", "tail": "C-GAAA", "departureTimeUtc": "2025-01-01T01:00:00Z"},
                 {"flightType": "PAX", "flightId": "F-2", "tail": "C-GBBB", "departureTimeUtc": "2025-01-01T02:00:00Z"},
             ],
             {"fetched_at": "now"},
@@ -308,7 +308,7 @@ def test_handle_audit_fetch_excludes_ocs_rows_before_audit_calls(monkeypatch):
     def fake_normalize(_payload):
         return (
             [
-                {"flightType": "OCS", "flightId": "F-1", "tail": "C-GAAA", "dep_time": "2025-01-01T01:00:00Z"},
+                {"flightType": "POS", "flightId": "F-1", "tail": "C-GAAA", "dep_time": "2025-01-01T01:00:00Z"},
                 {"flightType": "PAX", "flightId": "F-2", "tail": "C-GBBB", "dep_time": "2025-01-01T02:00:00Z"},
             ],
             {"legs_normalized": 2},
@@ -334,4 +334,5 @@ def test_handle_audit_fetch_excludes_ocs_rows_before_audit_calls(monkeypatch):
 
     assert [row["flightId"] for row in captured["rows"]] == ["F-2"]
     metadata = module.st.session_state[module._AUDIT_RESULTS_KEY]["metadata"]
+    assert metadata["skipped_pos"] == 1
     assert metadata["skipped_ocs"] == 1
