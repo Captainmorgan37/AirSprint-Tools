@@ -139,6 +139,13 @@ class OwnerServiceAuditEntry:
     vendor: Optional[str] = None
 
 
+def _is_owner_services_transport(item: Mapping[str, Any]) -> bool:
+    by_value = _coerce_text(item.get("by") or item.get("arrangedBy") or item.get("bookedBy"))
+    if not by_value:
+        return True
+    return by_value.strip().lower() == "owner services"
+
+
 def extract_owner_service_audit_entries(payload: Any) -> List[OwnerServiceAuditEntry]:
     """Extract owner-facing services into audit-ready rows."""
 
@@ -169,6 +176,8 @@ def extract_owner_service_audit_entries(payload: Any) -> List[OwnerServiceAuditE
                 service_for = _coerce_text(item.get("serviceFor") or item.get("service_for"))
                 if service_for is None or service_for.lower() != "pax":
                     continue
+            if category == "Ground Transport" and not _is_owner_services_transport(item):
+                continue
 
             description = _coerce_text(
                 item.get("details")

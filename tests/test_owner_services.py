@@ -144,3 +144,27 @@ def test_extract_owner_service_audit_entries_handles_missing_receipt_status():
     assert entry.amount == 90
     assert entry.currency == "CAD"
     assert entry.receipt_status == "Missing"
+
+
+def test_extract_owner_service_audit_entries_filters_transport_by_owner_services():
+    payload = {
+        "arrivalGroundTransportation": [
+            {
+                "status": "CONFIRMED",
+                "type": "SUV",
+                "person": {"firstName": "Owner", "lastName": "Rider", "pilot": False},
+                "by": "Owner Services",
+            },
+            {
+                "status": "CONFIRMED",
+                "type": "Sedan",
+                "person": {"firstName": "Crew", "lastName": "Ride", "pilot": False},
+                "by": "Flight support",
+            },
+        ]
+    }
+
+    entries = extract_owner_service_audit_entries(payload)
+
+    assert len(entries) == 1
+    assert entries[0].description.startswith("SUV")
