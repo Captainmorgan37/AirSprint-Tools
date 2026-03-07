@@ -31,6 +31,7 @@ from flight_leg_utils import (
     normalize_fl3xx_payload,
     safe_parse_dt,
 )
+from caricom_helper_utils import select_booking_leg_for_caricom
 from zoneinfo_compat import ZoneInfo
 
 configure_page(page_title="CARICOM Helper")
@@ -651,11 +652,9 @@ else:
                 if not matched_legs:
                     st.warning("No matching booking was found in the next 72 hours.")
                 else:
-                    sorted_legs = sorted(
-                        matched_legs,
-                        key=lambda leg: leg.get("dep_time") or "",
-                    )
-                    selected_leg = sorted_legs[0]
+                    selected_leg = select_booking_leg_for_caricom(
+                        matched_legs, _is_caricom_airport
+                    ) or dict(matched_legs[0])
 
                     dep_airport = selected_leg.get("departure_airport")
                     arr_airport = selected_leg.get("arrival_airport")
