@@ -31,6 +31,7 @@ from flight_leg_utils import (
     normalize_fl3xx_payload,
     safe_parse_dt,
 )
+from caricom_helper_utils import select_booking_leg_for_caricom
 from zoneinfo_compat import ZoneInfo
 
 configure_page(page_title="CARICOM Helper")
@@ -53,6 +54,7 @@ CARICOM_COUNTRIES = {
     "Bahamas",
     "Barbados",
     "Belize",
+    "British Virgin Islands",
     "Cayman Islands",
     "Dominica",
     "Grenada",
@@ -74,6 +76,7 @@ CARICOM_REQUIREMENT_COUNTRIES = {
     "dominica",
     "grenada",
     "guyana",
+    "british virgin islands",
     "jamaica",
     "saint kitts and nevis",
     "saint lucia",
@@ -89,6 +92,7 @@ CARICOM_COUNTRY_CODE_TO_NAME = {
     "DM": "Dominica",
     "GD": "Grenada",
     "GY": "Guyana",
+    "VG": "British Virgin Islands",
     "JM": "Jamaica",
     "KN": "Saint Kitts and Nevis",
     "LC": "Saint Lucia",
@@ -101,6 +105,7 @@ CARICOM_COUNTRY_CODE_TO_NAME = {
     "DMA": "Dominica",
     "GRD": "Grenada",
     "GUY": "Guyana",
+    "VGB": "British Virgin Islands",
     "JAM": "Jamaica",
     "KNA": "Saint Kitts and Nevis",
     "LCA": "Saint Lucia",
@@ -651,11 +656,9 @@ else:
                 if not matched_legs:
                     st.warning("No matching booking was found in the next 72 hours.")
                 else:
-                    sorted_legs = sorted(
-                        matched_legs,
-                        key=lambda leg: leg.get("dep_time") or "",
-                    )
-                    selected_leg = sorted_legs[0]
+                    selected_leg = select_booking_leg_for_caricom(
+                        matched_legs, _is_caricom_airport
+                    ) or dict(matched_legs[0])
 
                     dep_airport = selected_leg.get("departure_airport")
                     arr_airport = selected_leg.get("arrival_airport")
