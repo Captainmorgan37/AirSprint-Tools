@@ -14,7 +14,7 @@ from flight_leg_utils import FlightDataError, build_fl3xx_api_config
 from roster_pull import filter_active_roster_rows, parse_roster_payload
 
 
-configure_page(page_title="Crew Positioning Monitor", layout="wide")
+configure_page(page_title="Crew Positioning Monitor")
 password_gate()
 render_sidebar()
 st.title("Crew Positioning Monitor")

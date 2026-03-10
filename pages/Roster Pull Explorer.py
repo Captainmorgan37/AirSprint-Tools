@@ -13,7 +13,7 @@ from flight_leg_utils import FlightDataError, build_fl3xx_api_config
 from roster_pull import build_crew_snapshots, filter_active_roster_rows, parse_roster_payload
 
 
-configure_page(page_title="Roster Pull Explorer", layout="wide")
+configure_page(page_title="Roster Pull Explorer")
 password_gate()
 render_sidebar()
 st.title("Roster Pull Explorer")
