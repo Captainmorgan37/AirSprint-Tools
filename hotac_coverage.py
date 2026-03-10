@@ -760,9 +760,15 @@ def compute_hotac_coverage(
                     "_sort_key": sort_key,
                 }
 
+    roster_personnel_with_scheduled_legs = {
+        _normalize_id(leg.get("pilot", {}).get("personnel"))
+        for leg in pilot_last_leg.values()
+        if _normalize_id(leg.get("pilot", {}).get("personnel"))
+    }
+
     for personnel, pilot in roster_positioning_only_pilots.items():
         pilot_key = _normalize_id(pilot.get("person_id")) or f"personnel::{personnel}"
-        if pilot_key in pilot_last_leg:
+        if pilot_key in pilot_last_leg or personnel in roster_personnel_with_scheduled_legs:
             continue
 
         positioning_events = roster_events_by_personnel.get(personnel, [])
@@ -826,23 +832,31 @@ def compute_hotac_coverage(
                 elif reposition_to:
                     positioning_route = f"{end_airport}-{reposition_to}"
 
-                if reposition_to and pilot.get("person_id") and (
-                    not profile_home_base_airport or profile_home_base_airport != reposition_to
-                ):
-                    try:
-                        crew_member_payload = fetch_crew_member_details(config, str(pilot.get("person_id")))
-                        looked_up_home_airport = _extract_home_airport_icao(crew_member_payload)
-                        if looked_up_home_airport:
-                            profile_home_base_airport = looked_up_home_airport
-                    except Exception as exc:
-                        troubleshooting_rows.append(
-                            {
-                                "Flight ID": "",
-                                "Tail": leg.get("tail") or "",
-                                "Issue": "Unable to fetch pilot home airport",
-                                "Details": str(exc),
-                            }
-                        )
+                if reposition_to and (not profile_home_base_airport or profile_home_base_airport != reposition_to):
+                    lookup_ids: List[str] = []
+                    pilot_person_id = _normalize_id(pilot.get("person_id"))
+                    pilot_personnel = _normalize_id(pilot.get("personnel"))
+                    if pilot_person_id:
+                        lookup_ids.append(pilot_person_id)
+                    if pilot_personnel and pilot_personnel not in lookup_ids:
+                        lookup_ids.append(pilot_personnel)
+
+                    for lookup_id in lookup_ids:
+                        try:
+                            crew_member_payload = fetch_crew_member_details(config, lookup_id)
+                            looked_up_home_airport = _extract_home_airport_icao(crew_member_payload)
+                            if looked_up_home_airport:
+                                profile_home_base_airport = looked_up_home_airport
+                                break
+                        except Exception as exc:
+                            troubleshooting_rows.append(
+                                {
+                                    "Flight ID": "",
+                                    "Tail": leg.get("tail") or "",
+                                    "Issue": "Unable to fetch pilot home airport",
+                                    "Details": f"lookup_id={lookup_id}: {exc}",
+                                }
+                            )
 
                 hotel_note = _extract_hotel_from_positioning_notes(str(positioning_event.get("notes") or ""))
                 if profile_home_base_airport and reposition_to and reposition_to == profile_home_base_airport:
