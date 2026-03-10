@@ -26,6 +26,7 @@ EMBRAER_TAILS = {
     "CFSJR",
     "CFASQ",
     "CFSDO",
+    "CFASN",
 }
 """Tail numbers (without hyphen) that correspond to Embraer aircraft."""
 
