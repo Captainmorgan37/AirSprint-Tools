@@ -814,7 +814,10 @@ def compute_hotac_coverage(
                     positioning_route = f"{end_airport}-{reposition_to}"
 
                 hotel_note = _extract_hotel_from_positioning_notes(str(positioning_event.get("notes") or ""))
-                if hotel_note:
+                if profile_home_base_airport and reposition_to and reposition_to == profile_home_base_airport:
+                    status = "Home base"
+                    notes = f"Positioned to home base ({reposition_to})"
+                elif hotel_note:
                     status = "Booked"
                     notes = f"Positioning hotel note: {hotel_note}"
                 elif reposition_to:
