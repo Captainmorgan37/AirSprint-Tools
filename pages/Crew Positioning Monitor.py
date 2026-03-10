@@ -29,6 +29,7 @@ with st.sidebar:
     source = st.radio("Choose source", ["Live FL3XX API", "Repo file", "Upload .txt/.json", "Paste JSON"], index=0)
 
 raw_text = ""
+rows: list[dict[str, object]] = []
 
 if source == "Live FL3XX API":
     default_start = datetime.now(UTC).date() - timedelta(days=3)
@@ -59,18 +60,32 @@ if source == "Live FL3XX API":
         st.error(str(exc))
         st.stop()
 
-    with st.spinner("Fetching live roster from FL3XX..."):
-        try:
-            rows = fetch_staff_roster(
-                config,
-                from_time=from_time,
-                to_time=to_time,
-                filter_value="STAFF",
-                include_flights=include_flights,
-                drop_empty_rows=False,
-            )
-        except Exception as exc:  # noqa: BLE001
-            st.error(f"Failed to fetch roster from FL3XX: {exc}")
+    fetch_clicked = st.button("Fetch roster from FL3XX", type="primary")
+    cache_key = "crew_positioning_monitor_live_rows"
+
+    if fetch_clicked:
+        with st.spinner("Fetching live roster from FL3XX..."):
+            try:
+                rows = fetch_staff_roster(
+                    config,
+                    from_time=from_time,
+                    to_time=to_time,
+                    filter_value="STAFF",
+                    include_flights=include_flights,
+                    drop_empty_rows=False,
+                )
+                st.session_state[cache_key] = rows
+                st.success(f"Loaded {len(rows)} roster rows from FL3XX.")
+            except Exception as exc:  # noqa: BLE001
+                st.error(f"Failed to fetch roster from FL3XX: {exc}")
+                st.stop()
+    else:
+        cached_rows = st.session_state.get(cache_key)
+        if isinstance(cached_rows, list):
+            rows = cached_rows
+            st.info(f"Using cached FL3XX pull with {len(rows)} rows. Click fetch to refresh.")
+        else:
+            st.info("Set your window and click 'Fetch roster from FL3XX' to load live data.")
             st.stop()
 elif source == "Repo file":
     file_path = st.text_input("Path", value=DEFAULT_PATH)
