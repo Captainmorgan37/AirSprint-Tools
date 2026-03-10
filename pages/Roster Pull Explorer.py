@@ -299,7 +299,6 @@ st.title("Roster Pull Explorer")
 st.header("Fl3xx Crew Roster Normalizer")
 st.caption("Pull directly from FL3XX or load a roster payload file, then normalize to crew-focused views.")
 
-
 def ms_to_iso_utc(value: object) -> str | None:
     if value in (None, ""):
         return None
@@ -773,12 +772,14 @@ def build_daily_schedule(entries_df: pd.DataFrame) -> pd.DataFrame:
                     include_flights=include_flights,
                     drop_empty_rows=False,
                 )
-                st.session_state[cache_key] = staff_rows
-                st.success(f"Loaded {len(staff_rows)} roster rows from FL3XX.")
             except Exception as exc:  # noqa: BLE001
                 st.error(f"Failed to fetch roster from FL3XX: {exc}")
                 st.stop()
-    else:
+
+        st.session_state[cache_key] = staff_rows
+        st.success(f"Loaded {len(staff_rows)} roster rows from FL3XX.")
+
+    if not staff_rows:
         cached_rows = st.session_state.get(cache_key)
         if isinstance(cached_rows, list):
             staff_rows = cached_rows
@@ -786,8 +787,12 @@ def build_daily_schedule(entries_df: pd.DataFrame) -> pd.DataFrame:
         else:
             st.info("Set your window and click 'Fetch roster from FL3XX' to load live data.")
             st.stop()
-elif source == "Repo file":
-    default_repo_path = next((candidate for candidate in DEFAULT_PATH_CANDIDATES if Path(candidate).exists()), DEFAULT_PATH_CANDIDATES[0])
+
+if source == "Repo file":
+    default_repo_path = next(
+        (candidate for candidate in DEFAULT_PATH_CANDIDATES if Path(candidate).exists()),
+        DEFAULT_PATH_CANDIDATES[0],
+    )
     file_path = st.text_input("Path", value=default_repo_path)
     path = Path(file_path)
     if path.exists() and path.is_file():
@@ -795,7 +800,8 @@ elif source == "Repo file":
         st.success(f"Loaded {file_path}")
     else:
         st.warning(f"File not found at {file_path}. Upload or paste instead.")
-elif source == "Upload .txt/.json":
+
+if source == "Upload .txt/.json":
     uploaded = st.file_uploader("Roster pull file", type=["txt", "json"])
     if uploaded is not None:
         try:
@@ -803,7 +809,8 @@ elif source == "Upload .txt/.json":
         except UnicodeDecodeError:
             st.error("Could not decode the uploaded file as UTF-8.")
             st.stop()
-else:
+
+if source == "Paste JSON":
     raw_text = st.text_area("Paste roster JSON", height=240)
 
 if source != "Live FL3XX API":
