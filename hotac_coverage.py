@@ -791,6 +791,7 @@ def compute_hotac_coverage(
             "end_airport": final_from,
             "dep_utc": final_departure,
             "arr_utc": final_departure,
+            "ends_duty_period": bool(final_event.get("ends_duty_period")),
             "_sort_key": sort_key,
         }
 
@@ -804,13 +805,41 @@ def compute_hotac_coverage(
 
         if matching_existing_key is not None:
             existing_leg = pilot_last_leg[matching_existing_key]
-            if candidate_leg["_sort_key"] >= existing_leg.get("_sort_key", (datetime.min.replace(tzinfo=UTC),) * 3):
+            existing_dep = existing_leg.get("dep_utc")
+            candidate_dep = candidate_leg.get("dep_utc")
+            should_prefer_candidate = candidate_leg["_sort_key"] >= existing_leg.get(
+                "_sort_key", (datetime.min.replace(tzinfo=UTC),) * 3
+            )
+            if (
+                not should_prefer_candidate
+                and bool(candidate_leg.get("ends_duty_period"))
+                and isinstance(candidate_dep, datetime)
+                and isinstance(existing_dep, datetime)
+                and existing_dep > candidate_dep
+            ):
+                should_prefer_candidate = True
+
+            if should_prefer_candidate:
                 pilot_last_leg[matching_existing_key] = candidate_leg
             continue
 
         existing_leg_for_key = pilot_last_leg.get(pilot_key)
         if existing_leg_for_key is not None:
-            if candidate_leg["_sort_key"] >= existing_leg_for_key.get("_sort_key", (datetime.min.replace(tzinfo=UTC),) * 3):
+            existing_dep = existing_leg_for_key.get("dep_utc")
+            candidate_dep = candidate_leg.get("dep_utc")
+            should_prefer_candidate = candidate_leg["_sort_key"] >= existing_leg_for_key.get(
+                "_sort_key", (datetime.min.replace(tzinfo=UTC),) * 3
+            )
+            if (
+                not should_prefer_candidate
+                and bool(candidate_leg.get("ends_duty_period"))
+                and isinstance(candidate_dep, datetime)
+                and isinstance(existing_dep, datetime)
+                and existing_dep > candidate_dep
+            ):
+                should_prefer_candidate = True
+
+            if should_prefer_candidate:
                 pilot_last_leg[pilot_key] = candidate_leg
             continue
 

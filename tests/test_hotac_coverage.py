@@ -1386,6 +1386,65 @@ def test_compute_hotac_coverage_replaces_earlier_scheduled_leg_with_later_roster
     assert row["Flight ID"] == ""
     assert row["Positioning route"] == "CYUL-CYYZ"
     assert row["HOTAC status"] == "Booked"
+
+
+def test_compute_hotac_coverage_prefers_roster_duty_end_over_later_next_day_scheduled_leg() -> None:
+    flights = [
+        {
+            "flightId": 160,
+            "tail": "C-GNXT",
+            "flightNumber": "AS160",
+            "departureTimeUtc": "2026-03-11T14:00:00Z",
+            "arrivalTimeUtc": "2026-03-11T16:00:00Z",
+            "arrivalAirport": "CYVR",
+        }
+    ]
+
+    def fake_crew(_config, _flight_id):
+        return [{"role": "CMD", "id": "legacy-id", "personnelNumber": "1340", "firstName": "Ryan", "lastName": "Neumann"}]
+
+    def fake_services(_config, _flight_id):
+        return {"arrivalHotac": []}
+
+    def fake_roster(_config, _from_time, _to_time):
+        return [
+            {
+                "user": {
+                    "internalId": 833149,
+                    "personnelNumber": "1340",
+                    "firstName": "Ryan",
+                    "lastName": "Neumann",
+                },
+                "entries": [
+                    {
+                        "type": "P",
+                        "from": 1773146700000,
+                        "to": 1773159420000,
+                        "fromAirport": {"icao": "CYUL"},
+                        "toAirport": {"icao": "CYYZ"},
+                        "endsDutyPeriod": True,
+                        "notes": "Hotel: HILTON GARDEN INN YYZ",
+                    }
+                ],
+                "flights": [],
+            }
+        ]
+
+    _display_df, raw_df, _troubleshooting_df = compute_hotac_coverage(
+        Fl3xxApiConfig(),
+        date(2026, 3, 10),
+        flights=flights,
+        crew_fetcher=fake_crew,
+        services_fetcher=fake_services,
+        roster_fetcher=fake_roster,
+    )
+
+    assert len(raw_df) == 1
+    row = raw_df.iloc[0]
+    assert row["Pilot"] == "Ryan Neumann"
+    assert row["Flight ID"] == ""
+    assert row["Positioning route"] == "CYUL-CYYZ"
+    assert row["HOTAC status"] == "Booked"
 def test_compute_hotac_coverage_includes_positioning_only_row_when_role_not_explicit() -> None:
     def fake_roster(_config, _from_time, _to_time):
         return [
