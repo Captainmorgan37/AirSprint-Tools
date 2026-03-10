@@ -512,6 +512,7 @@ def _extract_roster_positioning_events(
                     "from_utc": from_utc,
                     "to_utc": to_utc,
                     "notes": notes,
+                    "ends_duty_period": bool(entry.get("endsDutyPeriod")),
                 }
             )
         if events:
@@ -581,14 +582,25 @@ def _find_positioning_event_for_leg(
     if not matching:
         return None
 
+    def _prefer_duty_end(candidates: Sequence[Mapping[str, Any]]) -> Optional[Mapping[str, Any]]:
+        duty_ending = [event for event in candidates if bool(event.get("ends_duty_period"))]
+        if duty_ending:
+            return duty_ending[0]
+        return candidates[0] if candidates else None
+
     if isinstance(arrival_utc, datetime):
         after_arrival = [
             event
             for event in matching
             if isinstance(event.get("from_utc"), datetime) and event["from_utc"] >= arrival_utc
         ]
-        if after_arrival:
-            return after_arrival[0]
+        preferred = _prefer_duty_end(after_arrival)
+        if preferred is not None:
+            return preferred
+
+    preferred = _prefer_duty_end(matching)
+    if preferred is not None:
+        return preferred
     return matching[0]
 
 
@@ -757,7 +769,8 @@ def compute_hotac_coverage(
         if not positioning_events:
             continue
 
-        final_event = positioning_events[-1]
+        duty_ending_events = [event for event in positioning_events if bool(event.get("ends_duty_period"))]
+        final_event = duty_ending_events[-1] if duty_ending_events else positioning_events[-1]
         final_from = str(final_event.get("from_airport") or "").strip().upper()
         final_departure = final_event.get("from_utc")
         sort_key = (
