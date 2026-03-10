@@ -1,17 +1,22 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 import json
 
 import pandas as pd
 import streamlit as st
 
+from Home import configure_page, password_gate, render_sidebar
 from crew_positioning import build_positioning_statuses
+from fl3xx_api import fetch_staff_roster
+from flight_leg_utils import FlightDataError, build_fl3xx_api_config
 from roster_pull import filter_active_roster_rows, parse_roster_payload
 
 
-st.set_page_config(page_title="Crew Positioning Monitor", layout="wide")
+configure_page(page_title="Crew Positioning Monitor")
+password_gate()
+render_sidebar()
 st.title("Crew Positioning Monitor")
 st.caption(
     "Prototype: derive crew positioning actions from FL3XX roster pulls so TC can book from a single queue."
@@ -21,11 +26,68 @@ DEFAULT_PATH = "docs/Roster_API_Pull.txt"
 
 with st.sidebar:
     st.header("Roster source")
-    source = st.radio("Choose source", ["Repo file", "Upload .txt/.json", "Paste JSON"], index=0)
+    source = st.radio("Choose source", ["Live FL3XX API", "Repo file", "Upload .txt/.json", "Paste JSON"], index=0)
 
 raw_text = ""
+rows: list[dict[str, object]] = []
 
-if source == "Repo file":
+if source == "Live FL3XX API":
+    default_start = datetime.now(UTC).date() - timedelta(days=3)
+    default_end = datetime.now(UTC).date() + timedelta(days=3)
+    start_date = st.date_input("From date (UTC)", value=default_start)
+    end_date = st.date_input("To date (UTC)", value=default_end)
+    include_flights = st.checkbox("Include flights", value=True)
+
+    if start_date > end_date:
+        st.error("From date cannot be after To date.")
+        st.stop()
+
+    from_time = datetime.combine(start_date, datetime.min.time(), tzinfo=UTC)
+    to_time = datetime.combine(end_date, datetime.max.time().replace(second=59, microsecond=0), tzinfo=UTC)
+
+    try:
+        api_settings = st.secrets.get("fl3xx_api")  # type: ignore[attr-defined]
+    except Exception:
+        api_settings = None
+
+    if not api_settings:
+        st.error("Missing FL3XX API credentials in Streamlit secrets under [fl3xx_api].")
+        st.stop()
+
+    try:
+        config = build_fl3xx_api_config(dict(api_settings))
+    except FlightDataError as exc:
+        st.error(str(exc))
+        st.stop()
+
+    fetch_clicked = st.button("Fetch roster from FL3XX", type="primary")
+    cache_key = "crew_positioning_monitor_live_rows"
+
+    if fetch_clicked:
+        with st.spinner("Fetching live roster from FL3XX..."):
+            try:
+                rows = fetch_staff_roster(
+                    config,
+                    from_time=from_time,
+                    to_time=to_time,
+                    filter_value="STAFF",
+                    include_flights=include_flights,
+                    drop_empty_rows=False,
+                )
+                st.session_state[cache_key] = rows
+                st.success(f"Loaded {len(rows)} roster rows from FL3XX.")
+            except Exception as exc:  # noqa: BLE001
+                st.error(f"Failed to fetch roster from FL3XX: {exc}")
+                st.stop()
+    else:
+        cached_rows = st.session_state.get(cache_key)
+        if isinstance(cached_rows, list):
+            rows = cached_rows
+            st.info(f"Using cached FL3XX pull with {len(rows)} rows. Click fetch to refresh.")
+        else:
+            st.info("Set your window and click 'Fetch roster from FL3XX' to load live data.")
+            st.stop()
+elif source == "Repo file":
     file_path = st.text_input("Path", value=DEFAULT_PATH)
     path = Path(file_path)
     if path.exists() and path.is_file():
@@ -40,14 +102,15 @@ elif source == "Upload .txt/.json":
 else:
     raw_text = st.text_area("Paste roster JSON", height=240)
 
-if not raw_text.strip():
-    st.stop()
+if source != "Live FL3XX API":
+    if not raw_text.strip():
+        st.stop()
 
-try:
-    rows = parse_roster_payload(raw_text)
-except ValueError as exc:
-    st.error(str(exc))
-    st.stop()
+    try:
+        rows = parse_roster_payload(raw_text)
+    except ValueError as exc:
+        st.error(str(exc))
+        st.stop()
 
 active_rows = filter_active_roster_rows(rows)
 
