@@ -512,6 +512,7 @@ def _extract_roster_positioning_events(
                     "from_utc": from_utc,
                     "to_utc": to_utc,
                     "notes": notes,
+                    "ends_duty_period": bool(entry.get("endsDutyPeriod")),
                 }
             )
         if events:
@@ -520,6 +521,60 @@ def _extract_roster_positioning_events(
                 key=lambda event: event.get("from_utc") or datetime.min.replace(tzinfo=UTC),
             )
     return events_by_personnel
+
+
+def _extract_roster_positioning_only_pilots(
+    roster_rows: Iterable[Mapping[str, Any]],
+) -> Dict[str, Dict[str, Any]]:
+    pilots_by_personnel: Dict[str, Dict[str, Any]] = {}
+    for row in roster_rows:
+        user = row.get("user") if isinstance(row.get("user"), Mapping) else {}
+        personnel = _normalize_id(user.get("personnelNumber"))
+        if not personnel:
+            continue
+
+        flights = row.get("flights")
+        has_scheduled_flights = isinstance(flights, list) and len(flights) > 0
+        if has_scheduled_flights:
+            continue
+
+        entries = row.get("entries") if isinstance(row.get("entries"), list) else []
+        has_positioning_entry = any(
+            isinstance(entry, Mapping) and _normalize_status(entry.get("type")) == "P" for entry in entries
+        )
+        if not has_positioning_entry:
+            continue
+
+
+        first_name = str(user.get("firstName") or "").strip()
+        last_name = str(user.get("lastName") or "").strip()
+        name = " ".join(part for part in (first_name, last_name) if part).strip()
+        if not name:
+            name = str(user.get("logName") or user.get("name") or user.get("email") or personnel).strip()
+
+        pilots_by_personnel[personnel] = {
+            "person_id": _normalize_id(
+                user.get("id")
+                or user.get("userId")
+                or user.get("personId")
+                or user.get("internalId")
+                or user.get("externalReference")
+            ),
+            "crew_lookup_id": _normalize_id(user.get("internalId"))
+            or _normalize_id(user.get("id") or user.get("userId") or user.get("personId")),
+            "personnel": personnel,
+            "trigram": _normalize_id(user.get("trigram") or user.get("acronym")),
+            "name": name or "Unknown pilot",
+            "first_name": first_name or None,
+            "last_name": last_name or None,
+            "role": _normalize_status(
+                user.get("pilotRole") or user.get("role") or user.get("rank") or user.get("function")
+            )
+            or None,
+            "home_base_airport": _extract_home_airport_icao(user) or _extract_home_airport_icao(row),
+        }
+
+    return pilots_by_personnel
 
 
 def _find_positioning_event_for_leg(
@@ -535,14 +590,25 @@ def _find_positioning_event_for_leg(
     if not matching:
         return None
 
+    def _prefer_duty_end(candidates: Sequence[Mapping[str, Any]]) -> Optional[Mapping[str, Any]]:
+        duty_ending = [event for event in candidates if bool(event.get("ends_duty_period"))]
+        if duty_ending:
+            return duty_ending[0]
+        return candidates[0] if candidates else None
+
     if isinstance(arrival_utc, datetime):
         after_arrival = [
             event
             for event in matching
             if isinstance(event.get("from_utc"), datetime) and event["from_utc"] >= arrival_utc
         ]
-        if after_arrival:
-            return after_arrival[0]
+        preferred = _prefer_duty_end(after_arrival)
+        if preferred is not None:
+            return preferred
+
+    preferred = _prefer_duty_end(matching)
+    if preferred is not None:
+        return preferred
     return matching[0]
 
 
@@ -588,6 +654,7 @@ def compute_hotac_coverage(
     roster_window_end = roster_window_start + timedelta(days=1)
     roster_events_by_personnel: Dict[str, List[Dict[str, Any]]] = {}
     roster_home_base_by_personnel: Dict[str, str] = {}
+    roster_positioning_only_pilots: Dict[str, Dict[str, Any]] = {}
     troubleshooting_rows: List[Dict[str, Any]] = []
     should_fetch_roster = roster_fetcher is not None or bool(config.api_token or config.auth_header)
     if should_fetch_roster:
@@ -595,6 +662,7 @@ def compute_hotac_coverage(
             roster_rows = fetch_roster(config, roster_window_start, roster_window_end)
             roster_events_by_personnel = _extract_roster_positioning_events(roster_rows)
             roster_home_base_by_personnel = _extract_roster_home_base_airports(roster_rows)
+            roster_positioning_only_pilots = _extract_roster_positioning_only_pilots(roster_rows)
         except Exception as exc:
             troubleshooting_rows.append(
                 {
@@ -700,6 +768,83 @@ def compute_hotac_coverage(
                     "_sort_key": sort_key,
                 }
 
+    for personnel, pilot in roster_positioning_only_pilots.items():
+        positioning_events = roster_events_by_personnel.get(personnel, [])
+        if not positioning_events:
+            continue
+
+        duty_ending_events = [event for event in positioning_events if bool(event.get("ends_duty_period"))]
+        final_event = duty_ending_events[-1] if duty_ending_events else positioning_events[-1]
+        final_from = str(final_event.get("from_airport") or "").strip().upper()
+        final_departure = final_event.get("from_utc")
+        sort_key = (
+            final_departure if isinstance(final_departure, datetime) else datetime.min.replace(tzinfo=UTC),
+            final_departure if isinstance(final_departure, datetime) else datetime.min.replace(tzinfo=UTC),
+            len(fetched_flights),
+        )
+
+        candidate_leg = {
+            "pilot": pilot,
+            "flight_id": None,
+            "flight_number": "",
+            "tail": "",
+            "end_airport": final_from,
+            "dep_utc": final_departure,
+            "arr_utc": final_departure,
+            "ends_duty_period": bool(final_event.get("ends_duty_period")),
+            "_sort_key": sort_key,
+        }
+
+        pilot_key = _normalize_id(pilot.get("person_id")) or f"personnel::{personnel}"
+        matching_existing_key = None
+        for existing_key, existing_leg in pilot_last_leg.items():
+            existing_personnel = _normalize_id(existing_leg.get("pilot", {}).get("personnel"))
+            if existing_personnel and existing_personnel == personnel:
+                matching_existing_key = existing_key
+                break
+
+        if matching_existing_key is not None:
+            existing_leg = pilot_last_leg[matching_existing_key]
+            existing_dep = existing_leg.get("dep_utc")
+            candidate_dep = candidate_leg.get("dep_utc")
+            should_prefer_candidate = candidate_leg["_sort_key"] >= existing_leg.get(
+                "_sort_key", (datetime.min.replace(tzinfo=UTC),) * 3
+            )
+            if (
+                not should_prefer_candidate
+                and bool(candidate_leg.get("ends_duty_period"))
+                and isinstance(candidate_dep, datetime)
+                and isinstance(existing_dep, datetime)
+                and existing_dep > candidate_dep
+            ):
+                should_prefer_candidate = True
+
+            if should_prefer_candidate:
+                pilot_last_leg[matching_existing_key] = candidate_leg
+            continue
+
+        existing_leg_for_key = pilot_last_leg.get(pilot_key)
+        if existing_leg_for_key is not None:
+            existing_dep = existing_leg_for_key.get("dep_utc")
+            candidate_dep = candidate_leg.get("dep_utc")
+            should_prefer_candidate = candidate_leg["_sort_key"] >= existing_leg_for_key.get(
+                "_sort_key", (datetime.min.replace(tzinfo=UTC),) * 3
+            )
+            if (
+                not should_prefer_candidate
+                and bool(candidate_leg.get("ends_duty_period"))
+                and isinstance(candidate_dep, datetime)
+                and isinstance(existing_dep, datetime)
+                and existing_dep > candidate_dep
+            ):
+                should_prefer_candidate = True
+
+            if should_prefer_candidate:
+                pilot_last_leg[pilot_key] = candidate_leg
+            continue
+
+        pilot_last_leg[pilot_key] = candidate_leg
+
     rows: List[Dict[str, Any]] = []
 
     for leg in pilot_last_leg.values():
@@ -716,7 +861,70 @@ def compute_hotac_coverage(
         notes = "Unable to evaluate HOTAC"
 
         if flight_id is None:
-            notes = "Missing flight ID for final leg"
+            status = "Missing"
+            notes = "No scheduled flight; evaluating roster positioning note only"
+
+            end_airport = str(leg.get("end_airport") or "").strip().upper()
+            pilot_personnel = _normalize_id(pilot.get("personnel"))
+            positioning_events = roster_events_by_personnel.get(pilot_personnel or "", [])
+            positioning_event = _find_positioning_event_for_leg(
+                positioning_events,
+                end_airport,
+                leg.get("arr_utc"),
+            )
+            reposition_to = ""
+            if positioning_event:
+                reposition_from = str(positioning_event.get("from_airport") or "").strip().upper()
+                reposition_to = str(positioning_event.get("to_airport") or "").strip().upper()
+                if reposition_from and reposition_to:
+                    positioning_route = f"{reposition_from}-{reposition_to}"
+                elif reposition_to:
+                    positioning_route = f"{end_airport}-{reposition_to}"
+
+                should_lookup_roster_only_home_base = (
+                    reposition_to
+                    and (not profile_home_base_airport or profile_home_base_airport != reposition_to)
+                    and (_is_canadian_airport(end_airport) or _is_canadian_airport(reposition_to))
+                )
+                if should_lookup_roster_only_home_base:
+                    lookup_ids: List[str] = []
+                    pilot_crew_lookup_id = _normalize_id(pilot.get("crew_lookup_id"))
+                    pilot_person_id = _normalize_id(pilot.get("person_id"))
+                    pilot_personnel = _normalize_id(pilot.get("personnel"))
+                    for candidate in (pilot_crew_lookup_id, pilot_person_id, pilot_personnel):
+                        if candidate and candidate not in lookup_ids:
+                            lookup_ids.append(candidate)
+
+                    for lookup_id in lookup_ids:
+                        try:
+                            crew_member_payload = fetch_crew_member_details(config, lookup_id)
+                            looked_up_home_airport = _extract_home_airport_icao(crew_member_payload)
+                            if looked_up_home_airport:
+                                profile_home_base_airport = looked_up_home_airport
+                                break
+                        except Exception as exc:
+                            troubleshooting_rows.append(
+                                {
+                                    "Flight ID": "",
+                                    "Tail": leg.get("tail") or "",
+                                    "Issue": "Unable to fetch pilot home airport",
+                                    "Details": f"lookup_id={lookup_id}: {exc}",
+                                }
+                            )
+
+                hotel_note = _extract_hotel_from_positioning_notes(str(positioning_event.get("notes") or ""))
+                if profile_home_base_airport and reposition_to and reposition_to == profile_home_base_airport:
+                    status = "Home base"
+                    notes = f"Positioned to home base ({reposition_to})"
+                elif hotel_note:
+                    status = "Booked"
+                    notes = f"Positioning hotel note: {hotel_note}"
+                elif reposition_to:
+                    notes = f"Positioned {end_airport} → {reposition_to}; hotel required at {reposition_to}"
+                else:
+                    notes = "Positioning event found without destination airport"
+            else:
+                notes = "No matching roster positioning event found"
         else:
             try:
                 services_payload = fetch_services(config, flight_id)

@@ -976,3 +976,539 @@ def test_compute_hotac_coverage_uses_utc_1200_roster_window() -> None:
 
     assert captured["from"] == "2026-02-26T12:00:00+00:00"
     assert captured["to"] == "2026-02-27T12:00:00+00:00"
+
+
+def test_compute_hotac_coverage_adds_positioning_only_roster_pilot_with_hotel_note() -> None:
+    flights = []
+
+    def fake_services(_config, _flight_id):
+        raise AssertionError("services fetch should not happen for roster-only pilot rows")
+
+    def fake_roster(_config, _from_time, _to_time):
+        return [
+            {
+                "user": {
+                    "id": "600",
+                    "personnelNumber": "600",
+                    "firstName": "Row",
+                    "lastName": "Only",
+                    "pilot": True,
+                },
+                "entries": [
+                    {
+                        "type": "P",
+                        "from": 1772139600000,
+                        "to": 1772150400000,
+                        "fromAirport": {"icao": "CYVR"},
+                        "toAirport": {"icao": "CYYZ"},
+                        "notes": "Flight: ...\nHotel: Doubletree Toronto Airport/ CONF#54590540",
+                    }
+                ],
+                "flights": [],
+            }
+        ]
+
+    _display_df, raw_df, _troubleshooting_df = compute_hotac_coverage(
+        Fl3xxApiConfig(),
+        date(2026, 2, 26),
+        flights=flights,
+        services_fetcher=fake_services,
+        roster_fetcher=fake_roster,
+    )
+
+    row = raw_df.iloc[0]
+    assert row["Pilot"] == "Row Only"
+    assert row["Flight ID"] == ""
+    assert row["End airport"] == "CYVR"
+    assert row["Positioning route"] == "CYVR-CYYZ"
+    assert row["HOTAC status"] == "Booked"
+    assert "Positioning hotel note" in row["Notes"]
+
+
+
+
+
+
+def test_compute_hotac_coverage_roster_only_positioning_to_home_base_marks_home_base() -> None:
+    def fake_services(_config, _flight_id):
+        raise AssertionError("services fetch should not happen for roster-only pilot rows")
+
+    def fake_roster(_config, _from_time, _to_time):
+        return [
+            {
+                "user": {
+                    "id": "700",
+                    "personnelNumber": "700",
+                    "firstName": "Home",
+                    "lastName": "Bound",
+                    "homeAirport": {"icao": "CYYC"},
+                },
+                "entries": [
+                    {
+                        "type": "P",
+                        "from": 1772139600000,
+                        "to": 1772150400000,
+                        "fromAirport": {"icao": "CYVR"},
+                        "toAirport": {"icao": "CYYC"},
+                        "notes": "Hotel: Should not matter",
+                    }
+                ],
+                "flights": [],
+            }
+        ]
+
+    _display_df, raw_df, _troubleshooting_df = compute_hotac_coverage(
+        Fl3xxApiConfig(),
+        date(2026, 2, 26),
+        flights=[],
+        services_fetcher=fake_services,
+        roster_fetcher=fake_roster,
+    )
+
+    row = raw_df.iloc[0]
+    assert row["Pilot"] == "Home Bound"
+    assert row["Positioning route"] == "CYVR-CYYC"
+    assert row["HOTAC status"] == "Home base"
+    assert "Positioned to home base" in row["Notes"]
+
+
+def test_compute_hotac_coverage_roster_only_home_base_uses_crew_member_lookup() -> None:
+    calls = {"count": 0}
+
+    def fake_services(_config, _flight_id):
+        raise AssertionError("services fetch should not happen for roster-only pilot rows")
+
+    def fake_roster(_config, _from_time, _to_time):
+        return [
+            {
+                "user": {
+                    "id": "710",
+                    "personnelNumber": "710",
+                    "firstName": "Lookup",
+                    "lastName": "Pilot",
+                },
+                "entries": [
+                    {
+                        "type": "P",
+                        "from": 1772139600000,
+                        "to": 1772150400000,
+                        "fromAirport": {"icao": "CYVR"},
+                        "toAirport": {"icao": "CYUL"},
+                    }
+                ],
+                "flights": [],
+            }
+        ]
+
+    def fake_crew_member(_config, crew_id):
+        calls["count"] += 1
+        assert crew_id == "710"
+        return {"homeAirport": {"icao": "CYUL"}}
+
+    _display_df, raw_df, _troubleshooting_df = compute_hotac_coverage(
+        Fl3xxApiConfig(),
+        date(2026, 2, 26),
+        flights=[],
+        services_fetcher=fake_services,
+        crew_member_fetcher=fake_crew_member,
+        roster_fetcher=fake_roster,
+    )
+
+    row = raw_df.iloc[0]
+    assert calls["count"] == 1
+    assert row["Pilot"] == "Lookup Pilot"
+    assert row["Profile home base"] == "CYUL"
+    assert row["Positioning route"] == "CYVR-CYUL"
+    assert row["HOTAC status"] == "Home base"
+    assert "Positioned to home base" in row["Notes"]
+
+
+
+
+def test_compute_hotac_coverage_roster_only_home_base_lookup_falls_back_to_personnel() -> None:
+    looked_up_ids = []
+
+    def fake_services(_config, _flight_id):
+        raise AssertionError("services fetch should not happen for roster-only pilot rows")
+
+    def fake_roster(_config, _from_time, _to_time):
+        return [
+            {
+                "user": {
+                    "personnelNumber": "9001",
+                    "firstName": "Fallback",
+                    "lastName": "Personnel",
+                },
+                "entries": [
+                    {
+                        "type": "P",
+                        "from": 1772139600000,
+                        "to": 1772150400000,
+                        "fromAirport": {"icao": "CYVR"},
+                        "toAirport": {"icao": "CYUL"},
+                    }
+                ],
+                "flights": [],
+            }
+        ]
+
+    def fake_crew_member(_config, crew_id):
+        looked_up_ids.append(crew_id)
+        assert crew_id == "9001"
+        return {"homeAirport": {"icao": "CYUL"}}
+
+    _display_df, raw_df, _troubleshooting_df = compute_hotac_coverage(
+        Fl3xxApiConfig(),
+        date(2026, 2, 26),
+        flights=[],
+        services_fetcher=fake_services,
+        crew_member_fetcher=fake_crew_member,
+        roster_fetcher=fake_roster,
+    )
+
+    row = raw_df.iloc[0]
+    assert looked_up_ids == ["9001"]
+    assert row["HOTAC status"] == "Home base"
+    assert row["Profile home base"] == "CYUL"
+
+
+def test_compute_hotac_coverage_roster_only_home_base_lookup_uses_internal_id() -> None:
+    looked_up_ids = []
+
+    def fake_services(_config, _flight_id):
+        raise AssertionError("services fetch should not happen for roster-only pilot rows")
+
+    def fake_roster(_config, _from_time, _to_time):
+        return [
+            {
+                "user": {
+                    "internalId": 833149,
+                    "personnelNumber": "1340",
+                    "firstName": "Ryan",
+                    "lastName": "Neumann",
+                    "acronym": "RSN",
+                },
+                "entries": [
+                    {
+                        "type": "P",
+                        "from": 1773146700000,
+                        "to": 1773159420000,
+                        "fromAirport": {"icao": "CYUL"},
+                        "toAirport": {"icao": "CYYZ"},
+                        "endsDutyPeriod": True,
+                    }
+                ],
+                "flights": [],
+            }
+        ]
+
+    def fake_crew_member(_config, crew_id):
+        looked_up_ids.append(str(crew_id))
+        if str(crew_id) == "833149":
+            return {"homeAirport": {"icao": "CYYZ"}}
+        raise AssertionError("lookup should use internalId before personnel")
+
+    _display_df, raw_df, troubleshooting_df = compute_hotac_coverage(
+        Fl3xxApiConfig(),
+        date(2026, 3, 10),
+        flights=[],
+        services_fetcher=fake_services,
+        crew_member_fetcher=fake_crew_member,
+        roster_fetcher=fake_roster,
+    )
+
+    row = raw_df.iloc[0]
+    assert looked_up_ids == ["833149"]
+    assert row["Pilot"] == "Ryan Neumann"
+    assert row["Personnel/Trigram"] == "1340"
+    assert row["Positioning route"] == "CYUL-CYYZ"
+    assert row["HOTAC status"] == "Home base"
+    assert troubleshooting_df.empty
+
+
+def test_compute_hotac_coverage_roster_only_home_base_lookup_prefers_internal_id_over_id() -> None:
+    looked_up_ids = []
+
+    def fake_services(_config, _flight_id):
+        raise AssertionError("services fetch should not happen for roster-only pilot rows")
+
+    def fake_roster(_config, _from_time, _to_time):
+        return [
+            {
+                "user": {
+                    "id": "legacy-id",
+                    "internalId": 833149,
+                    "personnelNumber": "1340",
+                    "firstName": "Ryan",
+                    "lastName": "Neumann",
+                },
+                "entries": [
+                    {
+                        "type": "P",
+                        "from": 1773146700000,
+                        "to": 1773159420000,
+                        "fromAirport": {"icao": "CYUL"},
+                        "toAirport": {"icao": "CYYZ"},
+                        "endsDutyPeriod": True,
+                    }
+                ],
+                "flights": [],
+            }
+        ]
+
+    def fake_crew_member(_config, crew_id):
+        looked_up_ids.append(str(crew_id))
+        if str(crew_id) == "833149":
+            return {"homeAirport": {"icao": "CYYZ"}}
+        raise AssertionError("lookup should prefer internalId")
+
+    _display_df, raw_df, troubleshooting_df = compute_hotac_coverage(
+        Fl3xxApiConfig(),
+        date(2026, 3, 10),
+        flights=[],
+        services_fetcher=fake_services,
+        crew_member_fetcher=fake_crew_member,
+        roster_fetcher=fake_roster,
+    )
+
+    row = raw_df.iloc[0]
+    assert looked_up_ids == ["833149"]
+    assert row["HOTAC status"] == "Home base"
+    assert troubleshooting_df.empty
+def test_compute_hotac_coverage_roster_only_prefers_duty_ending_positioning_event() -> None:
+    def fake_services(_config, _flight_id):
+        raise AssertionError("services fetch should not happen for roster-only pilot rows")
+
+    def fake_roster(_config, _from_time, _to_time):
+        return [
+            {
+                "user": {
+                    "id": "720",
+                    "personnelNumber": "720",
+                    "firstName": "Duty",
+                    "lastName": "End",
+                },
+                "entries": [
+                    {
+                        "type": "P",
+                        "from": 1772139600000,
+                        "to": 1772150400000,
+                        "fromAirport": {"icao": "CYVR"},
+                        "toAirport": {"icao": "CYEG"},
+                        "endsDutyPeriod": False,
+                    },
+                    {
+                        "type": "P",
+                        "from": 1772161200000,
+                        "to": 1772172000000,
+                        "fromAirport": {"icao": "CYVR"},
+                        "toAirport": {"icao": "CYUL"},
+                        "endsDutyPeriod": True,
+                    },
+                ],
+                "flights": [],
+            }
+        ]
+
+    def fake_crew_member(_config, crew_id):
+        assert crew_id == "720"
+        return {"homeAirport": {"icao": "CYUL"}}
+
+    _display_df, raw_df, _troubleshooting_df = compute_hotac_coverage(
+        Fl3xxApiConfig(),
+        date(2026, 2, 26),
+        flights=[],
+        services_fetcher=fake_services,
+        crew_member_fetcher=fake_crew_member,
+        roster_fetcher=fake_roster,
+    )
+
+    row = raw_df.iloc[0]
+    assert row["Positioning route"] == "CYVR-CYUL"
+    assert row["End airport"] == "CYVR"
+    assert row["HOTAC status"] == "Home base"
+
+
+def test_compute_hotac_coverage_replaces_earlier_scheduled_leg_with_later_roster_positioning() -> None:
+    flights = [
+        {
+            "flightId": 150,
+            "tail": "C-GSCH",
+            "flightNumber": "AS150",
+            "departureTimeUtc": "2026-03-10T06:00:00Z",
+            "arrivalTimeUtc": "2026-03-10T08:00:00Z",
+            "arrivalAirport": "CYUL",
+        }
+    ]
+
+    def fake_crew(_config, _flight_id):
+        return [{"role": "CMD", "id": "legacy-id", "personnelNumber": "1340", "firstName": "Ryan", "lastName": "Neumann"}]
+
+    def fake_services(_config, _flight_id):
+        return {"arrivalHotac": []}
+
+    def fake_roster(_config, _from_time, _to_time):
+        return [
+            {
+                "user": {
+                    "internalId": 833149,
+                    "personnelNumber": "1340",
+                    "firstName": "Ryan",
+                    "lastName": "Neumann",
+                },
+                "entries": [
+                    {
+                        "type": "P",
+                        "from": 1773146700000,
+                        "to": 1773159420000,
+                        "fromAirport": {"icao": "CYUL"},
+                        "toAirport": {"icao": "CYYZ"},
+                        "endsDutyPeriod": True,
+                        "notes": "Hotel: Hilton Garden Inn",
+                    }
+                ],
+                "flights": [],
+            }
+        ]
+
+    _display_df, raw_df, _troubleshooting_df = compute_hotac_coverage(
+        Fl3xxApiConfig(),
+        date(2026, 3, 10),
+        flights=flights,
+        crew_fetcher=fake_crew,
+        services_fetcher=fake_services,
+        roster_fetcher=fake_roster,
+    )
+
+    assert len(raw_df) == 1
+    row = raw_df.iloc[0]
+    assert row["Pilot"] == "Ryan Neumann"
+    assert row["Flight ID"] == ""
+    assert row["Positioning route"] == "CYUL-CYYZ"
+    assert row["HOTAC status"] == "Booked"
+
+
+def test_compute_hotac_coverage_prefers_roster_duty_end_over_later_next_day_scheduled_leg() -> None:
+    flights = [
+        {
+            "flightId": 160,
+            "tail": "C-GNXT",
+            "flightNumber": "AS160",
+            "departureTimeUtc": "2026-03-11T14:00:00Z",
+            "arrivalTimeUtc": "2026-03-11T16:00:00Z",
+            "arrivalAirport": "CYVR",
+        }
+    ]
+
+    def fake_crew(_config, _flight_id):
+        return [{"role": "CMD", "id": "legacy-id", "personnelNumber": "1340", "firstName": "Ryan", "lastName": "Neumann"}]
+
+    def fake_services(_config, _flight_id):
+        return {"arrivalHotac": []}
+
+    def fake_roster(_config, _from_time, _to_time):
+        return [
+            {
+                "user": {
+                    "internalId": 833149,
+                    "personnelNumber": "1340",
+                    "firstName": "Ryan",
+                    "lastName": "Neumann",
+                },
+                "entries": [
+                    {
+                        "type": "P",
+                        "from": 1773146700000,
+                        "to": 1773159420000,
+                        "fromAirport": {"icao": "CYUL"},
+                        "toAirport": {"icao": "CYYZ"},
+                        "endsDutyPeriod": True,
+                        "notes": "Hotel: HILTON GARDEN INN YYZ",
+                    }
+                ],
+                "flights": [],
+            }
+        ]
+
+    _display_df, raw_df, _troubleshooting_df = compute_hotac_coverage(
+        Fl3xxApiConfig(),
+        date(2026, 3, 10),
+        flights=flights,
+        crew_fetcher=fake_crew,
+        services_fetcher=fake_services,
+        roster_fetcher=fake_roster,
+    )
+
+    assert len(raw_df) == 1
+    row = raw_df.iloc[0]
+    assert row["Pilot"] == "Ryan Neumann"
+    assert row["Flight ID"] == ""
+    assert row["Positioning route"] == "CYUL-CYYZ"
+    assert row["HOTAC status"] == "Booked"
+def test_compute_hotac_coverage_includes_positioning_only_row_when_role_not_explicit() -> None:
+    def fake_roster(_config, _from_time, _to_time):
+        return [
+            {
+                "user": {
+                    "id": "801",
+                    "personnelNumber": "801",
+                    "firstName": "Unknown",
+                    "lastName": "Role",
+                },
+                "entries": [
+                    {
+                        "type": "P",
+                        "from": 1772139600000,
+                        "to": 1772150400000,
+                        "fromAirport": {"icao": "CYVR"},
+                        "toAirport": {"icao": "CYYZ"},
+                    }
+                ],
+                "flights": [],
+            }
+        ]
+
+    _display_df, raw_df, _troubleshooting_df = compute_hotac_coverage(
+        Fl3xxApiConfig(),
+        date(2026, 2, 26),
+        flights=[],
+        roster_fetcher=fake_roster,
+    )
+
+    assert len(raw_df) == 1
+    assert raw_df.iloc[0]["Pilot"] == "Unknown Role"
+def test_compute_hotac_coverage_includes_positioning_only_rows_based_on_roster_activity() -> None:
+    def fake_roster(_config, _from_time, _to_time):
+        return [
+            {
+                "user": {
+                    "id": "800",
+                    "personnelNumber": "800",
+                    "firstName": "Cabin",
+                    "lastName": "Crew",
+                    "pilot": False,
+                },
+                "entries": [
+                    {
+                        "type": "P",
+                        "from": 1772139600000,
+                        "to": 1772150400000,
+                        "fromAirport": {"icao": "CYVR"},
+                        "toAirport": {"icao": "CYYZ"},
+                    }
+                ],
+                "flights": [],
+            }
+        ]
+
+    _display_df, raw_df, _troubleshooting_df = compute_hotac_coverage(
+        Fl3xxApiConfig(),
+        date(2026, 2, 26),
+        flights=[],
+        roster_fetcher=fake_roster,
+    )
+
+    assert len(raw_df) == 1
+    row = raw_df.iloc[0]
+    assert row["Pilot"] == "Cabin Crew"
+    assert row["Positioning route"] == "CYVR-CYYZ"
