@@ -768,17 +768,7 @@ def compute_hotac_coverage(
                     "_sort_key": sort_key,
                 }
 
-    roster_personnel_with_scheduled_legs = {
-        _normalize_id(leg.get("pilot", {}).get("personnel"))
-        for leg in pilot_last_leg.values()
-        if _normalize_id(leg.get("pilot", {}).get("personnel"))
-    }
-
     for personnel, pilot in roster_positioning_only_pilots.items():
-        pilot_key = _normalize_id(pilot.get("person_id")) or f"personnel::{personnel}"
-        if pilot_key in pilot_last_leg or personnel in roster_personnel_with_scheduled_legs:
-            continue
-
         positioning_events = roster_events_by_personnel.get(personnel, [])
         if not positioning_events:
             continue
@@ -793,7 +783,7 @@ def compute_hotac_coverage(
             len(fetched_flights),
         )
 
-        pilot_last_leg[pilot_key] = {
+        candidate_leg = {
             "pilot": pilot,
             "flight_id": None,
             "flight_number": "",
@@ -803,6 +793,28 @@ def compute_hotac_coverage(
             "arr_utc": final_departure,
             "_sort_key": sort_key,
         }
+
+        pilot_key = _normalize_id(pilot.get("person_id")) or f"personnel::{personnel}"
+        matching_existing_key = None
+        for existing_key, existing_leg in pilot_last_leg.items():
+            existing_personnel = _normalize_id(existing_leg.get("pilot", {}).get("personnel"))
+            if existing_personnel and existing_personnel == personnel:
+                matching_existing_key = existing_key
+                break
+
+        if matching_existing_key is not None:
+            existing_leg = pilot_last_leg[matching_existing_key]
+            if candidate_leg["_sort_key"] >= existing_leg.get("_sort_key", (datetime.min.replace(tzinfo=UTC),) * 3):
+                pilot_last_leg[matching_existing_key] = candidate_leg
+            continue
+
+        existing_leg_for_key = pilot_last_leg.get(pilot_key)
+        if existing_leg_for_key is not None:
+            if candidate_leg["_sort_key"] >= existing_leg_for_key.get("_sort_key", (datetime.min.replace(tzinfo=UTC),) * 3):
+                pilot_last_leg[pilot_key] = candidate_leg
+            continue
+
+        pilot_last_leg[pilot_key] = candidate_leg
 
     rows: List[Dict[str, Any]] = []
 
@@ -840,7 +852,12 @@ def compute_hotac_coverage(
                 elif reposition_to:
                     positioning_route = f"{end_airport}-{reposition_to}"
 
-                if reposition_to and (not profile_home_base_airport or profile_home_base_airport != reposition_to):
+                should_lookup_roster_only_home_base = (
+                    reposition_to
+                    and (not profile_home_base_airport or profile_home_base_airport != reposition_to)
+                    and (_is_canadian_airport(end_airport) or _is_canadian_airport(reposition_to))
+                )
+                if should_lookup_roster_only_home_base:
                     lookup_ids: List[str] = []
                     pilot_crew_lookup_id = _normalize_id(pilot.get("crew_lookup_id"))
                     pilot_person_id = _normalize_id(pilot.get("person_id"))
