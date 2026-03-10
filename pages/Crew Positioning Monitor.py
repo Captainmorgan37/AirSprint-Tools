@@ -7,13 +7,16 @@ import json
 import pandas as pd
 import streamlit as st
 
+from Home import configure_page, password_gate, render_sidebar
 from crew_positioning import build_positioning_statuses
 from fl3xx_api import fetch_staff_roster
 from flight_leg_utils import FlightDataError, build_fl3xx_api_config
 from roster_pull import filter_active_roster_rows, parse_roster_payload
 
 
-st.set_page_config(page_title="Crew Positioning Monitor", layout="wide")
+configure_page(page_title="Crew Positioning Monitor", layout="wide")
+password_gate()
+render_sidebar()
 st.title("Crew Positioning Monitor")
 st.caption(
     "Prototype: derive crew positioning actions from FL3XX roster pulls so TC can book from a single queue."
@@ -46,7 +49,7 @@ if source == "Live FL3XX API":
     except Exception:
         api_settings = None
 
-    if not isinstance(api_settings, dict):
+    if not api_settings:
         st.error("Missing FL3XX API credentials in Streamlit secrets under [fl3xx_api].")
         st.stop()
 
