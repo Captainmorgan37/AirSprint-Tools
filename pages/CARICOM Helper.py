@@ -443,7 +443,7 @@ def _tail_to_callsign(tail: Any) -> str:
         "CFSJR": "ASP877",
         "CFASQ": "ASP821",
         "CFSDO": "ASP836",
-        "CFSDN": "ASP869",
+        "CFASN": "ASP869",
         "CFASP": "ASP519",
         "CFASR": "ASP524",
         "CFASW": "ASP503",
