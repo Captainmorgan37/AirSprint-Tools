@@ -650,7 +650,7 @@ def compute_hotac_coverage(
         lambda conf, from_time, to_time: fetch_staff_roster(conf, from_time=from_time, to_time=to_time)
     )
 
-    roster_window_start = datetime.combine(target_date, datetime.min.time(), tzinfo=UTC) + timedelta(hours=12)
+    roster_window_start = datetime.combine(target_date, datetime.min.time(), tzinfo=UTC) + timedelta(hours=8)
     roster_window_end = roster_window_start + timedelta(days=1)
     roster_events_by_personnel: Dict[str, List[Dict[str, Any]]] = {}
     roster_home_base_by_personnel: Dict[str, str] = {}

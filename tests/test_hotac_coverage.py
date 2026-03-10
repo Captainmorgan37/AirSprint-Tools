@@ -940,7 +940,7 @@ def test_compute_hotac_coverage_uses_positioning_roster_to_home_base() -> None:
     assert "Positioned to home base" in row["Notes"]
 
 
-def test_compute_hotac_coverage_uses_utc_1200_roster_window() -> None:
+def test_compute_hotac_coverage_uses_utc_0800_roster_window() -> None:
     flights = [
         {
             "flightId": 130,
@@ -974,8 +974,8 @@ def test_compute_hotac_coverage_uses_utc_1200_roster_window() -> None:
         roster_fetcher=fake_roster,
     )
 
-    assert captured["from"] == "2026-02-26T12:00:00+00:00"
-    assert captured["to"] == "2026-02-27T12:00:00+00:00"
+    assert captured["from"] == "2026-02-26T08:00:00+00:00"
+    assert captured["to"] == "2026-02-27T08:00:00+00:00"
 
 
 def test_compute_hotac_coverage_adds_positioning_only_roster_pilot_with_hotel_note() -> None:
