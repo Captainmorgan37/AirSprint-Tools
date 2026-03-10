@@ -553,9 +553,17 @@ def _extract_roster_positioning_only_pilots(
             name = str(user.get("logName") or user.get("name") or user.get("email") or personnel).strip()
 
         pilots_by_personnel[personnel] = {
-            "person_id": _normalize_id(user.get("id") or user.get("userId") or user.get("personId")),
+            "person_id": _normalize_id(
+                user.get("id")
+                or user.get("userId")
+                or user.get("personId")
+                or user.get("internalId")
+                or user.get("externalReference")
+            ),
+            "crew_lookup_id": _normalize_id(user.get("internalId"))
+            or _normalize_id(user.get("id") or user.get("userId") or user.get("personId")),
             "personnel": personnel,
-            "trigram": _normalize_id(user.get("trigram")),
+            "trigram": _normalize_id(user.get("trigram") or user.get("acronym")),
             "name": name or "Unknown pilot",
             "first_name": first_name or None,
             "last_name": last_name or None,
@@ -834,12 +842,12 @@ def compute_hotac_coverage(
 
                 if reposition_to and (not profile_home_base_airport or profile_home_base_airport != reposition_to):
                     lookup_ids: List[str] = []
+                    pilot_crew_lookup_id = _normalize_id(pilot.get("crew_lookup_id"))
                     pilot_person_id = _normalize_id(pilot.get("person_id"))
                     pilot_personnel = _normalize_id(pilot.get("personnel"))
-                    if pilot_person_id:
-                        lookup_ids.append(pilot_person_id)
-                    if pilot_personnel and pilot_personnel not in lookup_ids:
-                        lookup_ids.append(pilot_personnel)
+                    for candidate in (pilot_crew_lookup_id, pilot_person_id, pilot_personnel):
+                        if candidate and candidate not in lookup_ids:
+                            lookup_ids.append(candidate)
 
                     for lookup_id in lookup_ids:
                         try:

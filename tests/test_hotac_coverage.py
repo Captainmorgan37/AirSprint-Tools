@@ -1170,6 +1170,111 @@ def test_compute_hotac_coverage_roster_only_home_base_lookup_falls_back_to_perso
     assert looked_up_ids == ["9001"]
     assert row["HOTAC status"] == "Home base"
     assert row["Profile home base"] == "CYUL"
+
+
+def test_compute_hotac_coverage_roster_only_home_base_lookup_uses_internal_id() -> None:
+    looked_up_ids = []
+
+    def fake_services(_config, _flight_id):
+        raise AssertionError("services fetch should not happen for roster-only pilot rows")
+
+    def fake_roster(_config, _from_time, _to_time):
+        return [
+            {
+                "user": {
+                    "internalId": 833149,
+                    "personnelNumber": "1340",
+                    "firstName": "Ryan",
+                    "lastName": "Neumann",
+                    "acronym": "RSN",
+                },
+                "entries": [
+                    {
+                        "type": "P",
+                        "from": 1773146700000,
+                        "to": 1773159420000,
+                        "fromAirport": {"icao": "CYUL"},
+                        "toAirport": {"icao": "CYYZ"},
+                        "endsDutyPeriod": True,
+                    }
+                ],
+                "flights": [],
+            }
+        ]
+
+    def fake_crew_member(_config, crew_id):
+        looked_up_ids.append(str(crew_id))
+        if str(crew_id) == "833149":
+            return {"homeAirport": {"icao": "CYYZ"}}
+        raise AssertionError("lookup should use internalId before personnel")
+
+    _display_df, raw_df, troubleshooting_df = compute_hotac_coverage(
+        Fl3xxApiConfig(),
+        date(2026, 3, 10),
+        flights=[],
+        services_fetcher=fake_services,
+        crew_member_fetcher=fake_crew_member,
+        roster_fetcher=fake_roster,
+    )
+
+    row = raw_df.iloc[0]
+    assert looked_up_ids == ["833149"]
+    assert row["Pilot"] == "Ryan Neumann"
+    assert row["Personnel/Trigram"] == "1340"
+    assert row["Positioning route"] == "CYUL-CYYZ"
+    assert row["HOTAC status"] == "Home base"
+    assert troubleshooting_df.empty
+
+
+def test_compute_hotac_coverage_roster_only_home_base_lookup_prefers_internal_id_over_id() -> None:
+    looked_up_ids = []
+
+    def fake_services(_config, _flight_id):
+        raise AssertionError("services fetch should not happen for roster-only pilot rows")
+
+    def fake_roster(_config, _from_time, _to_time):
+        return [
+            {
+                "user": {
+                    "id": "legacy-id",
+                    "internalId": 833149,
+                    "personnelNumber": "1340",
+                    "firstName": "Ryan",
+                    "lastName": "Neumann",
+                },
+                "entries": [
+                    {
+                        "type": "P",
+                        "from": 1773146700000,
+                        "to": 1773159420000,
+                        "fromAirport": {"icao": "CYUL"},
+                        "toAirport": {"icao": "CYYZ"},
+                        "endsDutyPeriod": True,
+                    }
+                ],
+                "flights": [],
+            }
+        ]
+
+    def fake_crew_member(_config, crew_id):
+        looked_up_ids.append(str(crew_id))
+        if str(crew_id) == "833149":
+            return {"homeAirport": {"icao": "CYYZ"}}
+        raise AssertionError("lookup should prefer internalId")
+
+    _display_df, raw_df, troubleshooting_df = compute_hotac_coverage(
+        Fl3xxApiConfig(),
+        date(2026, 3, 10),
+        flights=[],
+        services_fetcher=fake_services,
+        crew_member_fetcher=fake_crew_member,
+        roster_fetcher=fake_roster,
+    )
+
+    row = raw_df.iloc[0]
+    assert looked_up_ids == ["833149"]
+    assert row["HOTAC status"] == "Home base"
+    assert troubleshooting_df.empty
 def test_compute_hotac_coverage_roster_only_prefers_duty_ending_positioning_event() -> None:
     def fake_services(_config, _flight_id):
         raise AssertionError("services fetch should not happen for roster-only pilot rows")
