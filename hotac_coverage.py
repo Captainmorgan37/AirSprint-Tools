@@ -813,6 +813,24 @@ def compute_hotac_coverage(
                 elif reposition_to:
                     positioning_route = f"{end_airport}-{reposition_to}"
 
+                if reposition_to and pilot.get("person_id") and (
+                    not profile_home_base_airport or profile_home_base_airport != reposition_to
+                ):
+                    try:
+                        crew_member_payload = fetch_crew_member_details(config, str(pilot.get("person_id")))
+                        looked_up_home_airport = _extract_home_airport_icao(crew_member_payload)
+                        if looked_up_home_airport:
+                            profile_home_base_airport = looked_up_home_airport
+                    except Exception as exc:
+                        troubleshooting_rows.append(
+                            {
+                                "Flight ID": "",
+                                "Tail": leg.get("tail") or "",
+                                "Issue": "Unable to fetch pilot home airport",
+                                "Details": str(exc),
+                            }
+                        )
+
                 hotel_note = _extract_hotel_from_positioning_notes(str(positioning_event.get("notes") or ""))
                 if profile_home_base_airport and reposition_to and reposition_to == profile_home_base_airport:
                     status = "Home base"

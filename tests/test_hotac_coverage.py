@@ -1070,6 +1070,57 @@ def test_compute_hotac_coverage_roster_only_positioning_to_home_base_marks_home_
     assert row["Positioning route"] == "CYVR-CYYC"
     assert row["HOTAC status"] == "Home base"
     assert "Positioned to home base" in row["Notes"]
+
+
+def test_compute_hotac_coverage_roster_only_home_base_uses_crew_member_lookup() -> None:
+    calls = {"count": 0}
+
+    def fake_services(_config, _flight_id):
+        raise AssertionError("services fetch should not happen for roster-only pilot rows")
+
+    def fake_roster(_config, _from_time, _to_time):
+        return [
+            {
+                "user": {
+                    "id": "710",
+                    "personnelNumber": "710",
+                    "firstName": "Lookup",
+                    "lastName": "Pilot",
+                },
+                "entries": [
+                    {
+                        "type": "P",
+                        "from": 1772139600000,
+                        "to": 1772150400000,
+                        "fromAirport": {"icao": "CYVR"},
+                        "toAirport": {"icao": "CYUL"},
+                    }
+                ],
+                "flights": [],
+            }
+        ]
+
+    def fake_crew_member(_config, crew_id):
+        calls["count"] += 1
+        assert crew_id == "710"
+        return {"homeAirport": {"icao": "CYUL"}}
+
+    _display_df, raw_df, _troubleshooting_df = compute_hotac_coverage(
+        Fl3xxApiConfig(),
+        date(2026, 2, 26),
+        flights=[],
+        services_fetcher=fake_services,
+        crew_member_fetcher=fake_crew_member,
+        roster_fetcher=fake_roster,
+    )
+
+    row = raw_df.iloc[0]
+    assert calls["count"] == 1
+    assert row["Pilot"] == "Lookup Pilot"
+    assert row["Profile home base"] == "CYUL"
+    assert row["Positioning route"] == "CYVR-CYUL"
+    assert row["HOTAC status"] == "Home base"
+    assert "Positioned to home base" in row["Notes"]
 def test_compute_hotac_coverage_includes_positioning_only_row_when_role_not_explicit() -> None:
     def fake_roster(_config, _from_time, _to_time):
         return [
