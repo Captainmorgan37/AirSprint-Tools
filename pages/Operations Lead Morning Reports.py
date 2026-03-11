@@ -253,6 +253,27 @@ def _render_report_output(report: MorningReportResult):
                 _build_cj3_row_display(report.rows),
                 width="stretch",
             )
+        elif report.code == "16.1.13":
+            long_pos_rows = sorted(
+                [row for row in report.rows if row.get("is_long_pos")],
+                key=lambda row: row.get("departure_time") or "",
+            )
+            back_to_back_rows = sorted(
+                [row for row in report.rows if row.get("is_back_to_back_pos")],
+                key=lambda row: row.get("departure_time") or "",
+            )
+
+            st.markdown("##### POS flights ≥ 2:00")
+            if long_pos_rows:
+                st.dataframe(long_pos_rows, width="stretch")
+            else:
+                st.info("No POS flights at or above 2 hours were found.")
+
+            st.markdown("##### Back-to-back POS flights")
+            if back_to_back_rows:
+                st.dataframe(back_to_back_rows, width="stretch")
+            else:
+                st.info("No back-to-back POS flights were found.")
         else:
             st.dataframe(report.rows, width="stretch")
     else:

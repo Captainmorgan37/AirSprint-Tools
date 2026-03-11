@@ -101,3 +101,78 @@ def test_ocs_report_does_not_flag_pos_when_pax_between_legs():
     result = _build_ocs_report(rows)
 
     assert result.rows == []
+
+
+def test_ocs_report_disregards_placeholder_add_remove_lines():
+    rows = [
+        _row(
+            leg_id="L1",
+            tail="ADD CJ2+ EAST",
+            flight_type="POS",
+            dep="2024-05-01T08:00:00Z",
+            arr="2024-05-01T11:00:00Z",
+            booking="B1",
+        ),
+        _row(
+            leg_id="L2",
+            tail="REMOVE LINE",
+            flight_type="POS",
+            dep="2024-05-01T12:00:00Z",
+            arr="2024-05-01T15:00:00Z",
+            booking="B2",
+        ),
+    ]
+
+    result = _build_ocs_report(rows)
+
+    assert result.rows == []
+
+
+def test_ocs_report_disregards_back_to_back_pos_with_same_booking_reference():
+    rows = [
+        _row(
+            leg_id="L1",
+            tail="C-GAAA",
+            flight_type="POS",
+            dep="2024-05-01T08:00:00Z",
+            arr="2024-05-01T08:45:00Z",
+            booking="B1",
+        ),
+        _row(
+            leg_id="L2",
+            tail="C-GAAA",
+            flight_type="POS",
+            dep="2024-05-01T09:30:00Z",
+            arr="2024-05-01T10:15:00Z",
+            booking="B1",
+        ),
+    ]
+
+    result = _build_ocs_report(rows)
+
+    assert result.rows == []
+
+
+def test_ocs_report_rows_are_sorted_by_departure_time():
+    rows = [
+        _row(
+            leg_id="L2",
+            tail="C-GAAA",
+            flight_type="POS",
+            dep="2024-05-01T11:00:00Z",
+            arr="2024-05-01T13:10:00Z",
+            booking="B2",
+        ),
+        _row(
+            leg_id="L1",
+            tail="C-GAAA",
+            flight_type="POS",
+            dep="2024-05-01T08:00:00Z",
+            arr="2024-05-01T10:10:00Z",
+            booking="B1",
+        ),
+    ]
+
+    result = _build_ocs_report(rows)
+
+    assert [row["leg_id"] for row in result.rows] == ["L1", "L2"]
