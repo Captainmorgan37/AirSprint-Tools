@@ -8,8 +8,9 @@ import sys
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
 from historical_airport_use_utils import (
+    airport_matches_focus,
+    airport_country_code,
     extract_airport_code,
-    is_atlantic_canada_airport,
     is_positioning_leg,
     leg_duration_hours,
 )
@@ -26,15 +27,20 @@ def test_positioning_leg_detection_supports_pos_and_position_words() -> None:
     assert not is_positioning_leg({"flightType": "Owner"})
 
 
-def test_atlantic_canada_detection_checks_country_and_subdivision() -> None:
+def test_focus_matching_supports_atlantic_caribbean_and_europe() -> None:
     lookup = {
         "CYHZ": {"country": "CA", "subd": "NS"},
-        "CYYZ": {"country": "CA", "subd": "ON"},
-        "KBOS": {"country": "US", "subd": "MA"},
+        "MKJP": {"country": "JM", "subd": None},
+        "EGLL": {"country": "GB", "subd": None},
     }
-    assert is_atlantic_canada_airport("CYHZ", lookup)
-    assert not is_atlantic_canada_airport("CYYZ", lookup)
-    assert not is_atlantic_canada_airport("KBOS", lookup)
+    assert airport_matches_focus("CYHZ", lookup, "atlantic_canada")
+    assert airport_matches_focus("MKJP", lookup, "caribbean")
+    assert airport_matches_focus("EGLL", lookup, "europe")
+
+
+def test_airport_country_code_normalises_canada_label() -> None:
+    lookup = {"CYHZ": {"country": "Canada", "subd": "NS"}}
+    assert airport_country_code("CYHZ", lookup) == "CA"
 
 
 def test_leg_duration_hours_returns_positive_utc_duration() -> None:

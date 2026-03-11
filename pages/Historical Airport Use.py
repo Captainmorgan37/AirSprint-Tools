@@ -22,12 +22,12 @@ from flight_leg_utils import (
     normalize_fl3xx_payload,
 )
 from historical_airport_use_utils import (
+    airport_country_code,
+    airport_matches_focus,
     extract_airport_code,
-    is_atlantic_canada_airport,
     is_positioning_leg,
     leg_duration_hours,
 )
-
 
 configure_page(page_title="Historical Airport Use")
 password_gate()
@@ -43,6 +43,11 @@ st.write(
 )
 
 CHUNK_DAYS = 3
+FOCUS_OPTIONS = {
+    "Atlantic Canada": "atlantic_canada",
+    "Caribbean": "caribbean",
+    "Europe": "europe",
+}
 
 
 def _settings_digest(settings: Mapping[str, Any]) -> str:
@@ -135,10 +140,32 @@ def _load_legs(
     return filtered_rows, metadata
 
 
+def _enrich_legs_for_analysis(legs: list[dict[str, Any]], airport_lookup: Mapping[str, Mapping[str, Any]]) -> pd.DataFrame:
+    records: list[dict[str, Any]] = []
+    for leg in legs:
+        dep_code = extract_airport_code(leg, ("departure_airport",) + tuple(DEPARTURE_AIRPORT_COLUMNS))
+        arr_code = extract_airport_code(leg, ("arrival_airport",) + tuple(ARRIVAL_AIRPORT_COLUMNS))
+        duration = leg_duration_hours(leg)
+        records.append(
+            {
+                "dep_time": leg.get("dep_time"),
+                "arrival_time": leg.get("arrival_time"),
+                "tail": leg.get("tail"),
+                "flightType": leg.get("flightType") or leg.get("flight_type"),
+                "dep_airport": dep_code,
+                "arr_airport": arr_code,
+                "dep_country": airport_country_code(dep_code, airport_lookup),
+                "arr_country": airport_country_code(arr_code, airport_lookup),
+                "is_pos": is_positioning_leg(leg),
+                "duration_hours": duration,
+            }
+        )
+    return pd.DataFrame(records)
+
+
 today = date.today()
 default_start = date(today.year - 1, 1, 1)
 default_end = date(today.year - 1, 12, 31)
-
 
 with st.form("historical_airport_use_form"):
     date_selection = st.date_input(
@@ -147,7 +174,6 @@ with st.form("historical_airport_use_form"):
         help="Select the inclusive date range to scan. Defaults to last calendar year.",
     )
     submit_fetch = st.form_submit_button("Fetch historical usage", width="stretch")
-
 
 if submit_fetch:
     settings = dict(st.secrets.get("fl3xx_api", {}))  # type: ignore[attr-defined]
@@ -166,64 +192,102 @@ if submit_fetch:
     with st.spinner("Fetching flights in 3-day chunks..."):
         legs, metadata = _load_legs(settings_digest, settings, from_date=start_date, to_date=end_date)
 
-    if not legs:
-        st.info("No matching flights were found for the selected window after filtering.")
+    st.session_state["historical_airport_use_legs"] = legs
+    st.session_state["historical_airport_use_metadata"] = metadata
+    st.session_state["historical_airport_use_range"] = (start_date, end_date)
+
+legs = st.session_state.get("historical_airport_use_legs")
+metadata = st.session_state.get("historical_airport_use_metadata", {})
+range_value = st.session_state.get("historical_airport_use_range", (default_start, default_end))
+
+if legs:
+    counts = Counter()
+    for leg in legs:
+        code = extract_airport_code(leg, ("departure_airport",) + tuple(DEPARTURE_AIRPORT_COLUMNS))
+        if code:
+            counts[code] += 1
+
+    if not counts:
+        st.info("No departure airport codes were found in the filtered legs.")
     else:
-        counts = Counter()
-        for leg in legs:
-            code = extract_airport_code(leg, ("departure_airport",) + tuple(DEPARTURE_AIRPORT_COLUMNS))
-            if code:
-                counts[code] += 1
-
-        if not counts:
-            st.info("No departure airport codes were found in the filtered legs.")
-        else:
-            table = (
-                pd.DataFrame(
-                    [
-                        {"Airport": code, "Departures": count}
-                        for code, count in counts.items()
-                    ]
-                )
-                .sort_values(["Departures", "Airport"], ascending=[False, True])
-                .reset_index(drop=True)
-            )
-
-            st.subheader("Airport usage")
-            st.dataframe(table, use_container_width=True, hide_index=True)
-
-
-
-        airport_lookup = load_airport_metadata_lookup()
-        pos_legs = [leg for leg in legs if is_positioning_leg(leg)]
-        pos_atlantic = []
-        for leg in pos_legs:
-            dep_code = extract_airport_code(leg, ("departure_airport",) + tuple(DEPARTURE_AIRPORT_COLUMNS))
-            arr_code = extract_airport_code(leg, ("arrival_airport",) + tuple(ARRIVAL_AIRPORT_COLUMNS))
-            if is_atlantic_canada_airport(dep_code, airport_lookup) or is_atlantic_canada_airport(arr_code, airport_lookup):
-                pos_atlantic.append(leg)
-
-        pos_hours = sum(hours for hours in (leg_duration_hours(leg) for leg in pos_atlantic) if hours is not None)
-
-        st.markdown("---")
-        st.subheader("Advanced check: POS legs touching Atlantic Canada")
-        st.write(
-            {
-                "pos_legs_total": len(pos_legs),
-                "pos_legs_touching_atlantic_canada": len(pos_atlantic),
-                "pos_hours_touching_atlantic_canada": round(pos_hours, 2),
-            }
+        table = (
+            pd.DataFrame([{"Airport": code, "Departures": count} for code, count in counts.items()])
+            .sort_values(["Departures", "Airport"], ascending=[False, True])
+            .reset_index(drop=True)
         )
 
-        st.markdown("---")
-        st.subheader("Fetch details")
-        st.write(
-            {
-                "date_range": f"{start_date.isoformat()} → {end_date.isoformat()}",
-                "legs_after_filter": metadata.get("legs_after_filter"),
-                "flights_returned": metadata.get("flights_returned"),
-                "skipped_subcharter": metadata.get("skipped_subcharter"),
-                "skipped_add_lines": metadata.get("skipped_add_lines"),
-                "chunks": len(metadata.get("chunks", [])),
-            }
+        st.subheader("Airport usage")
+        st.dataframe(table, use_container_width=True, hide_index=True)
+
+    airport_lookup = load_airport_metadata_lookup()
+    analysis_df = _enrich_legs_for_analysis(legs, airport_lookup)
+
+    st.markdown("---")
+    st.subheader("Advanced POS analysis")
+    selected_focus = st.selectbox("Focus region", options=list(FOCUS_OPTIONS.keys()), index=0)
+    focus_key = FOCUS_OPTIONS[selected_focus]
+
+    pos_df = analysis_df[analysis_df["is_pos"]].copy()
+    pos_focus_df = pos_df[
+        pos_df.apply(
+            lambda row: airport_matches_focus(row["dep_airport"], airport_lookup, focus_key)
+            or airport_matches_focus(row["arr_airport"], airport_lookup, focus_key),
+            axis=1,
         )
+    ].copy()
+
+    pos_hours = float(pos_focus_df["duration_hours"].dropna().sum()) if not pos_focus_df.empty else 0.0
+    st.write(
+        {
+            "selected_focus": selected_focus,
+            "pos_legs_total": int(len(pos_df)),
+            "pos_legs_touching_focus": int(len(pos_focus_df)),
+            "pos_hours_touching_focus": round(pos_hours, 2),
+        }
+    )
+
+    st.caption("This lets you switch between Atlantic Canada, Caribbean, and Europe without re-fetching data.")
+
+    if not pos_focus_df.empty:
+        by_dep_airport = (
+            pos_focus_df.groupby("dep_airport", dropna=True)
+            .agg(pos_legs=("dep_airport", "size"), pos_hours=("duration_hours", "sum"))
+            .reset_index()
+            .sort_values(["pos_legs", "dep_airport"], ascending=[False, True])
+        )
+        by_country = (
+            pos_focus_df.assign(country=pos_focus_df["dep_country"].fillna("Unknown"))
+            .groupby("country")
+            .agg(pos_legs=("country", "size"), pos_hours=("duration_hours", "sum"))
+            .reset_index()
+            .sort_values(["pos_legs", "country"], ascending=[False, True])
+        )
+
+        st.markdown("**POS focus legs by departure airport**")
+        st.dataframe(by_dep_airport, use_container_width=True, hide_index=True)
+
+        st.markdown("**POS focus legs by departure country**")
+        st.dataframe(by_country, use_container_width=True, hide_index=True)
+
+    st.download_button(
+        "Download enriched legs CSV",
+        data=analysis_df.to_csv(index=False).encode("utf-8"),
+        file_name="historical_airport_use_enriched.csv",
+        mime="text/csv",
+    )
+
+    st.markdown("---")
+    st.subheader("Fetch details")
+    start_date, end_date = range_value
+    st.write(
+        {
+            "date_range": f"{start_date.isoformat()} → {end_date.isoformat()}",
+            "legs_after_filter": metadata.get("legs_after_filter"),
+            "flights_returned": metadata.get("flights_returned"),
+            "skipped_subcharter": metadata.get("skipped_subcharter"),
+            "skipped_add_lines": metadata.get("skipped_add_lines"),
+            "chunks": len(metadata.get("chunks", [])),
+        }
+    )
+elif submit_fetch:
+    st.info("No matching flights were found for the selected window after filtering.")
