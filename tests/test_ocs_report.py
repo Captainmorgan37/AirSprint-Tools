@@ -176,3 +176,47 @@ def test_ocs_report_rows_are_sorted_by_departure_time():
     result = _build_ocs_report(rows)
 
     assert [row["leg_id"] for row in result.rows] == ["L1", "L2"]
+
+
+def test_ocs_report_respects_configurable_duration_threshold():
+    rows = [
+        _row(
+            leg_id="L1",
+            tail="C-GAAA",
+            flight_type="POS",
+            dep="2024-05-01T10:00:00Z",
+            arr="2024-05-01T12:10:00Z",
+            booking="B1",
+        )
+    ]
+
+    result = _build_ocs_report(rows, duration_threshold_minutes=150)
+
+    assert result.rows == []
+
+
+def test_ocs_report_formatted_output_splits_long_and_back_to_back_sections():
+    rows = [
+        _row(
+            leg_id="L1",
+            tail="C-GAAA",
+            flight_type="POS",
+            dep="2024-05-01T10:00:00Z",
+            arr="2024-05-01T13:10:00Z",
+            booking="B1",
+        ),
+        _row(
+            leg_id="L2",
+            tail="C-GAAA",
+            flight_type="POS",
+            dep="2024-05-01T14:00:00Z",
+            arr="2024-05-01T14:45:00Z",
+            booking="B2",
+        ),
+    ]
+
+    result = _build_ocs_report(rows, duration_threshold_minutes=150)
+    output = result.formatted_output()
+
+    assert "POS flights ≥ 02:30" in output
+    assert "Back-to-back POS flights" in output

@@ -79,6 +79,8 @@ class MorningReportResult:
             return _format_fbo_disconnect_block(self)
         if self.code == "16.1.9":
             return _format_upgrade_validation_block(self)
+        if self.code == "16.1.13":
+            return _format_ocs_block(self)
 
         if not self.has_matches:
             lines = ["No Results Found"]
@@ -198,6 +200,35 @@ def _format_fbo_disconnect_block(report: MorningReportResult) -> str:
     return "\n".join(lines)
 
 
+
+
+def _format_ocs_block(report: MorningReportResult) -> str:
+    if not report.has_matches:
+        return "No Results Found"
+
+    threshold_minutes = report.metadata.get("duration_threshold_minutes", 120)
+    threshold_display = _format_block_minutes(
+        int(threshold_minutes) if isinstance(threshold_minutes, (int, float)) else 120
+    )
+
+    long_rows = [row for row in report.rows if row.get("is_long_pos")]
+    back_to_back_rows = [row for row in report.rows if row.get("is_back_to_back_pos")]
+
+    lines: List[str] = ["Results Found:", report.header_label, ""]
+
+    lines.append(f"POS flights ≥ {threshold_display}")
+    if long_rows:
+        lines.extend((row.get("line") or "") for row in long_rows)
+    else:
+        lines.append("No matches")
+
+    lines.extend(["", "Back-to-back POS flights"])
+    if back_to_back_rows:
+        lines.extend((row.get("line") or "") for row in back_to_back_rows)
+    else:
+        lines.append("No matches")
+
+    return "\n".join(lines)
 def _format_upgrade_validation_block(report: MorningReportResult) -> str:
     actionable_rows = [
         row for row in report.rows if not row.get("workflow_matches_upgrade")
@@ -706,6 +737,7 @@ def run_morning_reports(
     now: Optional[datetime] = None,
     from_date: Optional[date] = None,
     to_date: Optional[date] = None,
+    ocs_duration_threshold_minutes: int = 120,
 ) -> MorningReportRun:
     """Fetch FL3XX legs and execute the configured morning reports."""
 
@@ -748,11 +780,14 @@ def run_morning_reports(
         _build_owner_continuous_flight_validation_report(normalized_rows),
         _build_cj3_owners_on_cj2_report(normalized_rows, config),
         _build_priority_status_report(normalized_rows, config),
-        _build_hub_duty_start_report(normalized_rows, config),
         _build_upgrade_workflow_validation_report(normalized_rows, config),
         _build_upgrade_flights_report(normalized_rows, config),
         _build_fbo_disconnect_report(normalized_rows, config),
-        _build_ocs_report(normalized_rows),
+        _build_hub_duty_start_report(normalized_rows, config),
+        _build_ocs_report(
+            normalized_rows,
+            duration_threshold_minutes=ocs_duration_threshold_minutes,
+        ),
     ]
 
     metadata["report_codes"] = [report.code for report in reports]
@@ -2228,7 +2263,11 @@ def _build_fbo_disconnect_report(
     )
 
 
-def _build_ocs_report(rows: Iterable[Mapping[str, Any]]) -> MorningReportResult:
+def _build_ocs_report(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    duration_threshold_minutes: int = 120,
+) -> MorningReportResult:
     sorted_rows = _sort_rows(rows)
     tail_history: Dict[str, Dict[str, Any]] = {}
     pos_rows_by_leg: Dict[str, Dict[str, Any]] = {}
@@ -2264,7 +2303,10 @@ def _build_ocs_report(rows: Iterable[Mapping[str, Any]]) -> MorningReportResult:
             if isinstance(duration_minutes, int)
             else None
         )
-        long_pos_leg = bool(duration_minutes is not None and duration_minutes >= 120)
+        long_pos_leg = bool(
+            duration_minutes is not None
+            and duration_minutes >= duration_threshold_minutes
+        )
 
         tail = formatted.get("tail") or tail
         tail_key = tail.upper() if isinstance(tail, str) and tail else None
@@ -2388,7 +2430,10 @@ def _build_ocs_report(rows: Iterable[Mapping[str, Any]]) -> MorningReportResult:
         title="OCS Report",
         header_label="OCS Report",
         rows=matches,
-        metadata={"match_count": len(matches)},
+        metadata={
+            "match_count": len(matches),
+            "duration_threshold_minutes": duration_threshold_minutes,
+        },
     )
 
 
