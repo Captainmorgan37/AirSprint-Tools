@@ -752,6 +752,7 @@ def run_morning_reports(
         _build_upgrade_workflow_validation_report(normalized_rows, config),
         _build_upgrade_flights_report(normalized_rows, config),
         _build_fbo_disconnect_report(normalized_rows, config),
+        _build_ocs_report(normalized_rows),
     ]
 
     metadata["report_codes"] = [report.code for report in reports]
@@ -2224,6 +2225,170 @@ def _build_fbo_disconnect_report(
         rows=matches,
         warnings=list(dict.fromkeys(warnings)),
         metadata=metadata,
+    )
+
+
+def _build_ocs_report(rows: Iterable[Mapping[str, Any]]) -> MorningReportResult:
+    sorted_rows = _sort_rows(rows)
+    tail_history: Dict[str, Dict[str, Any]] = {}
+    pos_rows_by_leg: Dict[str, Dict[str, Any]] = {}
+    matches: List[Dict[str, Any]] = []
+    matched_leg_ids: Set[str] = set()
+
+    for row in sorted_rows:
+        tail = _extract_tail(row)
+        if _is_placeholder_tail(tail):
+            continue
+
+        flight_type = (_extract_flight_type(row) or "").upper()
+        if flight_type != "POS":
+            if tail and flight_type == "PAX":
+                history = tail_history.get(tail.upper())
+                if history is not None:
+                    history["seen_pax_since_last_pos"] = True
+            continue
+
+        formatted = _format_report_row(row, include_tail=True)
+        leg_id = formatted.get("leg_id") or _extract_leg_id(row)
+        dep_dt = _extract_departure_dt(row)
+        arr_dt = _extract_arrival_dt(row)
+        duration_minutes = _extract_block_minutes(None, row)
+
+        if duration_minutes is None and dep_dt is not None and arr_dt is not None:
+            derived_minutes = int((arr_dt - dep_dt).total_seconds() / 60)
+            if derived_minutes >= 0:
+                duration_minutes = derived_minutes
+
+        duration_hours = (
+            round(duration_minutes / 60.0, 2)
+            if isinstance(duration_minutes, int)
+            else None
+        )
+        long_pos_leg = bool(duration_minutes is not None and duration_minutes >= 120)
+
+        tail = formatted.get("tail") or tail
+        tail_key = tail.upper() if isinstance(tail, str) and tail else None
+
+        booking_ref = (
+            formatted.get("bookingIdentifier")
+            or formatted.get("booking_reference")
+            or _extract_booking_identifier(row)
+            or _extract_booking_reference(row)
+            or "Unknown Booking"
+        )
+        booking_ref_key = booking_ref.strip().upper() if isinstance(booking_ref, str) else ""
+
+        back_to_back_pos = False
+        previous_pos_leg_id: Optional[str] = None
+        if tail_key:
+            prior = tail_history.get(tail_key)
+            if prior and not prior.get("seen_pax_since_last_pos", True):
+                prior_leg_id = prior.get("leg_id")
+                prior_booking_ref = _normalize_str(prior.get("booking_ref"))
+                same_booking = (
+                    bool(prior_booking_ref)
+                    and bool(booking_ref_key)
+                    and prior_booking_ref.upper() == booking_ref_key
+                )
+                if not same_booking:
+                    if prior_leg_id:
+                        previous_pos_leg_id = str(prior_leg_id)
+                    back_to_back_pos = True
+            tail_history[tail_key] = {
+                "leg_id": leg_id,
+                "seen_pax_since_last_pos": False,
+                "booking_ref": booking_ref_key,
+            }
+
+        reasons: List[str] = []
+        if long_pos_leg:
+            reasons.append("POS duration ≥ 2:00")
+        if back_to_back_pos:
+            reasons.append("Back-to-back POS legs")
+
+        date_component = _format_mountain_date_component(dep_dt, formatted.get("date"))
+        tail_display = tail or "Unknown Tail"
+        dep_airport = formatted.get("departure_airport") or "Unknown DEP"
+        arr_airport = formatted.get("arrival_airport") or "Unknown ARR"
+        duration_display = _format_block_minutes(duration_minutes)
+
+        line_parts = [
+            date_component or "Unknown Date",
+            booking_ref,
+            tail_display,
+            f"{dep_airport}>{arr_airport}",
+            duration_display,
+            "; ".join(reasons),
+        ]
+
+        row_data = {
+            "line": "-".join(line_parts),
+            "date": date_component,
+            "booking_reference": formatted.get("booking_reference"),
+            "bookingIdentifier": formatted.get("bookingIdentifier") or booking_ref,
+            "tail": tail,
+            "flight_type": flight_type,
+            "departure_time": dep_dt.isoformat() if dep_dt else None,
+            "arrival_time": arr_dt.isoformat() if arr_dt else None,
+            "departure_airport": formatted.get("departure_airport"),
+            "arrival_airport": formatted.get("arrival_airport"),
+            "block_time_minutes": duration_minutes,
+            "block_time_display": duration_display,
+            "duration_hours": duration_hours,
+            "reason": "; ".join(reasons),
+            "is_long_pos": long_pos_leg,
+            "is_back_to_back_pos": back_to_back_pos,
+            "leg_id": leg_id,
+        }
+        if leg_id:
+            pos_rows_by_leg[str(leg_id)] = row_data
+
+        if long_pos_leg:
+            matches.append(row_data)
+            if leg_id:
+                matched_leg_ids.add(str(leg_id))
+
+        if back_to_back_pos:
+            if leg_id and str(leg_id) not in matched_leg_ids:
+                matches.append(row_data)
+                matched_leg_ids.add(str(leg_id))
+
+            if previous_pos_leg_id:
+                prior_key = previous_pos_leg_id
+                prior_row = pos_rows_by_leg.get(prior_key)
+                if prior_row is not None:
+                    prior_row["is_back_to_back_pos"] = True
+                    prior_reason = _normalize_str(prior_row.get("reason")) or ""
+                    if "Back-to-back POS legs" not in prior_reason:
+                        prior_row["reason"] = "; ".join(
+                            [
+                                part
+                                for part in [prior_reason, "Back-to-back POS legs"]
+                                if part
+                            ]
+                        )
+                        prior_row["line"] = f"{prior_row['line']}; Back-to-back POS legs"
+                    if prior_key not in matched_leg_ids:
+                        matches.append(prior_row)
+                        matched_leg_ids.add(prior_key)
+
+    def _match_sort_key(entry: Mapping[str, Any]) -> datetime:
+        dep_time_value = _normalize_str(entry.get("departure_time"))
+        if dep_time_value:
+            dep_dt_value = safe_parse_dt(dep_time_value)
+            if dep_dt_value.tzinfo is None:
+                return dep_dt_value.replace(tzinfo=timezone.utc)
+            return dep_dt_value.astimezone(timezone.utc)
+        return datetime.max.replace(tzinfo=timezone.utc)
+
+    matches.sort(key=_match_sort_key)
+
+    return MorningReportResult(
+        code="16.1.13",
+        title="OCS Report",
+        header_label="OCS Report",
+        rows=matches,
+        metadata={"match_count": len(matches)},
     )
 
 
