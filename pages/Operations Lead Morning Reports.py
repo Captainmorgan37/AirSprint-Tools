@@ -282,7 +282,7 @@ def _render_report_output(report: MorningReportResult):
             if long_pos_rows:
                 st.dataframe(long_pos_rows, width="stretch")
             else:
-                st.info("No POS flights at or above 2 hours were found.")
+                st.info(f"No POS flights at or above {threshold_display} were found.")
 
             st.markdown("##### Back-to-back POS flights")
             if back_to_back_rows:

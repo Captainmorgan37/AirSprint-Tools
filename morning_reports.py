@@ -2269,10 +2269,12 @@ def _build_ocs_report(
     duration_threshold_minutes: int = 120,
 ) -> MorningReportResult:
     sorted_rows = _sort_rows(rows)
+    threshold_display = f"{int(duration_threshold_minutes) // 60}:{int(duration_threshold_minutes) % 60:02d}"
     tail_history: Dict[str, Dict[str, Any]] = {}
     pos_rows_by_leg: Dict[str, Dict[str, Any]] = {}
     matches: List[Dict[str, Any]] = []
     matched_leg_ids: Set[str] = set()
+    back_to_back_previous_leg_by_leg: Dict[str, str] = {}
 
     for row in sorted_rows:
         tail = _extract_tail(row)
@@ -2344,7 +2346,7 @@ def _build_ocs_report(
 
         reasons: List[str] = []
         if long_pos_leg:
-            reasons.append("POS duration ≥ 2:00")
+            reasons.append(f"POS duration ≥ {threshold_display}")
         if back_to_back_pos:
             reasons.append("Back-to-back POS legs")
 
@@ -2396,6 +2398,8 @@ def _build_ocs_report(
                 matched_leg_ids.add(str(leg_id))
 
             if previous_pos_leg_id:
+                if leg_id:
+                    back_to_back_previous_leg_by_leg[str(leg_id)] = str(previous_pos_leg_id)
                 prior_key = previous_pos_leg_id
                 prior_row = pos_rows_by_leg.get(prior_key)
                 if prior_row is not None:
@@ -2425,11 +2429,47 @@ def _build_ocs_report(
 
     matches.sort(key=_match_sort_key)
 
+    ordered_matches = list(matches)
+    for row in list(ordered_matches):
+        current_leg_id = row.get("leg_id")
+        if current_leg_id is None:
+            continue
+
+        prior_leg_id = back_to_back_previous_leg_by_leg.get(str(current_leg_id))
+        if not prior_leg_id:
+            continue
+
+        current_idx = next(
+            (
+                idx
+                for idx, candidate in enumerate(ordered_matches)
+                if candidate.get("leg_id") == current_leg_id
+            ),
+            None,
+        )
+        prior_idx = next(
+            (
+                idx
+                for idx, candidate in enumerate(ordered_matches)
+                if candidate.get("leg_id") == prior_leg_id
+            ),
+            None,
+        )
+
+        if current_idx is None or prior_idx is None:
+            continue
+        if current_idx == prior_idx + 1:
+            continue
+
+        current_row = ordered_matches.pop(current_idx)
+        insert_idx = prior_idx + 1 if current_idx > prior_idx else prior_idx
+        ordered_matches.insert(insert_idx, current_row)
+
     return MorningReportResult(
         code="16.1.13",
         title="OCS Report",
         header_label="OCS Report",
-        rows=matches,
+        rows=ordered_matches,
         metadata={
             "match_count": len(matches),
             "duration_threshold_minutes": duration_threshold_minutes,

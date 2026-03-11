@@ -40,6 +40,25 @@ def test_ocs_report_flags_long_pos_leg():
     assert "POS duration ≥ 2:00" in result.rows[0]["reason"]
 
 
+
+
+def test_ocs_report_uses_configurable_duration_threshold_in_reason_text():
+    rows = [
+        _row(
+            leg_id="L1",
+            tail="C-GAAA",
+            flight_type="POS",
+            dep="2024-05-01T10:00:00Z",
+            arr="2024-05-01T13:10:00Z",
+            booking="B1",
+        )
+    ]
+
+    result = _build_ocs_report(rows, duration_threshold_minutes=180)
+
+    assert len(result.rows) == 1
+    assert "POS duration ≥ 3:00" in result.rows[0]["reason"]
+
 def test_ocs_report_flags_back_to_back_pos_without_pax_gap():
     rows = [
         _row(
@@ -152,6 +171,40 @@ def test_ocs_report_disregards_back_to_back_pos_with_same_booking_reference():
 
     assert result.rows == []
 
+
+
+
+def test_ocs_report_keeps_back_to_back_pair_together_when_other_long_pos_exists():
+    rows = [
+        _row(
+            leg_id="L1",
+            tail="C-GAAA",
+            flight_type="POS",
+            dep="2024-05-01T08:00:00Z",
+            arr="2024-05-01T11:15:00Z",
+            booking="B1",
+        ),
+        _row(
+            leg_id="L2",
+            tail="C-GBBB",
+            flight_type="POS",
+            dep="2024-05-01T08:30:00Z",
+            arr="2024-05-01T10:45:00Z",
+            booking="B2",
+        ),
+        _row(
+            leg_id="L3",
+            tail="C-GAAA",
+            flight_type="POS",
+            dep="2024-05-01T12:00:00Z",
+            arr="2024-05-01T12:45:00Z",
+            booking="B3",
+        ),
+    ]
+
+    result = _build_ocs_report(rows)
+
+    assert [row["leg_id"] for row in result.rows] == ["L1", "L3", "L2"]
 
 def test_ocs_report_rows_are_sorted_by_departure_time():
     rows = [
