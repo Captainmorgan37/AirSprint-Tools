@@ -6,7 +6,7 @@ import hashlib
 import json
 from collections import Counter
 from datetime import date, timedelta
-from typing import Any, Dict, Iterable, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, Mapping, Tuple
 
 import pandas as pd
 import streamlit as st
@@ -14,10 +14,18 @@ import streamlit as st
 from Home import configure_page, password_gate, render_sidebar
 from fl3xx_api import fetch_flights
 from flight_leg_utils import (
+    ARRIVAL_AIRPORT_COLUMNS,
     DEPARTURE_AIRPORT_COLUMNS,
     build_fl3xx_api_config,
     filter_out_subcharter_rows,
+    load_airport_metadata_lookup,
     normalize_fl3xx_payload,
+)
+from historical_airport_use_utils import (
+    extract_airport_code,
+    is_atlantic_canada_airport,
+    is_positioning_leg,
+    leg_duration_hours,
 )
 
 
@@ -93,28 +101,6 @@ def _filter_out_add_lines(rows: Iterable[Mapping[str, Any]]) -> Tuple[list[dict[
     return filtered, skipped
 
 
-def _coerce_airport_code(value: Any) -> Optional[str]:
-    if value in (None, ""):
-        return None
-    if isinstance(value, Mapping):
-        for key in ("icao", "iata", "code", "airport", "name"):
-            nested = value.get(key)
-            if nested not in (None, ""):
-                return _coerce_airport_code(nested)
-        return None
-    text = str(value).strip().upper()
-    return text or None
-
-
-def _extract_departure_code(leg: Mapping[str, Any]) -> Optional[str]:
-    for key in ("departure_airport",) + tuple(DEPARTURE_AIRPORT_COLUMNS):
-        if key in leg:
-            code = _coerce_airport_code(leg.get(key))
-            if code:
-                return code
-    return None
-
-
 @st.cache_data(show_spinner=True, ttl=300, hash_funcs={dict: lambda _: "0"})
 def _load_legs(
     settings_digest: str,
@@ -185,7 +171,7 @@ if submit_fetch:
     else:
         counts = Counter()
         for leg in legs:
-            code = _extract_departure_code(leg)
+            code = extract_airport_code(leg, ("departure_airport",) + tuple(DEPARTURE_AIRPORT_COLUMNS))
             if code:
                 counts[code] += 1
 
@@ -205,6 +191,29 @@ if submit_fetch:
 
             st.subheader("Airport usage")
             st.dataframe(table, use_container_width=True, hide_index=True)
+
+
+
+        airport_lookup = load_airport_metadata_lookup()
+        pos_legs = [leg for leg in legs if is_positioning_leg(leg)]
+        pos_atlantic = []
+        for leg in pos_legs:
+            dep_code = extract_airport_code(leg, ("departure_airport",) + tuple(DEPARTURE_AIRPORT_COLUMNS))
+            arr_code = extract_airport_code(leg, ("arrival_airport",) + tuple(ARRIVAL_AIRPORT_COLUMNS))
+            if is_atlantic_canada_airport(dep_code, airport_lookup) or is_atlantic_canada_airport(arr_code, airport_lookup):
+                pos_atlantic.append(leg)
+
+        pos_hours = sum(hours for hours in (leg_duration_hours(leg) for leg in pos_atlantic) if hours is not None)
+
+        st.markdown("---")
+        st.subheader("Advanced check: POS legs touching Atlantic Canada")
+        st.write(
+            {
+                "pos_legs_total": len(pos_legs),
+                "pos_legs_touching_atlantic_canada": len(pos_atlantic),
+                "pos_hours_touching_atlantic_canada": round(pos_hours, 2),
+            }
+        )
 
         st.markdown("---")
         st.subheader("Fetch details")
