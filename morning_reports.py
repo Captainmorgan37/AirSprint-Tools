@@ -752,6 +752,7 @@ def run_morning_reports(
         _build_upgrade_workflow_validation_report(normalized_rows, config),
         _build_upgrade_flights_report(normalized_rows, config),
         _build_fbo_disconnect_report(normalized_rows, config),
+        _build_ocs_report(normalized_rows),
     ]
 
     metadata["report_codes"] = [report.code for report in reports]
@@ -2224,6 +2225,144 @@ def _build_fbo_disconnect_report(
         rows=matches,
         warnings=list(dict.fromkeys(warnings)),
         metadata=metadata,
+    )
+
+
+def _build_ocs_report(rows: Iterable[Mapping[str, Any]]) -> MorningReportResult:
+    sorted_rows = _sort_rows(rows)
+    tail_history: Dict[str, Dict[str, Any]] = {}
+    pos_rows_by_leg: Dict[str, Dict[str, Any]] = {}
+    matches: List[Dict[str, Any]] = []
+    matched_leg_ids: Set[str] = set()
+
+    for row in sorted_rows:
+        flight_type = (_extract_flight_type(row) or "").upper()
+        if flight_type != "POS":
+            tail = _extract_tail(row)
+            if tail and flight_type == "PAX":
+                history = tail_history.get(tail.upper())
+                if history is not None:
+                    history["seen_pax_since_last_pos"] = True
+            continue
+
+        formatted = _format_report_row(row, include_tail=True)
+        leg_id = formatted.get("leg_id") or _extract_leg_id(row)
+        dep_dt = _extract_departure_dt(row)
+        arr_dt = _extract_arrival_dt(row)
+        duration_minutes = _extract_block_minutes(None, row)
+
+        if duration_minutes is None and dep_dt is not None and arr_dt is not None:
+            derived_minutes = int((arr_dt - dep_dt).total_seconds() / 60)
+            if derived_minutes >= 0:
+                duration_minutes = derived_minutes
+
+        duration_hours = (
+            round(duration_minutes / 60.0, 2)
+            if isinstance(duration_minutes, int)
+            else None
+        )
+        long_pos_leg = bool(duration_minutes is not None and duration_minutes >= 120)
+
+        tail = formatted.get("tail") or _extract_tail(row)
+        tail_key = tail.upper() if isinstance(tail, str) and tail else None
+
+        back_to_back_pos = False
+        previous_pos_leg_id: Optional[str] = None
+        if tail_key:
+            prior = tail_history.get(tail_key)
+            if prior and not prior.get("seen_pax_since_last_pos", True):
+                prior_leg_id = prior.get("leg_id")
+                if prior_leg_id:
+                    previous_pos_leg_id = str(prior_leg_id)
+                back_to_back_pos = True
+            tail_history[tail_key] = {
+                "leg_id": leg_id,
+                "seen_pax_since_last_pos": False,
+            }
+
+        reasons: List[str] = []
+        if long_pos_leg:
+            reasons.append("POS duration ≥ 2:00")
+        if back_to_back_pos:
+            reasons.append("Back-to-back POS legs")
+
+        date_component = _format_mountain_date_component(dep_dt, formatted.get("date"))
+        booking_ref = (
+            formatted.get("bookingIdentifier")
+            or formatted.get("booking_reference")
+            or "Unknown Booking"
+        )
+        tail_display = tail or "Unknown Tail"
+        dep_airport = formatted.get("departure_airport") or "Unknown DEP"
+        arr_airport = formatted.get("arrival_airport") or "Unknown ARR"
+        duration_display = _format_block_minutes(duration_minutes)
+
+        line_parts = [
+            date_component or "Unknown Date",
+            booking_ref,
+            tail_display,
+            f"{dep_airport}>{arr_airport}",
+            duration_display,
+            "; ".join(reasons),
+        ]
+
+        row_data = {
+            "line": "-".join(line_parts),
+            "date": date_component,
+            "booking_reference": formatted.get("booking_reference"),
+            "bookingIdentifier": formatted.get("bookingIdentifier"),
+            "tail": tail,
+            "flight_type": flight_type,
+            "departure_time": dep_dt.isoformat() if dep_dt else None,
+            "arrival_time": arr_dt.isoformat() if arr_dt else None,
+            "departure_airport": formatted.get("departure_airport"),
+            "arrival_airport": formatted.get("arrival_airport"),
+            "block_time_minutes": duration_minutes,
+            "block_time_display": duration_display,
+            "duration_hours": duration_hours,
+            "reason": "; ".join(reasons),
+            "is_long_pos": long_pos_leg,
+            "is_back_to_back_pos": back_to_back_pos,
+            "leg_id": leg_id,
+        }
+        if leg_id:
+            pos_rows_by_leg[str(leg_id)] = row_data
+
+        if long_pos_leg:
+            matches.append(row_data)
+            if leg_id:
+                matched_leg_ids.add(str(leg_id))
+
+        if back_to_back_pos:
+            if leg_id and str(leg_id) not in matched_leg_ids:
+                matches.append(row_data)
+                matched_leg_ids.add(str(leg_id))
+
+            if previous_pos_leg_id:
+                prior_key = previous_pos_leg_id
+                prior_row = pos_rows_by_leg.get(prior_key)
+                if prior_row is not None:
+                    prior_row["is_back_to_back_pos"] = True
+                    prior_reason = _normalize_str(prior_row.get("reason")) or ""
+                    if "Back-to-back POS legs" not in prior_reason:
+                        prior_row["reason"] = "; ".join(
+                            [
+                                part
+                                for part in [prior_reason, "Back-to-back POS legs"]
+                                if part
+                            ]
+                        )
+                        prior_row["line"] = f"{prior_row['line']}; Back-to-back POS legs"
+                    if prior_key not in matched_leg_ids:
+                        matches.append(prior_row)
+                        matched_leg_ids.add(prior_key)
+
+    return MorningReportResult(
+        code="16.1.13",
+        title="OCS Report",
+        header_label="OCS Report",
+        rows=matches,
+        metadata={"match_count": len(matches)},
     )
 
 
