@@ -35,6 +35,7 @@ _EXPECTED_REPORTS: Sequence[Tuple[str, str, str]] = (
         "Upgraded Flights Report",
         "Upgrade Workflow Flights",
     ),
+    ("16.1.13", "OCS Report", "OCS Report"),
 )
 
 
