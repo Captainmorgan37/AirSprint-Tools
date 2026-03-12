@@ -3,7 +3,6 @@ from __future__ import annotations
 import streamlit as st
 
 from Home import configure_page, password_gate, render_sidebar
-from customs_port_finder_utils import candidates_to_dataframe, nearest_customs_ports
 
 configure_page(page_title="Customs Port Finder")
 password_gate()
@@ -11,6 +10,16 @@ render_sidebar()
 
 st.title("🛃 Customs Port Finder")
 st.caption("Enter an airport code to find the nearest customs-capable airports in the same country.")
+
+try:
+    from customs_port_finder_utils import candidates_to_dataframe, nearest_customs_ports
+except Exception as exc:  # pragma: no cover - defensive UI guard
+    st.error(
+        "Customs Port Finder could not load its lookup helpers. "
+        "Please refresh or contact support if this continues."
+    )
+    st.exception(exc)
+    st.stop()
 
 with st.form("customs-port-finder-form"):
     airport_code = st.text_input("Airport code (ICAO/IATA/LID)", placeholder="KTEB")
