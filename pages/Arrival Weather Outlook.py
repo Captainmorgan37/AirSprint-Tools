@@ -76,6 +76,7 @@ TAIL_DISPLAY_ORDER: Sequence[str] = (
     "C-FSJR",
     "C-FASQ",
     "C-FSDO",
+    "C-FASN",
     "C-FASP",
     "C-FASR",
     "C-FASW",
