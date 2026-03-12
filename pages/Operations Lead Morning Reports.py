@@ -35,6 +35,9 @@ _EXPECTED_REPORTS: Sequence[Tuple[str, str, str]] = (
         "Upgraded Flights Report",
         "Upgrade Workflow Flights",
     ),
+    ("16.1.11", "FBO Disconnect Report", "FBO Disconnect Checks"),
+    ("16.1.12", "CYYZ/CYUL Duty Start Report", "CYYZ/CYUL Duty Starts"),
+    ("16.1.13", "OCS Report", "OCS Report"),
 )
 
 
@@ -144,6 +147,7 @@ def _initialise_state():
     st.session_state.setdefault("ol_reports_run", None)
     st.session_state.setdefault("ol_reports_error", None)
     st.session_state.setdefault("ol_reports_warning", None)
+    st.session_state.setdefault("ol_reports_ocs_threshold_hours", 2.0)
     if "ol_reports_from_date" not in st.session_state or "ol_reports_to_date" not in st.session_state:
         default_from, default_to_exclusive = compute_fetch_dates(datetime.now(timezone.utc), inclusive_days=4)
         st.session_state.setdefault("ol_reports_from_date", default_from)
@@ -178,6 +182,7 @@ def _handle_fetch(
     *,
     from_date: date,
     to_date_inclusive: date,
+    ocs_duration_threshold_hours: float,
 ) -> None:
     to_date_exclusive = to_date_inclusive + timedelta(days=1)
     st.session_state["ol_reports_warning"] = None
@@ -188,11 +193,17 @@ def _handle_fetch(
                 api_settings,
                 from_date=from_date,
                 to_date=to_date_exclusive,
+                ocs_duration_threshold_minutes=max(
+                    0,
+                    int(round(ocs_duration_threshold_hours * 60)),
+                ),
             )
     except TypeError as exc:
         message = str(exc)
         if "unexpected keyword argument" in message and (
-            "from_date" in message or "to_date" in message
+            "from_date" in message
+            or "to_date" in message
+            or "ocs_duration_threshold_minutes" in message
         ):
             try:
                 with st.spinner("Fetching flights from FL3XX..."):
@@ -203,8 +214,8 @@ def _handle_fetch(
                 return
 
             st.session_state["ol_reports_warning"] = (
-                "The installed morning report runner does not yet support custom date ranges. "
-                "Fetched the default window instead."
+                "The installed morning report runner does not yet support custom date ranges "
+                "or OCS duration thresholds. Fetched the default window instead."
             )
             st.session_state["ol_reports_run"] = run
             st.session_state["ol_reports_error"] = None
@@ -252,6 +263,32 @@ def _render_report_output(report: MorningReportResult):
                 _build_cj3_row_display(report.rows),
                 width="stretch",
             )
+        elif report.code == "16.1.13":
+            threshold_minutes = report.metadata.get("duration_threshold_minutes", 120)
+            threshold_display = "2:00"
+            if isinstance(threshold_minutes, (int, float)):
+                threshold_display = f"{int(threshold_minutes) // 60}:{int(threshold_minutes) % 60:02d}"
+
+            long_pos_rows = sorted(
+                [row for row in report.rows if row.get("is_long_pos")],
+                key=lambda row: row.get("departure_time") or "",
+            )
+            back_to_back_rows = sorted(
+                [row for row in report.rows if row.get("is_back_to_back_pos")],
+                key=lambda row: row.get("departure_time") or "",
+            )
+
+            st.markdown(f"##### POS flights ≥ {threshold_display}")
+            if long_pos_rows:
+                st.dataframe(long_pos_rows, width="stretch")
+            else:
+                st.info(f"No POS flights at or above {threshold_display} were found.")
+
+            st.markdown("##### Back-to-back POS flights")
+            if back_to_back_rows:
+                st.dataframe(back_to_back_rows, width="stretch")
+            else:
+                st.info("No back-to-back POS flights were found.")
         else:
             st.dataframe(report.rows, width="stretch")
     else:
@@ -372,6 +409,15 @@ def main():
     st.session_state["ol_reports_from_date"] = selected_from
     st.session_state["ol_reports_to_date"] = selected_to
 
+    selected_ocs_threshold_hours = st.number_input(
+        "OCS POS duration threshold (hours)",
+        min_value=0.5,
+        step=0.5,
+        value=float(st.session_state.get("ol_reports_ocs_threshold_hours", 2.0)),
+        help="POS flights at or above this duration are included in the OCS long-flight section.",
+    )
+    st.session_state["ol_reports_ocs_threshold_hours"] = float(selected_ocs_threshold_hours)
+
     api_settings = _get_api_settings()
     if api_settings is None:
         st.warning(
@@ -403,6 +449,7 @@ def main():
                 api_settings,
                 from_date=selected_from,
                 to_date_inclusive=selected_to,
+                ocs_duration_threshold_hours=float(selected_ocs_threshold_hours),
             )
 
     _render_results()
