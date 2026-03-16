@@ -423,7 +423,10 @@ def _classify_expected_workflow(owner_aircraft: list[str], requested: str) -> Op
     if requested_canonical in owner_canonicals:
         return "guaranteed"
 
-    if "EMB" in owner_canonicals and requested_canonical == "CJ2":
+    if requested_canonical == "CJ" and any(label.startswith("CJ") for label in owner_canonicals):
+        return "guaranteed"
+
+    if "EMB" in owner_canonicals and requested_canonical.startswith("CJ"):
         return "guaranteed"
 
     return "interchange"
