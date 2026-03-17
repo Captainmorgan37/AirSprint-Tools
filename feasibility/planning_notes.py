@@ -164,7 +164,7 @@ def parse_route_entries_from_note(
         return []
 
     entries: List[Tuple[date, List[str]]] = []
-    pattern = re.compile(r"^(\d{1,2}[A-Z]{3}(?:\d{2})?)\s+(.*)$")
+    pattern = re.compile(r"^(\d{1,2}[A-Z]{3}(?:\d{2})?)(?:\s*[-:]\s*|\s+)(.*)$")
     for raw_line in note_text.splitlines():
         line = raw_line.strip().strip("-=").strip()
         if not line:

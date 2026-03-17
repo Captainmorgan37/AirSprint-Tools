@@ -7,6 +7,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from feasibility.planning_notes import (
     extract_requested_aircraft_from_note,
+    find_route_mismatch,
     normalize_planning_note_text,
 )
 
@@ -33,3 +34,9 @@ def test_normalize_planning_note_text_decodes_literal_newlines() -> None:
     note = "line1\\nline2\r\nline3"
 
     assert normalize_planning_note_text(note) == "line1\nline2\nline3"
+
+
+def test_find_route_mismatch_accepts_dash_after_date_token() -> None:
+    note = "21APR CYYZ-KMCO \n24APR- KMCO-MYNN\n27APR- MYNN-CYYZ"
+
+    assert find_route_mismatch("KMCO", "MYNN", "2026-04-24T15:00:00Z", note) is None
