@@ -398,18 +398,18 @@ def _extract_owner_aircraft_from_note(note: Optional[str]) -> list[str]:
     if not note:
         return []
 
-    matches = re.finditer(
+    patterns = (
         r"\b(?:\w+\s+)?(?:\d+)?\s*(?:CLUB|INF(?:INITY)?)\s+([A-Z0-9+,/\s\-&]{2,40})\s+OWNER\b",
-        note,
-        re.IGNORECASE,
+        r"\b([A-Z0-9+,/\s\-&]{2,40})\s+(?:CLUB|INF(?:INITY)?)\s+OWNER\b",
     )
 
     labels: list[str] = []
-    for match in matches:
-        for raw in re.split(r"[/,\s]+|\band\b", match.group(1), flags=re.IGNORECASE):
-            normalized = _normalize_aircraft_label(raw)
-            if normalized:
-                labels.append(normalized)
+    for pattern in patterns:
+        for match in re.finditer(pattern, note, re.IGNORECASE):
+            for raw in re.split(r"[/,\s]+|\band\b|&", match.group(1), flags=re.IGNORECASE):
+                normalized = _normalize_aircraft_label(raw)
+                if normalized and not normalized.isdigit():
+                    labels.append(normalized)
 
     return labels
 
