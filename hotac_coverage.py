@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
+import re
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import pandas as pd
@@ -612,12 +613,34 @@ def _find_positioning_event_for_leg(
     return matching[0]
 
 
+_POSITIONING_HOTEL_KEYWORDS = (
+    "hotel",
+    "hilton",
+    "doubletree",
+    "ramada",
+    "hampton",
+    "wyndham",
+    "inn",
+    "suite",
+    "suites",
+    "lodge",
+)
+
+
 def _extract_hotel_from_positioning_notes(notes: str) -> str:
     normalized = notes.replace("\\n", "\n")
+    keyword_pattern = re.compile(
+        r"\b(?:" + "|".join(re.escape(keyword) for keyword in _POSITIONING_HOTEL_KEYWORDS) + r")\b",
+        re.IGNORECASE,
+    )
     for line in normalized.splitlines():
         cleaned = line.strip()
+        if not cleaned:
+            continue
         if cleaned.casefold().startswith("hotel:"):
             return cleaned.split(":", 1)[1].strip()
+        if keyword_pattern.search(cleaned):
+            return cleaned
     return ""
 
 
