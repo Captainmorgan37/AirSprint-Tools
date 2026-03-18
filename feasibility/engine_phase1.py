@@ -495,6 +495,8 @@ def _extract_workflow_bucket(day: DayContext) -> tuple[Optional[str], str]:
     cleaned = re.sub(r"[^A-Z]", "", workflow_label.upper())
     if "ASAVAILABLE" in cleaned:
         return "as available", workflow_label
+    if "SHARED" in cleaned:
+        return "guaranteed", workflow_label
     if "GUARANTEED" in cleaned:
         return "guaranteed", workflow_label
     if "INTERCHANGE" in cleaned:
