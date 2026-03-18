@@ -263,10 +263,15 @@ def test_workflow_validation_supports_aircraft_before_club_owner_phrase() -> Non
 
     result = run_feasibility_phase1({"quote": quote, "tz_provider": _tz_provider})
 
-    assert any(
-        "Workflow 'FEX Guaranteed' aligns with planning notes (Guaranteed)" in entry
+    workflow_checks = [
+        entry
         for entry in result["validation_checks"]
-    )
+        if "Workflow 'FEX Guaranteed' aligns with planning notes (Guaranteed)" in entry
+    ]
+
+    assert workflow_checks
+    assert "owner aircraft CJ3 and requested CJ3" in workflow_checks[0]
+    assert "CYUL" not in workflow_checks[0]
     assert not any("workflow" in issue.lower() for issue in result["issues"])
 
 
