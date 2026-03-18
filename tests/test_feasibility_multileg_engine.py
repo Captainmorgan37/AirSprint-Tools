@@ -343,6 +343,30 @@ def test_workflow_validation_handles_cj_fleet_request_with_escaped_note_newlines
     assert not any("workflow" in issue.lower() for issue in result["issues"])
 
 
+def test_workflow_validation_treats_fex_shared_like_guaranteed() -> None:
+    quote = _workflow_quote("FEX-Shared", "CLUB CJ3 OWNER REQUESTING CJ3")
+
+    result = run_feasibility_phase1({"quote": quote, "tz_provider": _tz_provider})
+
+    assert any(
+        "Workflow 'FEX-Shared' aligns with planning notes (Guaranteed)" in entry
+        for entry in result["validation_checks"]
+    )
+    assert not any("workflow" in issue.lower() for issue in result["issues"])
+
+
+def test_workflow_validation_treats_fex_shared_priority_like_guaranteed() -> None:
+    quote = _workflow_quote("FEX-Shared Priority", "CLUB CJ3 OWNER REQUESTING CJ3")
+
+    result = run_feasibility_phase1({"quote": quote, "tz_provider": _tz_provider})
+
+    assert any(
+        "Workflow 'FEX-Shared Priority' aligns with planning notes (Guaranteed)" in entry
+        for entry in result["validation_checks"]
+    )
+    assert not any("workflow" in issue.lower() for issue in result["issues"])
+
+
 def test_as_available_workflow_validates_without_notes() -> None:
     quote = _workflow_quote("FEX As Available", "")
 
