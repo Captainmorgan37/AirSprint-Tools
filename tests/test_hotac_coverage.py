@@ -7,7 +7,11 @@ from datetime import date
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
 from fl3xx_api import Fl3xxApiConfig
-from hotac_coverage import _status_from_hotac_records, compute_hotac_coverage
+from hotac_coverage import (
+    _extract_hotel_from_positioning_notes,
+    _status_from_hotac_records,
+    compute_hotac_coverage,
+)
 
 
 def test_status_mapping_prefers_ok_and_flags_missing_documents() -> None:
@@ -831,6 +835,25 @@ def test_compute_hotac_coverage_skips_home_base_lookup_for_non_canadian_missing_
     assert row["HOTAC status"] == "Missing"
     assert row["Profile home base"] == ""
     assert troubleshooting_df.empty
+
+
+def test_extract_hotel_from_positioning_notes_matches_known_hotel_brands_without_hotel_label() -> None:
+    note = (
+        "CONF# MEAXDC // WS 168 // DEP 1615LT ARR 1717LT\n"
+        "HAMPTON INN SUITE - 3916 84TH AVE LEDUC AB T9E 7G1 CA  CONF# 94553989"
+    )
+
+    assert (
+        _extract_hotel_from_positioning_notes(note)
+        == "HAMPTON INN SUITE - 3916 84TH AVE LEDUC AB T9E 7G1 CA  CONF# 94553989"
+    )
+
+
+def test_extract_hotel_from_positioning_notes_does_not_treat_airline_line_as_hotel() -> None:
+    note = "CONF# MEAXDC // WS 168 // DEP 1615LT ARR 1717LT"
+
+    assert _extract_hotel_from_positioning_notes(note) == ""
+
 
 def test_compute_hotac_coverage_uses_positioning_roster_hotel_note() -> None:
     flights = [
