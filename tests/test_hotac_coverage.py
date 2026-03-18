@@ -888,7 +888,12 @@ def test_compute_hotac_coverage_uses_positioning_roster_hotel_note() -> None:
                         "fromAirport": {"icao": "CYVR"},
                         "toAirport": {"icao": "CYYZ"},
                         "notes": "Flight: ...\nHotel: Doubletree Toronto Airport/ CONF#54590540",
-                    }
+                    },
+                    {
+                        "type": "A",
+                        "from": 1772139600000,
+                        "to": 1772150400000,
+                    },
                 ],
             }
         ]
@@ -1025,7 +1030,12 @@ def test_compute_hotac_coverage_adds_positioning_only_roster_pilot_with_hotel_no
                         "fromAirport": {"icao": "CYVR"},
                         "toAirport": {"icao": "CYYZ"},
                         "notes": "Flight: ...\nHotel: Doubletree Toronto Airport/ CONF#54590540",
-                    }
+                    },
+                    {
+                        "type": "A",
+                        "from": 1772139600000,
+                        "to": 1772150400000,
+                    },
                 ],
                 "flights": [],
             }
@@ -1074,6 +1084,11 @@ def test_compute_hotac_coverage_roster_only_positioning_to_home_base_marks_home_
                         "fromAirport": {"icao": "CYVR"},
                         "toAirport": {"icao": "CYYC"},
                         "notes": "Hotel: Should not matter",
+                    },
+                    {
+                        "type": "A",
+                        "from": 1772139600000,
+                        "to": 1772150400000,
                     }
                 ],
                 "flights": [],
@@ -1117,6 +1132,11 @@ def test_compute_hotac_coverage_roster_only_home_base_uses_crew_member_lookup() 
                         "to": 1772150400000,
                         "fromAirport": {"icao": "CYVR"},
                         "toAirport": {"icao": "CYUL"},
+                    },
+                    {
+                        "type": "A",
+                        "from": 1772139600000,
+                        "to": 1772150400000,
                     }
                 ],
                 "flights": [],
@@ -1169,6 +1189,11 @@ def test_compute_hotac_coverage_roster_only_home_base_lookup_falls_back_to_perso
                         "to": 1772150400000,
                         "fromAirport": {"icao": "CYVR"},
                         "toAirport": {"icao": "CYUL"},
+                    },
+                    {
+                        "type": "A",
+                        "from": 1772139600000,
+                        "to": 1772150400000,
                     }
                 ],
                 "flights": [],
@@ -1219,6 +1244,11 @@ def test_compute_hotac_coverage_roster_only_home_base_lookup_uses_internal_id() 
                         "fromAirport": {"icao": "CYUL"},
                         "toAirport": {"icao": "CYYZ"},
                         "endsDutyPeriod": True,
+                    },
+                    {
+                        "type": "A",
+                        "from": 1773146700000,
+                        "to": 1773159420000,
                     }
                 ],
                 "flights": [],
@@ -1273,6 +1303,11 @@ def test_compute_hotac_coverage_roster_only_home_base_lookup_prefers_internal_id
                         "fromAirport": {"icao": "CYUL"},
                         "toAirport": {"icao": "CYYZ"},
                         "endsDutyPeriod": True,
+                    },
+                    {
+                        "type": "A",
+                        "from": 1773146700000,
+                        "to": 1773159420000,
                     }
                 ],
                 "flights": [],
@@ -1327,6 +1362,11 @@ def test_compute_hotac_coverage_roster_only_prefers_duty_ending_positioning_even
                         "fromAirport": {"icao": "CYVR"},
                         "toAirport": {"icao": "CYUL"},
                         "endsDutyPeriod": True,
+                    },
+                    {
+                        "type": "A",
+                        "from": 1772161200000,
+                        "to": 1772172000000,
                     },
                 ],
                 "flights": [],
@@ -1388,6 +1428,11 @@ def test_compute_hotac_coverage_replaces_earlier_scheduled_leg_with_later_roster
                         "toAirport": {"icao": "CYYZ"},
                         "endsDutyPeriod": True,
                         "notes": "Hotel: Hilton Garden Inn",
+                    },
+                    {
+                        "type": "A",
+                        "from": 1773146700000,
+                        "to": 1773159420000,
                     }
                 ],
                 "flights": [],
@@ -1447,6 +1492,11 @@ def test_compute_hotac_coverage_prefers_roster_duty_end_over_later_next_day_sche
                         "toAirport": {"icao": "CYYZ"},
                         "endsDutyPeriod": True,
                         "notes": "Hotel: HILTON GARDEN INN YYZ",
+                    },
+                    {
+                        "type": "A",
+                        "from": 1773146700000,
+                        "to": 1773159420000,
                     }
                 ],
                 "flights": [],
@@ -1485,7 +1535,12 @@ def test_compute_hotac_coverage_includes_positioning_only_row_when_role_not_expl
                         "to": 1772150400000,
                         "fromAirport": {"icao": "CYVR"},
                         "toAirport": {"icao": "CYYZ"},
-                    }
+                    },
+                    {
+                        "type": "A",
+                        "from": 1772139600000,
+                        "to": 1772150400000,
+                    },
                 ],
                 "flights": [],
             }
@@ -1518,7 +1573,12 @@ def test_compute_hotac_coverage_includes_positioning_only_rows_based_on_roster_a
                         "to": 1772150400000,
                         "fromAirport": {"icao": "CYVR"},
                         "toAirport": {"icao": "CYYZ"},
-                    }
+                    },
+                    {
+                        "type": "A",
+                        "from": 1772139600000,
+                        "to": 1772150400000,
+                    },
                 ],
                 "flights": [],
             }
@@ -1535,3 +1595,41 @@ def test_compute_hotac_coverage_includes_positioning_only_rows_based_on_roster_a
     row = raw_df.iloc[0]
     assert row["Pilot"] == "Cabin Crew"
     assert row["Positioning route"] == "CYVR-CYYZ"
+
+
+def test_compute_hotac_coverage_excludes_positioning_only_rows_without_overlapping_a_day() -> None:
+    def fake_roster(_config, _from_time, _to_time):
+        return [
+            {
+                "user": {
+                    "id": "802",
+                    "personnelNumber": "802",
+                    "firstName": "Tyler",
+                    "lastName": "Derko",
+                },
+                "entries": [
+                    {
+                        "type": "P",
+                        "from": 1772139600000,
+                        "to": 1772150400000,
+                        "fromAirport": {"icao": "CYYC"},
+                        "toAirport": {"icao": "YYZ"},
+                    },
+                    {
+                        "type": "OFF",
+                        "from": 1772154000000,
+                        "to": 1772161200000,
+                    },
+                ],
+                "flights": [],
+            }
+        ]
+
+    _display_df, raw_df, _troubleshooting_df = compute_hotac_coverage(
+        Fl3xxApiConfig(),
+        date(2026, 2, 26),
+        flights=[],
+        roster_fetcher=fake_roster,
+    )
+
+    assert raw_df.empty
