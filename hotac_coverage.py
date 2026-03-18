@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 import re
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import pandas as pd
 import requests
@@ -524,57 +524,6 @@ def _extract_roster_positioning_events(
     return events_by_personnel
 
 
-def _events_overlap(
-    first_start: Optional[datetime],
-    first_end: Optional[datetime],
-    second_start: Optional[datetime],
-    second_end: Optional[datetime],
-) -> bool:
-    if not all(isinstance(value, datetime) for value in (first_start, first_end, second_start, second_end)):
-        return False
-    return max(first_start, second_start) < min(first_end, second_end)
-
-
-
-def _roster_row_has_overlapping_available_day(row: Mapping[str, Any]) -> bool:
-    entries = row.get("entries") if isinstance(row.get("entries"), list) else []
-    positioning_entries = [
-        entry for entry in entries if isinstance(entry, Mapping) and _normalize_status(entry.get("type")) == "P"
-    ]
-    available_entries = [
-        entry for entry in entries if isinstance(entry, Mapping) and _normalize_status(entry.get("type")) == "A"
-    ]
-    for positioning_entry in positioning_entries:
-        positioning_from_ms = positioning_entry.get("from")
-        positioning_to_ms = positioning_entry.get("to")
-        positioning_from_utc = (
-            datetime.fromtimestamp(positioning_from_ms / 1000, tz=UTC)
-            if isinstance(positioning_from_ms, (int, float))
-            else None
-        )
-        positioning_to_utc = (
-            datetime.fromtimestamp(positioning_to_ms / 1000, tz=UTC)
-            if isinstance(positioning_to_ms, (int, float))
-            else None
-        )
-        for available_entry in available_entries:
-            available_from_ms = available_entry.get("from")
-            available_to_ms = available_entry.get("to")
-            available_from_utc = (
-                datetime.fromtimestamp(available_from_ms / 1000, tz=UTC)
-                if isinstance(available_from_ms, (int, float))
-                else None
-            )
-            available_to_utc = (
-                datetime.fromtimestamp(available_to_ms / 1000, tz=UTC)
-                if isinstance(available_to_ms, (int, float))
-                else None
-            )
-            if _events_overlap(positioning_from_utc, positioning_to_utc, available_from_utc, available_to_utc):
-                return True
-    return False
-
-
 def _extract_roster_positioning_only_pilots(
     roster_rows: Iterable[Mapping[str, Any]],
 ) -> Dict[str, Dict[str, Any]]:
@@ -596,6 +545,7 @@ def _extract_roster_positioning_only_pilots(
         )
         if not has_positioning_entry:
             continue
+
 
         first_name = str(user.get("firstName") or "").strip()
         last_name = str(user.get("lastName") or "").strip()
@@ -667,7 +617,6 @@ _POSITIONING_HOTEL_KEYWORDS = (
     "hotel",
     "hilton",
     "doubletree",
-    "double tree",
     "ramada",
     "hampton",
     "wyndham",
@@ -725,25 +674,19 @@ def compute_hotac_coverage(
         lambda conf, from_time, to_time: fetch_staff_roster(conf, from_time=from_time, to_time=to_time)
     )
 
-    roster_window_start = datetime.combine(target_date, datetime.min.time(), tzinfo=UTC)
+    roster_window_start = datetime.combine(target_date, datetime.min.time(), tzinfo=UTC) + timedelta(hours=8)
     roster_window_end = roster_window_start + timedelta(days=1)
     roster_events_by_personnel: Dict[str, List[Dict[str, Any]]] = {}
     roster_home_base_by_personnel: Dict[str, str] = {}
     roster_positioning_only_pilots: Dict[str, Dict[str, Any]] = {}
-    roster_positioning_only_with_a_day: Set[str] = set()
     troubleshooting_rows: List[Dict[str, Any]] = []
     should_fetch_roster = roster_fetcher is not None or bool(config.api_token or config.auth_header)
     if should_fetch_roster:
         try:
-            roster_rows = list(fetch_roster(config, roster_window_start, roster_window_end))
+            roster_rows = fetch_roster(config, roster_window_start, roster_window_end)
             roster_events_by_personnel = _extract_roster_positioning_events(roster_rows)
             roster_home_base_by_personnel = _extract_roster_home_base_airports(roster_rows)
             roster_positioning_only_pilots = _extract_roster_positioning_only_pilots(roster_rows)
-            roster_positioning_only_with_a_day = {
-                _normalize_id((row.get("user") if isinstance(row.get("user"), Mapping) else {}).get("personnelNumber"))
-                for row in roster_rows
-                if isinstance(row, Mapping) and _roster_row_has_overlapping_available_day(row)
-            }
         except Exception as exc:
             troubleshooting_rows.append(
                 {
@@ -850,8 +793,6 @@ def compute_hotac_coverage(
                 }
 
     for personnel, pilot in roster_positioning_only_pilots.items():
-        if personnel not in roster_positioning_only_with_a_day:
-            continue
         positioning_events = roster_events_by_personnel.get(personnel, [])
         if not positioning_events:
             continue
