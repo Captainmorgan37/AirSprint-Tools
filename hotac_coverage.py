@@ -624,6 +624,7 @@ _POSITIONING_HOTEL_KEYWORDS = (
     "suite",
     "suites",
     "lodge",
+    "sheraton",    
 )
 
 
