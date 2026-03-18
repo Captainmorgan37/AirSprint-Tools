@@ -242,6 +242,39 @@ def test_workflow_validation_handles_mixed_club_and_infinity_ownership() -> None
     assert not any("workflow" in issue.lower() for issue in result["issues"])
 
 
+
+def test_workflow_validation_supports_plus_suffix_aircraft_labels() -> None:
+    quote = _workflow_quote("FEX Guaranteed", "24HR CLUB CJ3+ OWNER REQUESTING CJ3+")
+
+    result = run_feasibility_phase1({"quote": quote, "tz_provider": _tz_provider})
+
+    assert any(
+        "Workflow 'FEX Guaranteed' aligns with planning notes (Guaranteed)" in entry
+        for entry in result["validation_checks"]
+    )
+    assert not any("workflow" in issue.lower() for issue in result["issues"])
+
+
+def test_workflow_validation_supports_aircraft_before_club_owner_phrase() -> None:
+    quote = _workflow_quote(
+        "FEX Guaranteed",
+        "08APR CYFC - CYUL\n11APR CYUL - CYFC\n-\n24Hrs CJ3 Club owner, requested CJ3",
+    )
+
+    result = run_feasibility_phase1({"quote": quote, "tz_provider": _tz_provider})
+
+    workflow_checks = [
+        entry
+        for entry in result["validation_checks"]
+        if "Workflow 'FEX Guaranteed' aligns with planning notes (Guaranteed)" in entry
+    ]
+
+    assert workflow_checks
+    assert "owner aircraft CJ3 and requested CJ3" in workflow_checks[0]
+    assert "CYUL" not in workflow_checks[0]
+    assert not any("workflow" in issue.lower() for issue in result["issues"])
+
+
 def test_workflow_validation_supports_abbreviated_infinity_and_request() -> None:
     quote = _workflow_quote("Club Guaranteed", "8HR INF CJ2 OWNER REQ CJ2")
 
@@ -290,6 +323,45 @@ def test_workflow_validation_allows_owner_prefix_typos() -> None:
 
     assert any(
         "Workflow 'FEX Interchange' aligns with planning notes (Interchange)" in entry
+        for entry in result["validation_checks"]
+    )
+    assert not any("workflow" in issue.lower() for issue in result["issues"])
+
+
+def test_workflow_validation_handles_cj_fleet_request_with_escaped_note_newlines() -> None:
+    quote = _workflow_quote(
+        "FEX Guaranteed",
+        "03MAY KSDL - KLWT \\n-\\n8hr Infinity EMB owner requesting CJ Fleet \\n-\\nreference #5001",
+    )
+
+    result = run_feasibility_phase1({"quote": quote, "tz_provider": _tz_provider})
+
+    assert any(
+        "Workflow 'FEX Guaranteed' aligns with planning notes (Guaranteed)" in entry
+        for entry in result["validation_checks"]
+    )
+    assert not any("workflow" in issue.lower() for issue in result["issues"])
+
+
+def test_workflow_validation_treats_fex_shared_like_guaranteed() -> None:
+    quote = _workflow_quote("FEX-Shared", "CLUB CJ3 OWNER REQUESTING CJ3")
+
+    result = run_feasibility_phase1({"quote": quote, "tz_provider": _tz_provider})
+
+    assert any(
+        "Workflow 'FEX-Shared' aligns with planning notes (Guaranteed)" in entry
+        for entry in result["validation_checks"]
+    )
+    assert not any("workflow" in issue.lower() for issue in result["issues"])
+
+
+def test_workflow_validation_treats_fex_shared_priority_like_guaranteed() -> None:
+    quote = _workflow_quote("FEX-Shared Priority", "CLUB CJ3 OWNER REQUESTING CJ3")
+
+    result = run_feasibility_phase1({"quote": quote, "tz_provider": _tz_provider})
+
+    assert any(
+        "Workflow 'FEX-Shared Priority' aligns with planning notes (Guaranteed)" in entry
         for entry in result["validation_checks"]
     )
     assert not any("workflow" in issue.lower() for issue in result["issues"])

@@ -163,6 +163,50 @@ def _enrich_legs_for_analysis(legs: list[dict[str, Any]], airport_lookup: Mappin
     return pd.DataFrame(records)
 
 
+def _is_pax_flight_type(value: Any) -> bool:
+    text = str(value or "").strip().upper()
+    return text == "PAX" or "PASSENGER" in text
+
+
+def _build_average_flight_length_summary(
+    analysis_df: pd.DataFrame,
+    airport_lookup: Mapping[str, Mapping[str, Any]],
+) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    regions = {"Overall": "overall", **FOCUS_OPTIONS}
+
+    for label, focus_key in regions.items():
+        subset = analysis_df
+        if focus_key != "overall":
+            subset = subset[
+                subset.apply(
+                    lambda row: airport_matches_focus(row["dep_airport"], airport_lookup, focus_key)
+                    or airport_matches_focus(row["arr_airport"], airport_lookup, focus_key),
+                    axis=1,
+                )
+            ]
+
+        subset = subset[subset["duration_hours"].notna()]
+        pax_subset = subset[subset["is_pax"]]
+        pos_subset = subset[subset["is_pos"]]
+
+        rows.append(
+            {
+                "Region": label,
+                "PAX legs": int(len(pax_subset)),
+                "Avg PAX flight length (hours)": round(float(pax_subset["duration_hours"].mean()), 2)
+                if not pax_subset.empty
+                else None,
+                "POS legs": int(len(pos_subset)),
+                "Avg POS flight length (hours)": round(float(pos_subset["duration_hours"].mean()), 2)
+                if not pos_subset.empty
+                else None,
+            }
+        )
+
+    return pd.DataFrame(rows)
+
+
 today = date.today()
 default_start = date(today.year - 1, 1, 1)
 default_end = date(today.year - 1, 12, 31)
@@ -221,8 +265,16 @@ if legs:
 
     airport_lookup = load_airport_metadata_lookup()
     analysis_df = _enrich_legs_for_analysis(legs, airport_lookup)
+    analysis_df["is_pax"] = analysis_df["flightType"].apply(_is_pax_flight_type) & (~analysis_df["is_pos"])
 
     st.markdown("---")
+    st.subheader("Average flight length")
+    avg_length_df = _build_average_flight_length_summary(analysis_df, airport_lookup)
+    st.dataframe(avg_length_df, use_container_width=True, hide_index=True)
+
+    chart_df = avg_length_df.set_index("Region")[["Avg PAX flight length (hours)", "Avg POS flight length (hours)"]]
+    st.bar_chart(chart_df)
+
     st.subheader("Advanced POS analysis")
     selected_focus = st.selectbox("Focus region", options=list(FOCUS_OPTIONS.keys()), index=0)
     focus_key = FOCUS_OPTIONS[selected_focus]

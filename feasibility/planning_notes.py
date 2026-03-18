@@ -24,11 +24,25 @@ _MONTH_MAP = {
 }
 
 _REQUEST_PHRASE_PATTERN = re.compile(
-    r"\b(?:request(?:ing|ed)?|req)\b(.*)$", re.IGNORECASE
+    r"\b(?:request(?:ing|ed)?|req)\b([^\n\r]*)", re.IGNORECASE
 )
 _REQUEST_TOKEN_PATTERN = re.compile(r"[A-Z0-9+/\-]{2,8}", re.IGNORECASE)
-_LETTER_ONLY_CODES = {"EMB"}
+_LETTER_ONLY_CODES = {"EMB", "CJ"}
 
+
+def normalize_planning_note_text(note: Optional[str]) -> str:
+    """Normalize planning-note text from API payload variants."""
+
+    if not isinstance(note, str):
+        return ""
+    return (
+        note.replace("\\r\\n", "\n")
+        .replace("\\n", "\n")
+        .replace("\\r", "\n")
+        .replace("\r\n", "\n")
+        .replace("\r", "\n")
+        .strip()
+    )
 
 def extract_planning_note_text(payload: Any) -> Optional[str]:
     """Best-effort extraction of planning note text from varied payloads."""
@@ -61,10 +75,11 @@ def extract_planning_note_text(payload: Any) -> Optional[str]:
 def extract_requested_aircraft_from_note(note: str) -> Optional[str]:
     """Return the requested aircraft label embedded in a planning note, if any."""
 
-    if not isinstance(note, str):
+    note_text = normalize_planning_note_text(note)
+    if not note_text:
         return None
 
-    match = _REQUEST_PHRASE_PATTERN.search(note)
+    match = _REQUEST_PHRASE_PATTERN.search(note_text)
     if not match:
         return None
 
@@ -144,12 +159,13 @@ def parse_route_entries_from_note(
 ) -> List[Tuple[date, List[str]]]:
     """Extract date-tagged route sequences from a planning note."""
 
-    if not isinstance(note, str):
+    note_text = normalize_planning_note_text(note)
+    if not note_text:
         return []
 
     entries: List[Tuple[date, List[str]]] = []
-    pattern = re.compile(r"^(\d{1,2}[A-Z]{3}(?:\d{2})?)\s+(.*)$")
-    for raw_line in note.splitlines():
+    pattern = re.compile(r"^(\d{1,2}[A-Z]{3}(?:\d{2})?)(?:\s*[-:]\s*|\s+)(.*)$")
+    for raw_line in note_text.splitlines():
         line = raw_line.strip().strip("-=").strip()
         if not line:
             continue

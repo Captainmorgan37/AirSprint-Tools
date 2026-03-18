@@ -178,27 +178,6 @@ def _find_reserve_calendar_dates(
     return sorted(matches)
 
 
-def _find_reserve_calendar_dates(
-    legs: Sequence[Mapping[str, Any]] | None,
-) -> list[date]:
-    """Return sorted reserve calendar dates represented within ``legs``."""
-
-    if not legs:
-        return []
-
-    matches: set[date] = set()
-    for leg in legs:
-        if _is_reserve_calendar_departure(leg):
-            departure_time = _extract_departure_time(leg)
-            if departure_time:
-                try:
-                    dep_dt = safe_parse_dt(departure_time)
-                except Exception:
-                    continue
-                matches.add(dep_dt.date())
-    return sorted(matches)
-
-
 def _is_club_owner_booking(flight: Optional[Mapping[str, Any]]) -> bool:
     if not isinstance(flight, Mapping):
         return False

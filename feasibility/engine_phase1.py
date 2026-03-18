@@ -28,6 +28,7 @@ from .planning_notes import (
     airport_code_matches,
     extract_planning_note_text,
     extract_requested_aircraft_from_note,
+    normalize_planning_note_text,
     parse_route_entries_from_note,
 )
 from .quote_lookup import build_quote_leg_options
@@ -398,18 +399,25 @@ def _extract_owner_aircraft_from_note(note: Optional[str]) -> list[str]:
     if not note:
         return []
 
-    matches = re.finditer(
-        r"\b(?:\w+\s+)?(?:\d+)?\s*(?:CLUB|INF(?:INITY)?)\s+([A-Z0-9/,\s\-&]{2,40})\s+OWNER\b",
-        note,
-        re.IGNORECASE,
+    patterns = (
+        r"\b(?:\w+[ 	]+)?(?:\d+)?[ 	]*(?:CLUB|INF(?:INITY)?)[ 	]+([A-Z0-9+,/ 	\-&]{2,40})[ 	]+OWNER\b",
+        r"\b([A-Z0-9+,/ 	\-&]{2,40})[ 	]+(?:CLUB|INF(?:INITY)?)[ 	]+OWNER\b",
     )
 
     labels: list[str] = []
-    for match in matches:
-        for raw in re.split(r"[/,\s]+|\band\b", match.group(1), flags=re.IGNORECASE):
-            normalized = _normalize_aircraft_label(raw)
-            if normalized:
-                labels.append(normalized)
+    for line in normalize_planning_note_text(note).splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        for pattern in patterns:
+            for match in re.finditer(pattern, stripped, re.IGNORECASE):
+                for raw in re.split(r"[/, 	]+|\band\b|&", match.group(1), flags=re.IGNORECASE):
+                    normalized = _normalize_aircraft_label(raw)
+                    if not normalized or normalized.isdigit():
+                        continue
+                    if re.fullmatch(r"\d+(?:H|HR|HRS)", normalized):
+                        continue
+                    labels.append(normalized)
 
     return labels
 
@@ -423,7 +431,10 @@ def _classify_expected_workflow(owner_aircraft: list[str], requested: str) -> Op
     if requested_canonical in owner_canonicals:
         return "guaranteed"
 
-    if "EMB" in owner_canonicals and requested_canonical == "CJ2":
+    if requested_canonical == "CJ" and any(label.startswith("CJ") for label in owner_canonicals):
+        return "guaranteed"
+
+    if "EMB" in owner_canonicals and requested_canonical.startswith("CJ"):
         return "guaranteed"
 
     return "interchange"
@@ -484,6 +495,8 @@ def _extract_workflow_bucket(day: DayContext) -> tuple[Optional[str], str]:
     cleaned = re.sub(r"[^A-Z]", "", workflow_label.upper())
     if "ASAVAILABLE" in cleaned:
         return "as available", workflow_label
+    if "SHARED" in cleaned:
+        return "guaranteed", workflow_label
     if "GUARANTEED" in cleaned:
         return "guaranteed", workflow_label
     if "INTERCHANGE" in cleaned:
