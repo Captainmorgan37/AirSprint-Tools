@@ -288,6 +288,28 @@ def test_large_package_set_spreads_tail_counts_more_evenly(TailPackage, assign_p
     assert any(pkg.tail.startswith("W") for pkg in buckets[labels[-1]])
 
 
+def test_tail_count_balance_takes_priority_over_weighted_workload_targets(
+    TailPackage, assign_preference_weighted
+):
+    labels = ["0500", "0800", "1200"]
+    weights = [1.0, 1.0, 3.0]
+    packages = [
+        _make_tail(TailPackage, "E1", "America/New_York"),
+        _make_tail(TailPackage, "E2", "America/New_York"),
+        _make_tail(TailPackage, "C1", "America/Chicago"),
+        _make_tail(TailPackage, "W1", "America/Denver"),
+        _make_tail(TailPackage, "W2", "America/Los_Angeles"),
+        _make_tail(TailPackage, "W3", "America/Los_Angeles"),
+    ]
+
+    buckets = assign_preference_weighted(packages, labels, weights, force_easterly_first=True)
+
+    counts = [len(buckets[label]) for label in labels]
+    assert counts == [2, 2, 2]
+    assert any(pkg.tail.startswith("E") for pkg in buckets[labels[0]])
+    assert any(pkg.tail.startswith("W") for pkg in buckets[labels[-1]])
+
+
 def test_customs_workload_excludes_canadian_arrivals(task_splitter_module):
     df = pd.DataFrame(
         [
