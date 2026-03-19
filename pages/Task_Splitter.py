@@ -307,6 +307,36 @@ def _disambiguate_labels(labels: Sequence[str]) -> List[str]:
     return result
 
 
+_SHIFT_TIME_IN_LABEL_PATTERN = re.compile(r"(?<!\d)(?P<hour>\d{1,2})(?::?(?P<minute>\d{2}))?(?!\d)")
+
+
+def _extract_shift_sort_time(label: str) -> Optional[int]:
+    """Return minutes after midnight parsed from a shift label, if present."""
+    if not label:
+        return None
+    for match in _SHIFT_TIME_IN_LABEL_PATTERN.finditer(label):
+        hour = int(match.group("hour"))
+        minute_group = match.group("minute")
+        minute = int(minute_group) if minute_group is not None else 0
+        if 0 <= hour <= 23 and 0 <= minute <= 59:
+            return hour * 60 + minute
+    return None
+
+
+def _shift_assignment_order(labels: Sequence[str]) -> List[int]:
+    """Sort shifts by parsed label time, falling back to original order if any are missing."""
+    parsed_times = [_extract_shift_sort_time(label) for label in labels]
+    if any(value is None for value in parsed_times):
+        return list(range(len(labels)))
+    return sorted(
+        range(len(labels)),
+        key=lambda idx: (
+            parsed_times[idx],
+            idx,
+        ),
+    )
+
+
 
 
 # ----------------------------
@@ -1471,12 +1501,16 @@ if st.session_state.get("_run"):
         for pkg in priority_packages
     }
 
+    assignment_order = _shift_assignment_order(labels)
+    ordered_labels = [labels[idx] for idx in assignment_order]
+    ordered_workloads = [label_workloads[idx] for idx in assignment_order]
+
     st.subheader("Assignments")
 
     buckets = assign_preference_weighted(
         packages,
-        labels,
-        label_workloads,
+        ordered_labels,
+        ordered_workloads,
     )
 
     # Display per-shift tables

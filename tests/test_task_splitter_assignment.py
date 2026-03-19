@@ -228,6 +228,22 @@ def test_westerly_tails_prefer_last_shift(TailPackage, assign_preference_weighte
     assert western_tails.issubset(last_shift_tails)
 
 
+def test_shift_assignment_order_uses_times_in_labels(task_splitter_module):
+    labels = ["0900 - Paul", "0600 - Sean", "0500 - Christina"]
+
+    order = task_splitter_module._shift_assignment_order(labels)
+
+    assert order == [2, 1, 0]
+
+
+def test_shift_assignment_order_falls_back_when_any_time_missing(task_splitter_module):
+    labels = ["0900 - Paul", "Sean", "0500 - Christina"]
+
+    order = task_splitter_module._shift_assignment_order(labels)
+
+    assert order == [0, 1, 2]
+
+
 
 def test_balances_tail_counts_without_breaking_timezone_preferences(TailPackage, assign_preference_weighted):
     labels = ["0500", "0600", "0800", "0900"]
