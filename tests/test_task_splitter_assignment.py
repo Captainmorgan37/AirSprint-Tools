@@ -333,6 +333,31 @@ def test_tail_count_balance_takes_priority_over_weighted_workload_targets(
     assert not any(pkg.tail.startswith("E") for pkg in buckets[labels[-1]])
 
 
+def test_timezone_cleanup_swaps_late_eastern_tails_with_early_western_tails(
+    TailPackage, assign_preference_weighted
+):
+    labels = ["0500", "0600", "0800", "1200"]
+    weights = [1.0] * len(labels)
+    packages = [
+        _make_tail(TailPackage, "E1", "America/New_York"),
+        _make_tail(TailPackage, "E2", "America/New_York"),
+        _make_tail(TailPackage, "E3", "America/New_York"),
+        _make_tail(TailPackage, "E4", "America/New_York"),
+        _make_tail(TailPackage, "M1", "America/Denver"),
+        _make_tail(TailPackage, "M2", "America/Denver"),
+        _make_tail(TailPackage, "W1", "America/Los_Angeles"),
+        _make_tail(TailPackage, "W2", "America/Los_Angeles"),
+    ]
+
+    buckets = assign_preference_weighted(packages, labels, weights, force_easterly_first=True)
+
+    latest_shift_tails = {pkg.tail for pkg in buckets[labels[-1]]}
+    earliest_shift_tails = {pkg.tail for pkg in buckets[labels[0]]}
+    assert "E4" not in latest_shift_tails
+    assert any(tail.startswith("W") or tail.startswith("M") for tail in latest_shift_tails)
+    assert any(tail.startswith("E") for tail in earliest_shift_tails)
+
+
 def test_customs_workload_excludes_canadian_arrivals(task_splitter_module):
     df = pd.DataFrame(
         [
