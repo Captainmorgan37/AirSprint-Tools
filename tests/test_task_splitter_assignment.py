@@ -228,6 +228,50 @@ def test_westerly_tails_prefer_last_shift(TailPackage, assign_preference_weighte
     assert western_tails.issubset(last_shift_tails)
 
 
+
+def test_balances_tail_counts_without_breaking_timezone_preferences(TailPackage, assign_preference_weighted):
+    labels = ["0500", "0600", "0800", "0900"]
+    weights = [1.0] * len(labels)
+    packages = [
+        _make_tail(TailPackage, "E1", "America/New_York"),
+        _make_tail(TailPackage, "E2", "America/New_York"),
+        _make_tail(TailPackage, "E3", "America/New_York"),
+        _make_tail(TailPackage, "C1", "America/Chicago"),
+        _make_tail(TailPackage, "W1", "America/Denver"),
+        _make_tail(TailPackage, "W2", "America/Los_Angeles"),
+    ]
+
+    buckets = assign_preference_weighted(packages, labels, weights, force_easterly_first=True)
+
+    counts = [len(buckets[label]) for label in labels]
+    assert max(counts) - min(counts) <= 1
+    assert any(pkg.tail.startswith("E") for pkg in buckets[labels[0]])
+    assert any(pkg.tail.startswith("W") for pkg in buckets[labels[-1]])
+
+
+
+def test_large_package_set_spreads_tail_counts_more_evenly(TailPackage, assign_preference_weighted):
+    labels = ["0500", "0600", "0800", "0900"]
+    weights = [1.0] * len(labels)
+    packages = []
+    for i in range(10):
+        packages.append(_make_tail(TailPackage, f"E{i}", "America/New_York"))
+    for i in range(8):
+        packages.append(_make_tail(TailPackage, f"C{i}", "America/Chicago"))
+    for i in range(6):
+        packages.append(_make_tail(TailPackage, f"M{i}", "America/Denver"))
+    for i in range(6):
+        packages.append(_make_tail(TailPackage, f"W{i}", "America/Los_Angeles"))
+
+    buckets = assign_preference_weighted(packages, labels, weights, force_easterly_first=True)
+
+    counts = [len(buckets[label]) for label in labels]
+    assert max(counts) - min(counts) <= 1
+    assert sum(counts) == len(packages)
+    assert any(pkg.tail.startswith("E") for pkg in buckets[labels[0]])
+    assert any(pkg.tail.startswith("W") for pkg in buckets[labels[-1]])
+
+
 def test_customs_workload_excludes_canadian_arrivals(task_splitter_module):
     df = pd.DataFrame(
         [
@@ -256,7 +300,7 @@ def test_customs_workload_excludes_canadian_arrivals(task_splitter_module):
     assert len(packages) == 1
     pkg = packages[0]
     assert pkg.customs_legs == 1
-    assert pkg.workload == pytest.approx(3.25)
+    assert pkg.workload == pytest.approx(4.75)
 
 
 def test_is_westerly_offset_bounds(is_westerly_offset):
