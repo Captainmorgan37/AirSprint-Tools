@@ -249,6 +249,29 @@ def test_balances_tail_counts_without_breaking_timezone_preferences(TailPackage,
     assert any(pkg.tail.startswith("W") for pkg in buckets[labels[-1]])
 
 
+
+def test_large_package_set_spreads_tail_counts_more_evenly(TailPackage, assign_preference_weighted):
+    labels = ["0500", "0600", "0800", "0900"]
+    weights = [1.0] * len(labels)
+    packages = []
+    for i in range(10):
+        packages.append(_make_tail(TailPackage, f"E{i}", "America/New_York"))
+    for i in range(8):
+        packages.append(_make_tail(TailPackage, f"C{i}", "America/Chicago"))
+    for i in range(6):
+        packages.append(_make_tail(TailPackage, f"M{i}", "America/Denver"))
+    for i in range(6):
+        packages.append(_make_tail(TailPackage, f"W{i}", "America/Los_Angeles"))
+
+    buckets = assign_preference_weighted(packages, labels, weights, force_easterly_first=True)
+
+    counts = [len(buckets[label]) for label in labels]
+    assert max(counts) - min(counts) <= 1
+    assert sum(counts) == len(packages)
+    assert any(pkg.tail.startswith("E") for pkg in buckets[labels[0]])
+    assert any(pkg.tail.startswith("W") for pkg in buckets[labels[-1]])
+
+
 def test_customs_workload_excludes_canadian_arrivals(task_splitter_module):
     df = pd.DataFrame(
         [
