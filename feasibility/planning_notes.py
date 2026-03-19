@@ -118,11 +118,16 @@ def _extract_route_points(route_text: str) -> List[str]:
     cleaned = re.sub(r"\[.*?\]", "", route_text)
     cleaned = re.sub(r"\(.*?\)", "", cleaned)
     cleaned = cleaned.replace("→", "-")
-    parts = re.split(r"\s*-\s*", cleaned)
     points: List[str] = []
-    for part in parts:
-        code = part.strip().upper()
-        if not code or not re.match(r"^[A-Z0-9]{3,4}$", code):
+    for part in re.split(r"\s*-\s*", cleaned):
+        segment = part.strip()
+        if not segment:
+            continue
+        match = re.search(r"\b([A-Z][A-Z0-9]{2,3})\b", segment)
+        if not match:
+            continue
+        code = match.group(1).upper()
+        if not re.match(r"^[A-Z0-9]{3,4}$", code):
             continue
         points.append(code)
     return points
@@ -165,19 +170,43 @@ def parse_route_entries_from_note(
 
     entries: List[Tuple[date, List[str]]] = []
     pattern = re.compile(r"^(\d{1,2}[A-Z]{3}(?:\d{2})?)(?:\s*[-:]\s*|\s+)(.*)$")
+    stop_hint_pattern = re.compile(r"\b(?:customs|tech|technical|fuel)\s+stop\b", re.IGNORECASE)
     for raw_line in note_text.splitlines():
         line = raw_line.strip().strip("-=").strip()
         if not line:
             continue
         match = pattern.match(line)
-        if not match:
+        if match:
+            parsed_date = _parse_note_date(match.group(1), default_year=default_year)
+            if not parsed_date:
+                continue
+            route_points = _extract_route_points(match.group(2))
+            if route_points:
+                entries.append((parsed_date, route_points))
             continue
-        parsed_date = _parse_note_date(match.group(1), default_year=default_year)
-        if not parsed_date:
+
+        if not entries or not stop_hint_pattern.search(line):
             continue
-        route_points = _extract_route_points(match.group(2))
-        if route_points:
-            entries.append((parsed_date, route_points))
+
+        stop_points = _extract_route_points(line)
+        if not stop_points:
+            continue
+
+        entry_date, route = entries[-1]
+        if len(route) < 2:
+            updated_route = route[:]
+            for point in stop_points:
+                if point not in updated_route:
+                    updated_route.append(point)
+            entries[-1] = (entry_date, updated_route)
+            continue
+
+        updated_route = route[:-1]
+        for point in stop_points:
+            if point not in updated_route and point != route[-1]:
+                updated_route.append(point)
+        updated_route.append(route[-1])
+        entries[-1] = (entry_date, updated_route)
     return entries
 
 

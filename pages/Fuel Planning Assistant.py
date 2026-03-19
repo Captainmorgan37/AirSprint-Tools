@@ -10,7 +10,7 @@ import requests
 import streamlit as st
 
 from fl3xx_api import Fl3xxApiConfig, fetch_flights
-from flight_leg_utils import normalize_fl3xx_payload
+from flight_leg_utils import filter_rows_by_departure_window, format_utc, normalize_fl3xx_payload
 from Home import configure_page, get_secret, password_gate, render_sidebar
 
 
@@ -21,6 +21,15 @@ TARGET_LANDING_FUEL_LBS = {
     "CJ": 1200,
     "Embraer": 3000,
 }
+BOOKING_MATCH_SCORE = 100
+TAIL_MATCH_SCORE = 40
+AIRPORT_MATCH_SCORE = 25
+DEPARTURE_WITHIN_30_MIN_SCORE = 20
+ARRIVAL_WITHIN_30_MIN_SCORE = 10
+DURATION_WITHIN_20_MIN_SCORE = 10
+FALLBACK_MATCH_MIN_SCORE = 90
+MAX_FALLBACK_DEPARTURE_DIFF_MINUTES = 180
+FLIGHT_FETCH_WINDOW_START_HOUR_UTC = 8
 
 
 @dataclass
@@ -34,6 +43,18 @@ class FlightRecord:
     duration_minutes: Optional[int]
     flight_id: Optional[str]
     booking_identifier: Optional[str]
+
+
+@dataclass(frozen=True)
+class MatchResult:
+    foreflight_record: FlightRecord
+    fl3xx_record: FlightRecord
+    match_reason: str
+    confidence: str
+    score: int
+    departure_diff_minutes: Optional[int]
+    arrival_diff_minutes: Optional[int]
+    duration_diff_minutes: Optional[int]
 
 
 configure_page(page_title="Fuel Planning Assistant")
@@ -179,6 +200,16 @@ def _build_fl3xx_config(token: Optional[str] = None) -> Fl3xxApiConfig:
         config_kwargs["timeout"] = timeout
 
     return Fl3xxApiConfig(**config_kwargs)
+
+
+def _compute_selected_window_utc(selected_day: date) -> tuple[datetime, datetime]:
+    start_utc = datetime.combine(
+        selected_day,
+        datetime.min.time(),
+        tzinfo=timezone.utc,
+    ) + timedelta(hours=FLIGHT_FETCH_WINDOW_START_HOUR_UTC)
+    end_utc = start_utc + timedelta(days=1)
+    return start_utc, end_utc
 
 
 def _extract_foreflight_flights(payload: Any) -> list[Mapping[str, Any]]:
@@ -336,10 +367,68 @@ def _record_key(record: FlightRecord) -> tuple[str, str, str]:
     return (record.tail, record.departure_airport, record.arrival_airport)
 
 
+def _time_diff_minutes(left: Optional[datetime], right: Optional[datetime]) -> Optional[int]:
+    if not left or not right:
+        return None
+    return int(round(abs((left - right).total_seconds()) / 60))
+
+
+def _int_diff_minutes(left: Optional[int], right: Optional[int]) -> Optional[int]:
+    if left is None or right is None:
+        return None
+    return abs(left - right)
+
+
+def _classify_match_confidence(score: int, match_reason: str) -> str:
+    if match_reason == "booking_identifier":
+        return "High"
+    if score >= 110:
+        return "High"
+    if score >= FALLBACK_MATCH_MIN_SCORE:
+        return "Medium"
+    return "Low"
+
+
+def _score_match(
+    foreflight_record: FlightRecord,
+    fl3xx_record: FlightRecord,
+) -> tuple[int, Optional[int], Optional[int], Optional[int]]:
+    score = 0
+    if foreflight_record.tail == fl3xx_record.tail:
+        score += TAIL_MATCH_SCORE
+    if foreflight_record.departure_airport == fl3xx_record.departure_airport:
+        score += AIRPORT_MATCH_SCORE
+    if foreflight_record.arrival_airport == fl3xx_record.arrival_airport:
+        score += AIRPORT_MATCH_SCORE
+
+    departure_diff_minutes = _time_diff_minutes(
+        foreflight_record.departure_time,
+        fl3xx_record.departure_time,
+    )
+    if departure_diff_minutes is not None and departure_diff_minutes <= 30:
+        score += DEPARTURE_WITHIN_30_MIN_SCORE
+
+    arrival_diff_minutes = _time_diff_minutes(
+        foreflight_record.arrival_time,
+        fl3xx_record.arrival_time,
+    )
+    if arrival_diff_minutes is not None and arrival_diff_minutes <= 30:
+        score += ARRIVAL_WITHIN_30_MIN_SCORE
+
+    duration_diff_minutes = _int_diff_minutes(
+        foreflight_record.duration_minutes,
+        fl3xx_record.duration_minutes,
+    )
+    if duration_diff_minutes is not None and duration_diff_minutes <= 20:
+        score += DURATION_WITHIN_20_MIN_SCORE
+
+    return score, departure_diff_minutes, arrival_diff_minutes, duration_diff_minutes
+
+
 def _match_records(
     foreflight_records: list[FlightRecord],
     fl3xx_records: list[FlightRecord],
-) -> tuple[list[tuple[FlightRecord, FlightRecord]], list[FlightRecord], list[FlightRecord]]:
+) -> tuple[list[MatchResult], list[FlightRecord], list[FlightRecord]]:
     fl3xx_by_booking: dict[str, list[FlightRecord]] = {}
     for record in fl3xx_records:
         if record.booking_identifier:
@@ -349,30 +438,80 @@ def _match_records(
     for record in fl3xx_records:
         fl3xx_by_key.setdefault(_record_key(record), []).append(record)
 
-    matches: list[tuple[FlightRecord, FlightRecord]] = []
+    matches: list[MatchResult] = []
     unmatched_foreflight: list[FlightRecord] = []
 
     for ff_record in foreflight_records:
         candidates: Optional[list[FlightRecord]] = None
-        matched_using_booking = False
         if ff_record.booking_identifier:
             candidates = fl3xx_by_booking.get(ff_record.booking_identifier)
-            matched_using_booking = candidates is not None
-        if not candidates:
+        if candidates:
+            matched = candidates.pop(0)
+            matches.append(
+                MatchResult(
+                    foreflight_record=ff_record,
+                    fl3xx_record=matched,
+                    match_reason="booking_identifier",
+                    confidence="High",
+                    score=BOOKING_MATCH_SCORE,
+                    departure_diff_minutes=_time_diff_minutes(ff_record.departure_time, matched.departure_time),
+                    arrival_diff_minutes=_time_diff_minutes(ff_record.arrival_time, matched.arrival_time),
+                    duration_diff_minutes=(
+                        abs(ff_record.duration_minutes - matched.duration_minutes)
+                        if ff_record.duration_minutes is not None and matched.duration_minutes is not None
+                        else None
+                    ),
+                )
+            )
+        else:
             key = _record_key(ff_record)
             candidates = fl3xx_by_key.get(key)
-        if not candidates:
-            unmatched_foreflight.append(ff_record)
-            continue
-        if ff_record.departure_time:
-            def _distance_minutes(candidate: FlightRecord) -> float:
-                if not candidate.departure_time:
-                    return float("inf")
-                delta = candidate.departure_time - ff_record.departure_time
-                return abs(delta.total_seconds())
-            candidates.sort(key=_distance_minutes)
-        matched = candidates.pop(0)
-        matches.append((ff_record, matched))
+            if not candidates:
+                unmatched_foreflight.append(ff_record)
+                continue
+
+            scored_candidates: list[tuple[int, Optional[int], Optional[int], Optional[int], FlightRecord]] = []
+            for candidate in candidates:
+                score, departure_diff_minutes, arrival_diff_minutes, duration_diff_minutes = _score_match(ff_record, candidate)
+                if (
+                    departure_diff_minutes is not None
+                    and departure_diff_minutes > MAX_FALLBACK_DEPARTURE_DIFF_MINUTES
+                ):
+                    continue
+                scored_candidates.append(
+                    (score, departure_diff_minutes, arrival_diff_minutes, duration_diff_minutes, candidate)
+                )
+
+            if not scored_candidates:
+                unmatched_foreflight.append(ff_record)
+                continue
+
+            scored_candidates.sort(
+                key=lambda item: (
+                    -item[0],
+                    item[1] if item[1] is not None else float("inf"),
+                    item[2] if item[2] is not None else float("inf"),
+                    item[3] if item[3] is not None else float("inf"),
+                )
+            )
+            best_score, departure_diff_minutes, arrival_diff_minutes, duration_diff_minutes, matched = scored_candidates[0]
+            if best_score < FALLBACK_MATCH_MIN_SCORE:
+                unmatched_foreflight.append(ff_record)
+                continue
+            candidates.remove(matched)
+            matches.append(
+                MatchResult(
+                    foreflight_record=ff_record,
+                    fl3xx_record=matched,
+                    match_reason="tail_route_time",
+                    confidence=_classify_match_confidence(best_score, "tail_route_time"),
+                    score=best_score,
+                    departure_diff_minutes=departure_diff_minutes,
+                    arrival_diff_minutes=arrival_diff_minutes,
+                    duration_diff_minutes=duration_diff_minutes,
+                )
+            )
+
         if matched.booking_identifier:
             booking_candidates = fl3xx_by_booking.get(matched.booking_identifier)
             if booking_candidates and matched in booking_candidates:
@@ -385,8 +524,10 @@ def _match_records(
             key_candidates.remove(matched)
             if not key_candidates:
                 fl3xx_by_key.pop(matched_key, None)
-        if matched_using_booking and ff_record.booking_identifier and not candidates:
-            fl3xx_by_booking.pop(ff_record.booking_identifier, None)
+        if ff_record.booking_identifier:
+            ff_booking_candidates = fl3xx_by_booking.get(ff_record.booking_identifier)
+            if ff_booking_candidates is not None and not ff_booking_candidates:
+                fl3xx_by_booking.pop(ff_record.booking_identifier, None)
 
     remaining_by_key = [record for records in fl3xx_by_key.values() for record in records]
     remaining_by_booking = [
@@ -652,6 +793,11 @@ target_landing_fuel = st.number_input(
     key="fuel_planning_target_landing_fuel",
 )
 st.caption("Required departure fuel uses taxi + flight burn + this target landing fuel.")
+window_start_utc, window_end_utc = _compute_selected_window_utc(selected_date)
+st.caption(
+    "Flight pull window uses a full operating day from "
+    f"**{format_utc(window_start_utc)}** to **{format_utc(window_end_utc)}**."
+)
 
 fetch = st.button("Fetch flights & performance")
 
@@ -683,12 +829,12 @@ if fetch:
         st.stop()
 
     from_date = selected_date
-    to_date = selected_date + timedelta(days=1)
+    to_date = selected_date + timedelta(days=2)
 
     with st.spinner("Fetching ForeFlight flights..."):
         params = {
-            "fromDate": f"{from_date.isoformat()}Z",
-            "toDate": f"{to_date.isoformat()}Z",
+            "fromDate": format_utc(window_start_utc),
+            "toDate": format_utc(window_end_utc),
         }
         headers = {
             "x-api-key": foreflight_token,
@@ -702,6 +848,11 @@ if fetch:
         fl3xx_config = _build_fl3xx_config(fl3xx_token)
         fl3xx_flights, _meta = fetch_flights(fl3xx_config, from_date=from_date, to_date=to_date)
         fl3xx_normalized, _stats = normalize_fl3xx_payload(fl3xx_flights)
+        fl3xx_normalized, _window_stats = filter_rows_by_departure_window(
+            fl3xx_normalized,
+            window_start_utc,
+            window_end_utc,
+        )
 
     foreflight_records = _build_records(_foreflight_record(flight) for flight in _extract_foreflight_flights(foreflight_payload))
     fl3xx_records = _build_records(_fl3xx_record(leg) for leg in fl3xx_normalized)
@@ -739,7 +890,8 @@ if fetch:
     )
 
     with st.spinner("Fetching ForeFlight performance data..."):
-        for ff_record, _fl3xx_record in matches:
+        for match in matches:
+            ff_record = match.foreflight_record
             if not ff_record.flight_id:
                 missing_performance.append(f"{ff_record.departure_airport} → {ff_record.arrival_airport}")
                 continue
@@ -763,6 +915,12 @@ if fetch:
                     "Arrival": ff_record.arrival_airport,
                     "Dep Time (UTC)": _format_timestamp(ff_record.departure_time),
                     "Arr Time (UTC)": _format_timestamp(ff_record.arrival_time),
+                    "Match Reason": match.match_reason,
+                    "Match Confidence": match.confidence,
+                    "Match Score": match.score,
+                    "Dep Δ (min)": match.departure_diff_minutes,
+                    "Arr Δ (min)": match.arrival_diff_minutes,
+                    "Duration Δ (min)": match.duration_diff_minutes,
                     "Fuel To Dest (lb)": fuel_to_destination,
                     "Taxi Fuel (lb)": perf.get("taxi_fuel"),
                     "Total Fuel (lb)": perf.get("total_fuel"),
@@ -796,6 +954,10 @@ if summary is not None and fuel_df is not None and not fuel_df.empty:
     st.caption(
         f"{summary['matched']} matched • {summary['unmatched_foreflight']} ForeFlight-only • "
         f"{summary['unmatched_fl3xx']} FL3XX-only"
+    )
+    st.caption(
+        "Matches now require either an exact booking identifier or a strong tail/route/time score. "
+        "Fallback matches with departure gaps over 180 minutes are rejected."
     )
 
 missing_performance = st.session_state.get("fuel_planning_missing_performance", [])

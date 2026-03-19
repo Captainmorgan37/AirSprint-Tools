@@ -200,6 +200,28 @@ def test_force_easterly_option_moves_work_when_needed(TailPackage, assign_prefer
         for pkg in buckets.get(label, [])
     )
     assert moved, "Expected at least one easterly tail to move west when balancing"
+    latest_shift_tails = {pkg.tail for pkg in buckets.get(labels[-1], [])}
+    assert east_tails.isdisjoint(latest_shift_tails)
+
+
+def test_force_easterly_option_can_use_latest_shift_when_demand_is_extreme(
+    TailPackage, assign_preference_weighted
+):
+    labels = ["0500", "0600", "0800", "0900"]
+    weights = [1.0] * len(labels)
+    packages = [_make_tail(TailPackage, f"E{i}", "America/New_York") for i in range(11)] + [
+        _make_tail(TailPackage, "W1", "America/Los_Angeles")
+    ]
+
+    buckets = assign_preference_weighted(
+        packages,
+        labels,
+        weights,
+        force_easterly_first=True,
+    )
+
+    latest_shift_tails = {pkg.tail for pkg in buckets.get(labels[-1], [])}
+    assert any(tail.startswith("E") for tail in latest_shift_tails)
 
 
 def test_is_easterly_offset_bounds(is_easterly_offset):
@@ -226,6 +248,114 @@ def test_westerly_tails_prefer_last_shift(TailPackage, assign_preference_weighte
     last_shift = labels[-1]
     last_shift_tails = {pkg.tail for pkg in buckets.get(last_shift, [])}
     assert western_tails.issubset(last_shift_tails)
+
+
+def test_shift_assignment_order_uses_times_in_labels(task_splitter_module):
+    labels = ["0900 - Paul", "0600 - Sean", "0500 - Christina"]
+
+    order = task_splitter_module._shift_assignment_order(labels)
+
+    assert order == [2, 1, 0]
+
+
+def test_shift_assignment_order_falls_back_when_any_time_missing(task_splitter_module):
+    labels = ["0900 - Paul", "Sean", "0500 - Christina"]
+
+    order = task_splitter_module._shift_assignment_order(labels)
+
+    assert order == [0, 1, 2]
+
+
+
+def test_balances_tail_counts_without_breaking_timezone_preferences(TailPackage, assign_preference_weighted):
+    labels = ["0500", "0600", "0800", "0900"]
+    weights = [1.0] * len(labels)
+    packages = [
+        _make_tail(TailPackage, "E1", "America/New_York"),
+        _make_tail(TailPackage, "E2", "America/New_York"),
+        _make_tail(TailPackage, "E3", "America/New_York"),
+        _make_tail(TailPackage, "C1", "America/Chicago"),
+        _make_tail(TailPackage, "W1", "America/Denver"),
+        _make_tail(TailPackage, "W2", "America/Los_Angeles"),
+    ]
+
+    buckets = assign_preference_weighted(packages, labels, weights, force_easterly_first=True)
+
+    counts = [len(buckets[label]) for label in labels]
+    assert max(counts) - min(counts) <= 1
+    assert any(pkg.tail.startswith("E") for pkg in buckets[labels[0]])
+    assert any(pkg.tail.startswith("W") for pkg in buckets[labels[-1]])
+
+
+
+def test_large_package_set_spreads_tail_counts_more_evenly(TailPackage, assign_preference_weighted):
+    labels = ["0500", "0600", "0800", "0900"]
+    weights = [1.0] * len(labels)
+    packages = []
+    for i in range(10):
+        packages.append(_make_tail(TailPackage, f"E{i}", "America/New_York"))
+    for i in range(8):
+        packages.append(_make_tail(TailPackage, f"C{i}", "America/Chicago"))
+    for i in range(6):
+        packages.append(_make_tail(TailPackage, f"M{i}", "America/Denver"))
+    for i in range(6):
+        packages.append(_make_tail(TailPackage, f"W{i}", "America/Los_Angeles"))
+
+    buckets = assign_preference_weighted(packages, labels, weights, force_easterly_first=True)
+
+    counts = [len(buckets[label]) for label in labels]
+    assert max(counts) - min(counts) <= 1
+    assert sum(counts) == len(packages)
+    assert any(pkg.tail.startswith("E") for pkg in buckets[labels[0]])
+    assert any(pkg.tail.startswith("W") for pkg in buckets[labels[-1]])
+
+
+def test_tail_count_balance_takes_priority_over_weighted_workload_targets(
+    TailPackage, assign_preference_weighted
+):
+    labels = ["0500", "0800", "1200"]
+    weights = [1.0, 1.0, 3.0]
+    packages = [
+        _make_tail(TailPackage, "E1", "America/New_York"),
+        _make_tail(TailPackage, "E2", "America/New_York"),
+        _make_tail(TailPackage, "C1", "America/Chicago"),
+        _make_tail(TailPackage, "W1", "America/Denver"),
+        _make_tail(TailPackage, "W2", "America/Los_Angeles"),
+        _make_tail(TailPackage, "W3", "America/Los_Angeles"),
+    ]
+
+    buckets = assign_preference_weighted(packages, labels, weights, force_easterly_first=True)
+
+    counts = [len(buckets[label]) for label in labels]
+    assert counts == [2, 2, 2]
+    assert any(pkg.tail.startswith("E") for pkg in buckets[labels[0]])
+    assert any(pkg.tail.startswith("W") for pkg in buckets[labels[-1]])
+    assert not any(pkg.tail.startswith("E") for pkg in buckets[labels[-1]])
+
+
+def test_timezone_cleanup_swaps_late_eastern_tails_with_early_western_tails(
+    TailPackage, assign_preference_weighted
+):
+    labels = ["0500", "0600", "0800", "1200"]
+    weights = [1.0] * len(labels)
+    packages = [
+        _make_tail(TailPackage, "E1", "America/New_York"),
+        _make_tail(TailPackage, "E2", "America/New_York"),
+        _make_tail(TailPackage, "E3", "America/New_York"),
+        _make_tail(TailPackage, "E4", "America/New_York"),
+        _make_tail(TailPackage, "M1", "America/Denver"),
+        _make_tail(TailPackage, "M2", "America/Denver"),
+        _make_tail(TailPackage, "W1", "America/Los_Angeles"),
+        _make_tail(TailPackage, "W2", "America/Los_Angeles"),
+    ]
+
+    buckets = assign_preference_weighted(packages, labels, weights, force_easterly_first=True)
+
+    latest_shift_tails = {pkg.tail for pkg in buckets[labels[-1]]}
+    earliest_shift_tails = {pkg.tail for pkg in buckets[labels[0]]}
+    assert "E4" not in latest_shift_tails
+    assert any(tail.startswith("W") or tail.startswith("M") for tail in latest_shift_tails)
+    assert any(tail.startswith("E") for tail in earliest_shift_tails)
 
 
 def test_customs_workload_excludes_canadian_arrivals(task_splitter_module):
@@ -256,7 +386,7 @@ def test_customs_workload_excludes_canadian_arrivals(task_splitter_module):
     assert len(packages) == 1
     pkg = packages[0]
     assert pkg.customs_legs == 1
-    assert pkg.workload == pytest.approx(3.25)
+    assert pkg.workload == pytest.approx(4.75)
 
 
 def test_is_westerly_offset_bounds(is_westerly_offset):

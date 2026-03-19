@@ -51,7 +51,7 @@ render_sidebar()
 st.title("🛫 Night-Shift Tail Splitter")
 
 st.caption(
-    "Assign next-day tails to on-duty shifts as evenly as possible, while keeping all legs of a tail together."
+    "Keep tail counts as even as possible, then favor easterly tails on earlier shifts while keeping each tail together."
 )
 
 UTC = timezone.utc
@@ -77,7 +77,7 @@ class TailPackage:
 # ----------------------------
 # Helpers
 # ----------------------------
-_TAIL_BASE_WORKLOAD = 1.0
+_TAIL_BASE_WORKLOAD = 2.5
 _BASE_LEG_WORKLOAD = 1.0
 _CUSTOMS_LEG_BONUS = 0.25
 
@@ -305,6 +305,36 @@ def _disambiguate_labels(labels: Sequence[str]) -> List[str]:
         suffix = _alphabetical_suffix(occurrence)
         result.append(f"{base}{suffix}")
     return result
+
+
+_SHIFT_TIME_IN_LABEL_PATTERN = re.compile(r"(?<!\d)(?P<hour>\d{1,2})(?::?(?P<minute>\d{2}))?(?!\d)")
+
+
+def _extract_shift_sort_time(label: str) -> Optional[int]:
+    """Return minutes after midnight parsed from a shift label, if present."""
+    if not label:
+        return None
+    for match in _SHIFT_TIME_IN_LABEL_PATTERN.finditer(label):
+        hour = int(match.group("hour"))
+        minute_group = match.group("minute")
+        minute = int(minute_group) if minute_group is not None else 0
+        if 0 <= hour <= 23 and 0 <= minute <= 59:
+            return hour * 60 + minute
+    return None
+
+
+def _shift_assignment_order(labels: Sequence[str]) -> List[int]:
+    """Sort shifts by parsed label time, falling back to original order if any are missing."""
+    parsed_times = [_extract_shift_sort_time(label) for label in labels]
+    if any(value is None for value in parsed_times):
+        return list(range(len(labels)))
+    return sorted(
+        range(len(labels)),
+        key=lambda idx: (
+            parsed_times[idx],
+            idx,
+        ),
+    )
 
 
 
@@ -560,6 +590,32 @@ def _is_westerly_offset(offset: float) -> bool:
     return offset <= _WESTERLY_OFFSET_THRESHOLD
 
 
+def _soft_shift_distance_penalty(
+    pkg_offset: float,
+    *,
+    preferred_idx: int,
+    target_idx: int,
+    labels_count: int,
+    force_easterly_first: bool,
+) -> float:
+    if labels_count <= 1:
+        return 0.0
+
+    later_distance = max(0, target_idx - preferred_idx)
+    earlier_distance = max(0, preferred_idx - target_idx)
+    penalty = 0.0
+
+    if force_easterly_first and _is_easterly_offset(pkg_offset) and later_distance:
+        penalty += later_distance * 1.5
+        if target_idx == labels_count - 1:
+            penalty += max(2.0, float(labels_count - 1))
+
+    if _is_westerly_offset(pkg_offset) and earlier_distance:
+        penalty += earlier_distance * 0.75
+
+    return penalty
+
+
 def _coarse_preferred_index(offset: float, last_idx: int) -> int:
     return 0 if offset >= _CENTRAL_OR_LATER_THRESHOLD else last_idx
 
@@ -569,6 +625,7 @@ def assign_preference_weighted(
     labels: List[str],
     label_weights: Optional[Sequence[float]] = None,
     force_westerly_last: bool = True,
+    force_easterly_first: bool = False,
 ) -> Dict[str, List[TailPackage]]:
     if not packages or not labels:
         return {lab: [] for lab in labels}
@@ -597,6 +654,13 @@ def assign_preference_weighted(
     total_weight = sum(weights.values()) or float(len(labels))
     baseline_target = total_workload / total_weight if total_weight else 0.0
     workload_targets = {lab: baseline_target * weights[lab] for lab in labels}
+    # Tail count balance is the primary goal, so target an even number of tails
+    # per shift regardless of workload weighting. Workload weights still matter
+    # as a secondary preference when multiple assignments are otherwise similar.
+    count_targets = {
+        lab: (len(packages) / float(len(labels))) if labels else 0.0
+        for lab in labels
+    }
 
     # Use a tighter tolerance (10% of the even-share workload) so we aggressively
     # balance the workload while still respecting the east↔west preference ordering.
@@ -615,6 +679,7 @@ def assign_preference_weighted(
     # west→late before considering workload balancing.
     buckets_by_index: List[List[TailPackage]] = [[] for _ in labels]
     totals_by_index: List[float] = [0.0 for _ in labels]
+    counts_by_index: List[int] = [0 for _ in labels]
     preferred_index: Dict[str, int] = {}
     pkg_offsets: Dict[str, float] = {}
     forced_late: Set[str] = set()
@@ -630,6 +695,13 @@ def assign_preference_weighted(
         preferred_idx = idx
         assign_idx = idx
         if (
+            force_easterly_first
+            and len(labels) > 1
+            and _is_easterly_offset(pkg_offset)
+        ):
+            preferred_idx = 0
+            assign_idx = 0
+        if (
             force_westerly_last
             and len(labels) > 1
             and _is_westerly_offset(pkg_offset)
@@ -640,6 +712,7 @@ def assign_preference_weighted(
         preferred_index[pkg.tail] = preferred_idx
         buckets_by_index[assign_idx].append(pkg)
         totals_by_index[assign_idx] += _workload(pkg)
+        counts_by_index[assign_idx] += 1
 
     def _assign_via_search() -> Optional[Dict[str, List[TailPackage]]]:
         """
@@ -662,16 +735,7 @@ def assign_preference_weighted(
             int(round(workload_targets[label] * scale)) for label in labels
         ]
 
-        expected_counts: List[float] = []
-        total_packages = len(packages_sorted)
-        for label in labels:
-            weight = weights.get(label, 1.0)
-            expected = (
-                total_packages * (weight / total_weight)
-                if total_weight
-                else total_packages / float(len(labels))
-            )
-            expected_counts.append(expected)
+        expected_counts: List[float] = [count_targets[label] for label in labels]
 
         tz_penalties: List[List[int]] = []
         for pkg in packages_sorted:
@@ -690,7 +754,9 @@ def assign_preference_weighted(
                 penalty += distance * distance * scale
                 later_penalty = later_distance * scale
                 if is_easterly:
-                    later_penalty *= 1.25
+                    later_penalty *= 1.5
+                    if force_easterly_first and idx == len(labels) - 1:
+                        later_penalty += scale * max(2, len(labels) - 1)
                 penalty += int(round(later_penalty))
                 earlier_penalty = earlier_distance * scale
                 if is_westerly:
@@ -712,13 +778,14 @@ def assign_preference_weighted(
             if i == len(packages_sorted):
                 cost = 0.0
                 for idx in range(len(labels)):
-                    diff = totals[idx] - targets_int[idx]
-                    cost += diff * diff * 5.0
-                    cost += abs(diff) * 3.0
                     count_diff = counts[idx] - expected_counts[idx]
-                    cost += count_diff * count_diff * 2.5
+                    cost += count_diff * count_diff * 120.0
+                    cost += abs(count_diff) * 40.0
                     if expected_counts[idx] > 0.0 and counts[idx] == 0:
-                        cost += scale * 10
+                        cost += scale * 50
+                    diff = totals[idx] - targets_int[idx]
+                    cost += diff * diff * 2.0
+                    cost += abs(diff) * 1.5
                 return cost
 
             best_cost = math.inf
@@ -781,7 +848,7 @@ def assign_preference_weighted(
         for empty_idx in empty_indices:
             best_donor_idx: Optional[int] = None
             best_pkg: Optional[TailPackage] = None
-            best_score: Optional[Tuple[float, float, float]] = None
+            best_score: Optional[Tuple[float, float, float, float]] = None
 
             for donor_idx, label in enumerate(labels):
                 bucket = assignment.get(label, [])
@@ -790,11 +857,19 @@ def assign_preference_weighted(
                 for pkg in bucket:
                     pref_idx = preferred_index.get(pkg.tail, donor_idx)
                     pref_distance = abs(empty_idx - pref_idx)
+                    pkg_offset = pkg_offsets.get(pkg.tail, tz_targets[pref_idx])
                     tz_penalty = abs(
                         pkg_offsets.get(pkg.tail, tz_targets[empty_idx])
                         - tz_targets[empty_idx]
                     )
-                    score = (pref_distance, tz_penalty, _workload(pkg))
+                    shift_penalty = _soft_shift_distance_penalty(
+                        pkg_offset,
+                        preferred_idx=pref_idx,
+                        target_idx=empty_idx,
+                        labels_count=len(labels),
+                        force_easterly_first=force_easterly_first,
+                    )
+                    score = (pref_distance, shift_penalty, tz_penalty, _workload(pkg))
                     if best_score is None or score < best_score:
                         best_score = score
                         best_pkg = pkg
@@ -816,18 +891,205 @@ def assign_preference_weighted(
 
         return assignment
 
+    def _shift_assignment_cost(pkg: TailPackage, shift_idx: int) -> float:
+        pref_idx = preferred_index.get(pkg.tail, shift_idx)
+        pkg_offset = pkg_offsets.get(pkg.tail, tz_targets[pref_idx])
+        tz_penalty = abs(pkg_offsets.get(pkg.tail, tz_targets[shift_idx]) - tz_targets[shift_idx])
+        distance = abs(shift_idx - pref_idx)
+        return (
+            float(distance)
+            + _soft_shift_distance_penalty(
+                pkg_offset,
+                preferred_idx=pref_idx,
+                target_idx=shift_idx,
+                labels_count=len(labels),
+                force_easterly_first=force_easterly_first,
+            )
+            + tz_penalty
+        )
+
+    def _reduce_timezone_crossovers(
+        assignment: Dict[str, List[TailPackage]],
+    ) -> Dict[str, List[TailPackage]]:
+        if len(labels) <= 1:
+            return assignment
+
+        totals = [sum(_workload(pkg) for pkg in assignment.get(label, [])) for label in labels]
+        iterations_left = len(packages) * max(1, len(labels) - 1) * 3
+
+        while iterations_left > 0:
+            iterations_left -= 1
+            best_swap: Optional[
+                Tuple[Tuple[float, float, float, float], int, int, TailPackage, TailPackage]
+            ] = None
+
+            for early_idx in range(len(labels) - 1):
+                early_bucket = assignment.get(labels[early_idx], [])
+                if not early_bucket:
+                    continue
+                for late_idx in range(early_idx + 1, len(labels)):
+                    late_bucket = assignment.get(labels[late_idx], [])
+                    if not late_bucket:
+                        continue
+
+                    for early_pkg in early_bucket:
+                        for late_pkg in late_bucket:
+                            current_cost = _shift_assignment_cost(early_pkg, early_idx) + _shift_assignment_cost(
+                                late_pkg, late_idx
+                            )
+                            swapped_cost = _shift_assignment_cost(early_pkg, late_idx) + _shift_assignment_cost(
+                                late_pkg, early_idx
+                            )
+                            improvement = current_cost - swapped_cost
+                            if improvement <= 0.25:
+                                continue
+
+                            current_workload_error = abs(totals[early_idx] - workload_targets[labels[early_idx]]) + abs(
+                                totals[late_idx] - workload_targets[labels[late_idx]]
+                            )
+                            new_early_total = totals[early_idx] - _workload(early_pkg) + _workload(late_pkg)
+                            new_late_total = totals[late_idx] - _workload(late_pkg) + _workload(early_pkg)
+                            new_workload_error = abs(new_early_total - workload_targets[labels[early_idx]]) + abs(
+                                new_late_total - workload_targets[labels[late_idx]]
+                            )
+                            workload_penalty = new_workload_error - current_workload_error
+                            if workload_penalty > max(tolerance * 2, 1.5):
+                                continue
+
+                            score = (
+                                -improvement,
+                                workload_penalty,
+                                abs(_workload(early_pkg) - _workload(late_pkg)),
+                                float(late_idx - early_idx),
+                            )
+                            if best_swap is None or score < best_swap[0]:
+                                best_swap = (score, early_idx, late_idx, early_pkg, late_pkg)
+
+            if best_swap is None:
+                break
+
+            _, early_idx, late_idx, early_pkg, late_pkg = best_swap
+            assignment[labels[early_idx]].remove(early_pkg)
+            assignment[labels[late_idx]].remove(late_pkg)
+            assignment[labels[early_idx]].append(late_pkg)
+            assignment[labels[late_idx]].append(early_pkg)
+            totals[early_idx] = totals[early_idx] - _workload(early_pkg) + _workload(late_pkg)
+            totals[late_idx] = totals[late_idx] - _workload(late_pkg) + _workload(early_pkg)
+            assignment[labels[early_idx]] = sorted(
+                assignment[labels[early_idx]], key=lambda p: (p.first_local_dt, p.tail)
+            )
+            assignment[labels[late_idx]] = sorted(
+                assignment[labels[late_idx]], key=lambda p: (p.first_local_dt, p.tail)
+            )
+
+        return assignment
+
+    def _rebalance_tail_counts(
+        assignment: Dict[str, List[TailPackage]],
+    ) -> Dict[str, List[TailPackage]]:
+        totals = [sum(_workload(pkg) for pkg in assignment.get(label, [])) for label in labels]
+        counts = [len(assignment.get(label, [])) for label in labels]
+
+        def _count_delta(idx: int) -> float:
+            return counts[idx] - count_targets[labels[idx]]
+
+        iterations_left = len(packages) * max(1, len(labels) - 1) * 4
+        while iterations_left > 0:
+            iterations_left -= 1
+            over_idx = max(range(len(labels)), key=_count_delta)
+            under_idx = min(range(len(labels)), key=_count_delta)
+            if _count_delta(over_idx) <= 0.5 and _count_delta(under_idx) >= -0.5:
+                break
+            if len(assignment.get(labels[over_idx], [])) <= 1:
+                break
+
+            current_count_error = sum(abs(_count_delta(idx)) for idx in range(len(labels)))
+            best_move: Optional[Tuple[Tuple[float, float, float, float, float, float], TailPackage, int]] = None
+
+            for target_idx in range(len(labels)):
+                if target_idx == over_idx:
+                    continue
+                for pkg in assignment.get(labels[over_idx], []):
+                    pref_idx = preferred_index.get(pkg.tail, over_idx)
+                    pref_distance = abs(target_idx - pref_idx)
+                    pkg_offset = pkg_offsets.get(pkg.tail, tz_targets[pref_idx])
+                    tz_penalty = abs(
+                        pkg_offsets.get(pkg.tail, tz_targets[target_idx]) - tz_targets[target_idx]
+                    )
+                    shift_penalty = _soft_shift_distance_penalty(
+                        pkg_offset,
+                        preferred_idx=pref_idx,
+                        target_idx=target_idx,
+                        labels_count=len(labels),
+                        force_easterly_first=force_easterly_first,
+                    )
+                    new_counts = list(counts)
+                    new_counts[over_idx] -= 1
+                    new_counts[target_idx] += 1
+                    new_count_error = sum(
+                        abs(new_counts[idx] - count_targets[labels[idx]])
+                        for idx in range(len(labels))
+                    )
+                    count_improvement = current_count_error - new_count_error
+                    work = _workload(pkg)
+                    new_over_total = totals[over_idx] - work
+                    new_target_total = totals[target_idx] + work
+                    workload_penalty = abs(new_over_total - workload_targets[labels[over_idx]]) + abs(
+                        new_target_total - workload_targets[labels[target_idx]]
+                    )
+                    score = (
+                        -count_improvement,
+                        float(pref_distance),
+                        shift_penalty,
+                        tz_penalty,
+                        workload_penalty,
+                        work,
+                    )
+                    if best_move is None or score < best_move[0]:
+                        best_move = (score, pkg, target_idx)
+
+            if best_move is None:
+                break
+
+            score, pkg, target_idx = best_move
+            count_improvement = -score[0]
+            if count_improvement <= 0:
+                break
+
+            assignment[labels[over_idx]].remove(pkg)
+            assignment[labels[target_idx]].append(pkg)
+            work = _workload(pkg)
+            totals[over_idx] -= work
+            totals[target_idx] += work
+            counts[over_idx] -= 1
+            counts[target_idx] += 1
+            assignment[labels[over_idx]] = sorted(
+                assignment[labels[over_idx]], key=lambda p: (p.first_local_dt, p.tail)
+            )
+            assignment[labels[target_idx]] = sorted(
+                assignment[labels[target_idx]], key=lambda p: (p.first_local_dt, p.tail)
+            )
+
+        return assignment
+
     if optimized_assignment is not None:
-        return _ensure_non_empty_shifts(optimized_assignment)
+        optimized_assignment = _ensure_non_empty_shifts(optimized_assignment)
+        optimized_assignment = _rebalance_tail_counts(optimized_assignment)
+        return _reduce_timezone_crossovers(optimized_assignment)
 
     def _totals_delta(idx: int) -> float:
         label = labels[idx]
         return totals_by_index[idx] - workload_targets[label]
 
+    def _counts_delta(idx: int) -> float:
+        label = labels[idx]
+        return counts_by_index[idx] - count_targets[label]
+
     max_iterations = len(packages) * max(1, len(labels) - 1) * 4
     iterations = 0
 
-    # Stage 2: iteratively nudge packages forward/backward to balance workload
-    # without letting them drift far from their preferred shift.
+    # Stage 2: iteratively nudge packages forward/backward to reduce workload
+    # skew, but only after the initial east→early / west→late grouping.
     while iterations < max_iterations:
         iterations += 1
         over_idx = max(range(len(labels)), key=_totals_delta)
@@ -848,7 +1110,7 @@ def assign_preference_weighted(
 
         best_pkg: Optional[TailPackage] = None
         best_target: Optional[int] = None
-        best_score: Optional[Tuple[float, float, float, float, float]] = None
+        best_score: Optional[Tuple[float, float, float, float, float, float]] = None
 
         over_label = labels[over_idx]
         over_target_total = workload_targets[over_label]
@@ -891,8 +1153,13 @@ def assign_preference_weighted(
                 distance_from_over = abs(target_idx - over_idx)
                 offset_priority = 0.0
                 preference_penalty = float(pref_distance)
-                pkg_offset = pkg_offsets.get(
-                    pkg.tail, tz_targets[pref_idx]
+                pkg_offset = pkg_offsets.get(pkg.tail, tz_targets[pref_idx])
+                preference_penalty += _soft_shift_distance_penalty(
+                    pkg_offset,
+                    preferred_idx=pref_idx,
+                    target_idx=target_idx,
+                    labels_count=len(labels),
+                    force_easterly_first=force_easterly_first,
                 )
                 if target_idx > pref_idx and _is_easterly_offset(pkg_offset):
                     preference_penalty += pref_distance * 0.25
@@ -932,6 +1199,105 @@ def assign_preference_weighted(
         work = _workload(best_pkg)
         totals_by_index[over_idx] -= work
         totals_by_index[target_idx] += work
+        counts_by_index[over_idx] -= 1
+        counts_by_index[target_idx] += 1
+
+    # Stage 3: smooth out tail counts aggressively because even tail splits are
+    # the strongest preference. Still prefer short hops between adjacent shifts
+    # so we keep the east→early / west→late ordering when possible.
+    count_iterations = len(packages) * max(1, len(labels) - 1) * 4
+    while count_iterations > 0:
+        count_iterations -= 1
+        over_idx = max(range(len(labels)), key=_counts_delta)
+        under_idx = min(range(len(labels)), key=_counts_delta)
+        over_count_delta = _counts_delta(over_idx)
+        under_count_delta = _counts_delta(under_idx)
+        if over_count_delta <= 0.5 and under_count_delta >= -0.5:
+            break
+        if len(buckets_by_index[over_idx]) <= 1:
+            break
+
+        step_direction = -1 if over_idx > under_idx else 1
+        candidate_indices = range(
+            over_idx + step_direction,
+            under_idx + step_direction,
+            step_direction,
+        )
+        current_count_error = sum(abs(_counts_delta(idx)) for idx in range(len(labels)))
+
+        best_pkg: Optional[TailPackage] = None
+        best_target_idx: Optional[int] = None
+        best_score: Optional[Tuple[float, float, float, float, float, float, float]] = None
+        over_label = labels[over_idx]
+        over_target_total = workload_targets[over_label]
+        current_over_error = abs(totals_by_index[over_idx] - over_target_total)
+
+        for target_idx in candidate_indices:
+            target_label = labels[target_idx]
+            target_target_total = workload_targets[target_label]
+            current_target_error = abs(totals_by_index[target_idx] - target_target_total)
+
+            for pkg in buckets_by_index[over_idx]:
+                work = _workload(pkg)
+                new_over_total = totals_by_index[over_idx] - work
+                new_target_total = totals_by_index[target_idx] + work
+                new_over_error = abs(new_over_total - over_target_total)
+                new_target_error = abs(new_target_total - target_target_total)
+                workload_penalty = (new_over_error + new_target_error) - (
+                    current_over_error + current_target_error
+                )
+                pref_idx = preferred_index.get(pkg.tail, over_idx)
+                pref_distance = abs(target_idx - pref_idx)
+                pkg_offset = pkg_offsets.get(pkg.tail, tz_targets[pref_idx])
+                tz_penalty = abs(
+                    pkg_offsets.get(pkg.tail, tz_targets[target_idx]) - tz_targets[target_idx]
+                )
+                shift_penalty = _soft_shift_distance_penalty(
+                    pkg_offset,
+                    preferred_idx=pref_idx,
+                    target_idx=target_idx,
+                    labels_count=len(labels),
+                    force_easterly_first=force_easterly_first,
+                )
+                new_counts = list(counts_by_index)
+                new_counts[over_idx] -= 1
+                new_counts[target_idx] += 1
+                new_count_error = sum(
+                    abs(new_counts[idx] - count_targets[labels[idx]])
+                    for idx in range(len(labels))
+                )
+                count_improvement = current_count_error - new_count_error
+                distance_from_over = abs(target_idx - over_idx)
+                score = (
+                    -count_improvement,
+                    float(distance_from_over),
+                    float(pref_distance),
+                    shift_penalty,
+                    workload_penalty,
+                    tz_penalty,
+                    work,
+                )
+                if best_score is None or score < best_score:
+                    best_score = score
+                    best_pkg = pkg
+                    best_target_idx = target_idx
+
+        if best_pkg is None or best_score is None or best_target_idx is None:
+            break
+        count_improvement = -best_score[0]
+        workload_penalty = best_score[4]
+        if count_improvement <= 0:
+            break
+        if workload_penalty > max(tolerance * 3, 2.5):
+            break
+
+        buckets_by_index[over_idx].remove(best_pkg)
+        buckets_by_index[best_target_idx].append(best_pkg)
+        work = _workload(best_pkg)
+        totals_by_index[over_idx] -= work
+        totals_by_index[best_target_idx] += work
+        counts_by_index[over_idx] -= 1
+        counts_by_index[best_target_idx] += 1
 
     result: Dict[str, List[TailPackage]] = {}
     for idx, label in enumerate(labels):
@@ -939,7 +1305,9 @@ def assign_preference_weighted(
             buckets_by_index[idx], key=lambda p: (p.first_local_dt, p.tail)
         )
         result[label] = pkgs
-    return _ensure_non_empty_shifts(result)
+    result = _ensure_non_empty_shifts(result)
+    result = _rebalance_tail_counts(result)
+    return _reduce_timezone_crossovers(result)
 
 
 def buckets_to_df(
@@ -1366,12 +1734,16 @@ if st.session_state.get("_run"):
         for pkg in priority_packages
     }
 
+    assignment_order = _shift_assignment_order(labels)
+    ordered_labels = [labels[idx] for idx in assignment_order]
+    ordered_workloads = [label_workloads[idx] for idx in assignment_order]
+
     st.subheader("Assignments")
 
     buckets = assign_preference_weighted(
         packages,
-        labels,
-        label_workloads,
+        ordered_labels,
+        ordered_workloads,
     )
 
     # Display per-shift tables
