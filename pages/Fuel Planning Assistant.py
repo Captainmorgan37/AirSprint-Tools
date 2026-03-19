@@ -10,7 +10,7 @@ import requests
 import streamlit as st
 
 from fl3xx_api import Fl3xxApiConfig, fetch_flights
-from flight_leg_utils import normalize_fl3xx_payload
+from flight_leg_utils import filter_rows_by_departure_window, format_utc, normalize_fl3xx_payload
 from Home import configure_page, get_secret, password_gate, render_sidebar
 
 
@@ -29,6 +29,7 @@ ARRIVAL_WITHIN_30_MIN_SCORE = 10
 DURATION_WITHIN_20_MIN_SCORE = 10
 FALLBACK_MATCH_MIN_SCORE = 90
 MAX_FALLBACK_DEPARTURE_DIFF_MINUTES = 180
+FLIGHT_FETCH_WINDOW_START_HOUR_UTC = 8
 
 
 @dataclass
@@ -199,6 +200,16 @@ def _build_fl3xx_config(token: Optional[str] = None) -> Fl3xxApiConfig:
         config_kwargs["timeout"] = timeout
 
     return Fl3xxApiConfig(**config_kwargs)
+
+
+def _compute_selected_window_utc(selected_day: date) -> tuple[datetime, datetime]:
+    start_utc = datetime.combine(
+        selected_day,
+        datetime.min.time(),
+        tzinfo=timezone.utc,
+    ) + timedelta(hours=FLIGHT_FETCH_WINDOW_START_HOUR_UTC)
+    end_utc = start_utc + timedelta(days=1)
+    return start_utc, end_utc
 
 
 def _extract_foreflight_flights(payload: Any) -> list[Mapping[str, Any]]:
@@ -782,6 +793,11 @@ target_landing_fuel = st.number_input(
     key="fuel_planning_target_landing_fuel",
 )
 st.caption("Required departure fuel uses taxi + flight burn + this target landing fuel.")
+window_start_utc, window_end_utc = _compute_selected_window_utc(selected_date)
+st.caption(
+    "Flight pull window uses a full operating day from "
+    f"**{format_utc(window_start_utc)}** to **{format_utc(window_end_utc)}**."
+)
 
 fetch = st.button("Fetch flights & performance")
 
@@ -813,12 +829,12 @@ if fetch:
         st.stop()
 
     from_date = selected_date
-    to_date = selected_date + timedelta(days=1)
+    to_date = selected_date + timedelta(days=2)
 
     with st.spinner("Fetching ForeFlight flights..."):
         params = {
-            "fromDate": f"{from_date.isoformat()}Z",
-            "toDate": f"{to_date.isoformat()}Z",
+            "fromDate": format_utc(window_start_utc),
+            "toDate": format_utc(window_end_utc),
         }
         headers = {
             "x-api-key": foreflight_token,
@@ -832,6 +848,11 @@ if fetch:
         fl3xx_config = _build_fl3xx_config(fl3xx_token)
         fl3xx_flights, _meta = fetch_flights(fl3xx_config, from_date=from_date, to_date=to_date)
         fl3xx_normalized, _stats = normalize_fl3xx_payload(fl3xx_flights)
+        fl3xx_normalized, _window_stats = filter_rows_by_departure_window(
+            fl3xx_normalized,
+            window_start_utc,
+            window_end_utc,
+        )
 
     foreflight_records = _build_records(_foreflight_record(flight) for flight in _extract_foreflight_flights(foreflight_payload))
     fl3xx_records = _build_records(_fl3xx_record(leg) for leg in fl3xx_normalized)
