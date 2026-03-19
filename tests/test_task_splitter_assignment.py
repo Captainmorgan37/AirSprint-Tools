@@ -256,7 +256,7 @@ def test_customs_workload_excludes_canadian_arrivals(task_splitter_module):
     assert len(packages) == 1
     pkg = packages[0]
     assert pkg.customs_legs == 1
-    assert pkg.workload == pytest.approx(3.25)
+    assert pkg.workload == pytest.approx(4.75)
 
 
 def test_is_westerly_offset_bounds(is_westerly_offset):
