@@ -545,6 +545,43 @@ def test_planning_notes_summary_route_allows_fuel_stop() -> None:
     )
 
 
+def test_planning_notes_summary_route_allows_customs_stop_note() -> None:
+    quote = {
+        "bookingIdentifier": "ROUTE-SUMMARY-CUSTOMS-STOP",
+        "aircraftObj": {"type": "CJ3", "category": "LIGHT_JET"},
+        "legs": [
+            {
+                "id": "LEG-CUSTOMS-1",
+                "departureAirport": "KSUA",
+                "arrivalAirport": "CYHU",
+                "departureDateUTC": "2026-04-18T14:00:00Z",
+                "arrivalDateUTC": "2026-04-18T18:00:00Z",
+                "blockTime": 240,
+                "planningNotes": "18APR  KSUA-CSC3 DRUMMONDVILLE\n-\nCustoms stop- CYHU\n-",
+            },
+            {
+                "id": "LEG-CUSTOMS-2",
+                "departureAirport": "CYHU",
+                "arrivalAirport": "CSC3",
+                "departureDateUTC": "2026-04-18T19:00:00Z",
+                "arrivalDateUTC": "2026-04-18T20:00:00Z",
+                "blockTime": 60,
+                "planningNotes": "18APR  KSUA-CSC3 DRUMMONDVILLE\n-\nCustoms stop- CYHU\n-",
+            },
+        ],
+    }
+
+    result = run_feasibility_phase1({"quote": quote, "tz_provider": _tz_provider})
+
+    assert not any("Planning notes route" in issue for issue in result["issues"])
+    matches = [
+        entry
+        for entry in result.get("validation_checks", [])
+        if "Planning notes route" in entry and "matches booked" in entry
+    ]
+    assert len(matches) >= 2
+
+
 def test_planning_notes_allow_missing_country_prefix_in_route() -> None:
     quote = {
         "bookingIdentifier": "ROUTE-PREFIX-OPTIONAL",
