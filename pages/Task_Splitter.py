@@ -590,6 +590,32 @@ def _is_westerly_offset(offset: float) -> bool:
     return offset <= _WESTERLY_OFFSET_THRESHOLD
 
 
+def _soft_shift_distance_penalty(
+    pkg_offset: float,
+    *,
+    preferred_idx: int,
+    target_idx: int,
+    labels_count: int,
+    force_easterly_first: bool,
+) -> float:
+    if labels_count <= 1:
+        return 0.0
+
+    later_distance = max(0, target_idx - preferred_idx)
+    earlier_distance = max(0, preferred_idx - target_idx)
+    penalty = 0.0
+
+    if force_easterly_first and _is_easterly_offset(pkg_offset) and later_distance:
+        penalty += later_distance * 1.5
+        if target_idx == labels_count - 1:
+            penalty += max(2.0, float(labels_count - 1))
+
+    if _is_westerly_offset(pkg_offset) and earlier_distance:
+        penalty += earlier_distance * 0.75
+
+    return penalty
+
+
 def _coarse_preferred_index(offset: float, last_idx: int) -> int:
     return 0 if offset >= _CENTRAL_OR_LATER_THRESHOLD else last_idx
 
@@ -728,7 +754,9 @@ def assign_preference_weighted(
                 penalty += distance * distance * scale
                 later_penalty = later_distance * scale
                 if is_easterly:
-                    later_penalty *= 1.25
+                    later_penalty *= 1.5
+                    if force_easterly_first and idx == len(labels) - 1:
+                        later_penalty += scale * max(2, len(labels) - 1)
                 penalty += int(round(later_penalty))
                 earlier_penalty = earlier_distance * scale
                 if is_westerly:
@@ -829,11 +857,19 @@ def assign_preference_weighted(
                 for pkg in bucket:
                     pref_idx = preferred_index.get(pkg.tail, donor_idx)
                     pref_distance = abs(empty_idx - pref_idx)
+                    pkg_offset = pkg_offsets.get(pkg.tail, tz_targets[pref_idx])
                     tz_penalty = abs(
                         pkg_offsets.get(pkg.tail, tz_targets[empty_idx])
                         - tz_targets[empty_idx]
                     )
-                    score = (pref_distance, tz_penalty, _workload(pkg))
+                    shift_penalty = _soft_shift_distance_penalty(
+                        pkg_offset,
+                        preferred_idx=pref_idx,
+                        target_idx=empty_idx,
+                        labels_count=len(labels),
+                        force_easterly_first=force_easterly_first,
+                    )
+                    score = (pref_distance, shift_penalty, tz_penalty, _workload(pkg))
                     if best_score is None or score < best_score:
                         best_score = score
                         best_pkg = pkg
@@ -875,7 +911,7 @@ def assign_preference_weighted(
                 break
 
             current_count_error = sum(abs(_count_delta(idx)) for idx in range(len(labels)))
-            best_move: Optional[Tuple[Tuple[float, float, float, float, float], TailPackage, int]] = None
+            best_move: Optional[Tuple[Tuple[float, float, float, float, float, float], TailPackage, int]] = None
 
             for target_idx in range(len(labels)):
                 if target_idx == over_idx:
@@ -883,8 +919,16 @@ def assign_preference_weighted(
                 for pkg in assignment.get(labels[over_idx], []):
                     pref_idx = preferred_index.get(pkg.tail, over_idx)
                     pref_distance = abs(target_idx - pref_idx)
+                    pkg_offset = pkg_offsets.get(pkg.tail, tz_targets[pref_idx])
                     tz_penalty = abs(
                         pkg_offsets.get(pkg.tail, tz_targets[target_idx]) - tz_targets[target_idx]
+                    )
+                    shift_penalty = _soft_shift_distance_penalty(
+                        pkg_offset,
+                        preferred_idx=pref_idx,
+                        target_idx=target_idx,
+                        labels_count=len(labels),
+                        force_easterly_first=force_easterly_first,
                     )
                     new_counts = list(counts)
                     new_counts[over_idx] -= 1
@@ -903,6 +947,7 @@ def assign_preference_weighted(
                     score = (
                         -count_improvement,
                         float(pref_distance),
+                        shift_penalty,
                         tz_penalty,
                         workload_penalty,
                         work,
@@ -971,7 +1016,7 @@ def assign_preference_weighted(
 
         best_pkg: Optional[TailPackage] = None
         best_target: Optional[int] = None
-        best_score: Optional[Tuple[float, float, float, float, float]] = None
+        best_score: Optional[Tuple[float, float, float, float, float, float]] = None
 
         over_label = labels[over_idx]
         over_target_total = workload_targets[over_label]
@@ -1014,8 +1059,13 @@ def assign_preference_weighted(
                 distance_from_over = abs(target_idx - over_idx)
                 offset_priority = 0.0
                 preference_penalty = float(pref_distance)
-                pkg_offset = pkg_offsets.get(
-                    pkg.tail, tz_targets[pref_idx]
+                pkg_offset = pkg_offsets.get(pkg.tail, tz_targets[pref_idx])
+                preference_penalty += _soft_shift_distance_penalty(
+                    pkg_offset,
+                    preferred_idx=pref_idx,
+                    target_idx=target_idx,
+                    labels_count=len(labels),
+                    force_easterly_first=force_easterly_first,
                 )
                 if target_idx > pref_idx and _is_easterly_offset(pkg_offset):
                     preference_penalty += pref_distance * 0.25
@@ -1083,7 +1133,7 @@ def assign_preference_weighted(
 
         best_pkg: Optional[TailPackage] = None
         best_target_idx: Optional[int] = None
-        best_score: Optional[Tuple[float, float, float, float, float]] = None
+        best_score: Optional[Tuple[float, float, float, float, float, float, float]] = None
         over_label = labels[over_idx]
         over_target_total = workload_targets[over_label]
         current_over_error = abs(totals_by_index[over_idx] - over_target_total)
@@ -1104,8 +1154,16 @@ def assign_preference_weighted(
                 )
                 pref_idx = preferred_index.get(pkg.tail, over_idx)
                 pref_distance = abs(target_idx - pref_idx)
+                pkg_offset = pkg_offsets.get(pkg.tail, tz_targets[pref_idx])
                 tz_penalty = abs(
                     pkg_offsets.get(pkg.tail, tz_targets[target_idx]) - tz_targets[target_idx]
+                )
+                shift_penalty = _soft_shift_distance_penalty(
+                    pkg_offset,
+                    preferred_idx=pref_idx,
+                    target_idx=target_idx,
+                    labels_count=len(labels),
+                    force_easterly_first=force_easterly_first,
                 )
                 new_counts = list(counts_by_index)
                 new_counts[over_idx] -= 1
@@ -1120,6 +1178,7 @@ def assign_preference_weighted(
                     -count_improvement,
                     float(distance_from_over),
                     float(pref_distance),
+                    shift_penalty,
                     workload_penalty,
                     tz_penalty,
                     work,
@@ -1132,7 +1191,7 @@ def assign_preference_weighted(
         if best_pkg is None or best_score is None or best_target_idx is None:
             break
         count_improvement = -best_score[0]
-        workload_penalty = best_score[3]
+        workload_penalty = best_score[4]
         if count_improvement <= 0:
             break
         if workload_penalty > max(tolerance * 3, 2.5):

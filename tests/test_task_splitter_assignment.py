@@ -200,6 +200,28 @@ def test_force_easterly_option_moves_work_when_needed(TailPackage, assign_prefer
         for pkg in buckets.get(label, [])
     )
     assert moved, "Expected at least one easterly tail to move west when balancing"
+    latest_shift_tails = {pkg.tail for pkg in buckets.get(labels[-1], [])}
+    assert east_tails.isdisjoint(latest_shift_tails)
+
+
+def test_force_easterly_option_can_use_latest_shift_when_demand_is_extreme(
+    TailPackage, assign_preference_weighted
+):
+    labels = ["0500", "0600", "0800", "0900"]
+    weights = [1.0] * len(labels)
+    packages = [_make_tail(TailPackage, f"E{i}", "America/New_York") for i in range(11)] + [
+        _make_tail(TailPackage, "W1", "America/Los_Angeles")
+    ]
+
+    buckets = assign_preference_weighted(
+        packages,
+        labels,
+        weights,
+        force_easterly_first=True,
+    )
+
+    latest_shift_tails = {pkg.tail for pkg in buckets.get(labels[-1], [])}
+    assert any(tail.startswith("E") for tail in latest_shift_tails)
 
 
 def test_is_easterly_offset_bounds(is_easterly_offset):
@@ -308,6 +330,7 @@ def test_tail_count_balance_takes_priority_over_weighted_workload_targets(
     assert counts == [2, 2, 2]
     assert any(pkg.tail.startswith("E") for pkg in buckets[labels[0]])
     assert any(pkg.tail.startswith("W") for pkg in buckets[labels[-1]])
+    assert not any(pkg.tail.startswith("E") for pkg in buckets[labels[-1]])
 
 
 def test_customs_workload_excludes_canadian_arrivals(task_splitter_module):
