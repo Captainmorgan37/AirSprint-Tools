@@ -569,6 +569,7 @@ def assign_preference_weighted(
     labels: List[str],
     label_weights: Optional[Sequence[float]] = None,
     force_westerly_last: bool = True,
+    force_easterly_first: bool = False,
 ) -> Dict[str, List[TailPackage]]:
     if not packages or not labels:
         return {lab: [] for lab in labels}
@@ -597,6 +598,14 @@ def assign_preference_weighted(
     total_weight = sum(weights.values()) or float(len(labels))
     baseline_target = total_workload / total_weight if total_weight else 0.0
     workload_targets = {lab: baseline_target * weights[lab] for lab in labels}
+    count_targets = {
+        lab: (
+            len(packages) * (weights[lab] / total_weight)
+            if total_weight
+            else len(packages) / float(len(labels))
+        )
+        for lab in labels
+    }
 
     # Use a tighter tolerance (10% of the even-share workload) so we aggressively
     # balance the workload while still respecting the east↔west preference ordering.
@@ -615,6 +624,7 @@ def assign_preference_weighted(
     # west→late before considering workload balancing.
     buckets_by_index: List[List[TailPackage]] = [[] for _ in labels]
     totals_by_index: List[float] = [0.0 for _ in labels]
+    counts_by_index: List[int] = [0 for _ in labels]
     preferred_index: Dict[str, int] = {}
     pkg_offsets: Dict[str, float] = {}
     forced_late: Set[str] = set()
@@ -630,6 +640,13 @@ def assign_preference_weighted(
         preferred_idx = idx
         assign_idx = idx
         if (
+            force_easterly_first
+            and len(labels) > 1
+            and _is_easterly_offset(pkg_offset)
+        ):
+            preferred_idx = 0
+            assign_idx = 0
+        if (
             force_westerly_last
             and len(labels) > 1
             and _is_westerly_offset(pkg_offset)
@@ -640,6 +657,7 @@ def assign_preference_weighted(
         preferred_index[pkg.tail] = preferred_idx
         buckets_by_index[assign_idx].append(pkg)
         totals_by_index[assign_idx] += _workload(pkg)
+        counts_by_index[assign_idx] += 1
 
     def _assign_via_search() -> Optional[Dict[str, List[TailPackage]]]:
         """
@@ -662,16 +680,7 @@ def assign_preference_weighted(
             int(round(workload_targets[label] * scale)) for label in labels
         ]
 
-        expected_counts: List[float] = []
-        total_packages = len(packages_sorted)
-        for label in labels:
-            weight = weights.get(label, 1.0)
-            expected = (
-                total_packages * (weight / total_weight)
-                if total_weight
-                else total_packages / float(len(labels))
-            )
-            expected_counts.append(expected)
+        expected_counts: List[float] = [count_targets[label] for label in labels]
 
         tz_penalties: List[List[int]] = []
         for pkg in packages_sorted:
@@ -823,6 +832,10 @@ def assign_preference_weighted(
         label = labels[idx]
         return totals_by_index[idx] - workload_targets[label]
 
+    def _counts_delta(idx: int) -> float:
+        label = labels[idx]
+        return counts_by_index[idx] - count_targets[label]
+
     max_iterations = len(packages) * max(1, len(labels) - 1) * 4
     iterations = 0
 
@@ -932,6 +945,64 @@ def assign_preference_weighted(
         work = _workload(best_pkg)
         totals_by_index[over_idx] -= work
         totals_by_index[target_idx] += work
+        counts_by_index[over_idx] -= 1
+        counts_by_index[target_idx] += 1
+
+    # Stage 3: if workload is already reasonable, smooth out tail counts so the
+    # people split the number of tails more evenly without materially harming
+    # timezone ordering or workload balance.
+    count_iterations = len(packages) * max(1, len(labels) - 1) * 2
+    while count_iterations > 0:
+        count_iterations -= 1
+        over_idx = max(range(len(labels)), key=_counts_delta)
+        under_idx = min(range(len(labels)), key=_counts_delta)
+        over_count_delta = _counts_delta(over_idx)
+        under_count_delta = _counts_delta(under_idx)
+        if over_count_delta <= 0.5 and under_count_delta >= -0.5:
+            break
+        if len(buckets_by_index[over_idx]) <= 1:
+            break
+
+        best_pkg: Optional[TailPackage] = None
+        best_score: Optional[Tuple[float, float, float, float]] = None
+        over_label = labels[over_idx]
+        under_label = labels[under_idx]
+        over_target_total = workload_targets[over_label]
+        under_target_total = workload_targets[under_label]
+        current_over_error = abs(totals_by_index[over_idx] - over_target_total)
+        current_under_error = abs(totals_by_index[under_idx] - under_target_total)
+
+        for pkg in buckets_by_index[over_idx]:
+            work = _workload(pkg)
+            new_over_total = totals_by_index[over_idx] - work
+            new_under_total = totals_by_index[under_idx] + work
+            new_over_error = abs(new_over_total - over_target_total)
+            new_under_error = abs(new_under_total - under_target_total)
+            workload_penalty = (new_over_error + new_under_error) - (
+                current_over_error + current_under_error
+            )
+            pref_idx = preferred_index.get(pkg.tail, over_idx)
+            pref_distance = abs(under_idx - pref_idx)
+            tz_penalty = abs(
+                pkg_offsets.get(pkg.tail, tz_targets[under_idx]) - tz_targets[under_idx]
+            )
+            score = (workload_penalty, float(pref_distance), tz_penalty, work)
+            if best_score is None or score < best_score:
+                best_score = score
+                best_pkg = pkg
+
+        if best_pkg is None or best_score is None:
+            break
+        if best_score[0] > max(tolerance, 1.0):
+            break
+
+        buckets_by_index[over_idx].remove(best_pkg)
+        buckets_by_index[under_idx].append(best_pkg)
+        work = _workload(best_pkg)
+        totals_by_index[over_idx] -= work
+        totals_by_index[under_idx] += work
+        counts_by_index[over_idx] -= 1
+        counts_by_index[under_idx] += 1
 
     result: Dict[str, List[TailPackage]] = {}
     for idx, label in enumerate(labels):
