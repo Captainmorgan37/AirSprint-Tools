@@ -74,6 +74,30 @@ def with_datestr(df: pd.DataFrame, date_col="Date"):
 SLOT_AIRPORTS = set(WINDOWS_MIN.keys())
 
 
+def _prepare_dataframe_for_streamlit(df: pd.DataFrame) -> pd.DataFrame:
+    """Return a display-safe dataframe for Streamlit Arrow serialization."""
+    if df is None or df.empty:
+        return df
+
+    prepared_df = df.copy()
+    for column in prepared_df.columns:
+        series = prepared_df[column]
+        if not pd.api.types.is_object_dtype(series):
+            continue
+
+        non_null = series.dropna()
+        if non_null.empty:
+            continue
+
+        value_types = {type(value) for value in non_null}
+        if len(value_types) <= 1:
+            continue
+
+        prepared_df[column] = series.map(lambda value: "" if pd.isna(value) else str(value))
+
+    return prepared_df
+
+
 # ---------------- FL3XX API helpers ----------------
 def _coerce_bool(value: Any) -> bool:
     if isinstance(value, bool):
@@ -576,7 +600,7 @@ def show_table(df: pd.DataFrame, title: str, key: str):
     if df is None or df.empty:
         st.write("— no rows —")
         return
-    st.dataframe(df, width="stretch")
+    st.dataframe(_prepare_dataframe_for_streamlit(df), width="stretch")
     st.download_button(
         f"Download {title} CSV",
         df.to_csv(index=False).encode("utf-8"),
@@ -1100,7 +1124,7 @@ else:
 
 
 def _default_date_range() -> Tuple[date, date]:
-    today = datetime.utcnow().date()
+    today = datetime.now(timezone.utc).date()
     return today, today + timedelta(days=30)
 
 
@@ -1652,9 +1676,9 @@ if fl3xx_frames and ocs_files:
     st.success(f"Loaded {len(fl3xx_df)} flights and {len(ocs_df)} slots.")
 
     with st.expander("🔎 Preview parsed OCS (normalized)"):
-        st.dataframe(ocs_df.head(20))
+        st.dataframe(_prepare_dataframe_for_streamlit(ocs_df.head(20)))
     with st.expander("🔎 Preview parsed Fl3xx"):
-        st.dataframe(fl3xx_df.head(20))
+        st.dataframe(_prepare_dataframe_for_streamlit(fl3xx_df.head(20)))
 
     results, stale = compare(fl3xx_df, ocs_df)
     
