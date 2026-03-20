@@ -314,6 +314,71 @@ def test_missing_planning_notes_are_flagged() -> None:
     )
 
 
+def test_route_validation_flags_unparseable_planning_note() -> None:
+    quote = {
+        "bookingIdentifier": "ROUTE-UNPARSEABLE",
+        "aircraftObj": {"type": "CJ2", "category": "LIGHT_JET"},
+        "workflow": "PRIVATE",
+        "workflowCustomName": "FEX Guaranteed",
+        "legs": [
+            {
+                "id": "LEG-ROUTE-UNPARSEABLE",
+                "departureAirport": "KSAV",
+                "arrivalAirport": "CYYZ",
+                "departureDateUTC": "2026-03-21T15:00:00Z",
+                "arrivalDateUTC": "2026-03-21T18:30:00Z",
+                "blockTime": 210,
+                "planningNotes": "Infinity CJ2 owner requesting a CJ2",
+            }
+        ],
+    }
+
+    result = run_feasibility_phase1({"quote": quote, "tz_provider": _tz_provider})
+
+    assert any(
+        "Planning notes did not contain a dated route entry; route/date match could not be validated."
+        in entry
+        for entry in result["validation_checks"]
+    )
+    assert any(
+        "Planning notes did not contain a dated route entry; route/date match could not be validated."
+        in issue
+        for issue in result["issues"]
+    )
+
+
+def test_route_validation_flags_missing_departure_date() -> None:
+    quote = {
+        "bookingIdentifier": "ROUTE-MISSING-DATE",
+        "aircraftObj": {"type": "CJ2", "category": "LIGHT_JET"},
+        "workflow": "PRIVATE",
+        "workflowCustomName": "FEX Guaranteed",
+        "legs": [
+            {
+                "id": "LEG-ROUTE-MISSING-DATE",
+                "departureAirport": "KSAV",
+                "arrivalAirport": "CYYZ",
+                "arrivalDateUTC": "2026-03-21T18:30:00Z",
+                "blockTime": 210,
+                "planningNotes": "21MARCH KSAV-CYYZ\nInfinity CJ2 owner requesting a CJ2",
+            }
+        ],
+    }
+
+    result = run_feasibility_phase1({"quote": quote, "tz_provider": _tz_provider})
+
+    assert any(
+        "Departure date is missing; route/date match could not be validated against planning notes."
+        in entry
+        for entry in result["validation_checks"]
+    )
+    assert any(
+        "Departure date is missing; route/date match could not be validated against planning notes."
+        in issue
+        for issue in result["issues"]
+    )
+
+
 def test_workflow_validation_allows_owner_prefix_typos() -> None:
     quote = _workflow_quote(
         "FEX Interchange", "05DEC KPSP - CYEG\n-\n24Club CJ3 owner requesting interchange to EMB"

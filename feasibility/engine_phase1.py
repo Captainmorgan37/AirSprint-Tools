@@ -335,8 +335,17 @@ def _collect_planning_note_feedback(day: DayContext) -> tuple[List[str], List[st
                     dep_dt = dep_dt.astimezone(pytz.timezone(tz_name))
                 except Exception:
                     pass
-        entries = parse_route_entries_from_note(note, default_year=dep_dt.year if dep_dt else None)
-        if not entries or dep_dt is None:
+        if dep_dt is None:
+            issues.append(
+                f"Leg {index} {dep}→{arr}: Departure date is missing; route/date match could not be validated against planning notes."
+            )
+            continue
+
+        entries = parse_route_entries_from_note(note, default_year=dep_dt.year)
+        if not entries:
+            issues.append(
+                f"Leg {index} {dep}→{arr}: Planning notes did not contain a dated route entry; route/date match could not be validated."
+            )
             continue
 
         matching = [(entry_date, route) for entry_date, route in entries if entry_date == dep_dt.date()]
