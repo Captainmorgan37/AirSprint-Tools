@@ -40,3 +40,9 @@ def test_find_route_mismatch_accepts_dash_after_date_token() -> None:
     note = "21APR CYYZ-KMCO \n24APR- KMCO-MYNN\n27APR- MYNN-CYYZ"
 
     assert find_route_mismatch("KMCO", "MYNN", "2026-04-24T15:00:00Z", note) is None
+
+
+def test_find_route_mismatch_accepts_full_month_names() -> None:
+    note = "05MARCH CYYZ- KSAV\n21MARCH KSAV- CYYZ [RETURN]\n-\n8H Infinity CJ2 owner requesting a CJ2"
+
+    assert find_route_mismatch("KSAV", "CYYZ", "2026-03-21T15:00:00Z", note) is None

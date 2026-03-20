@@ -10,17 +10,29 @@ from flight_leg_utils import safe_parse_dt
 
 _MONTH_MAP = {
     "JAN": 1,
+    "JANUARY": 1,
     "FEB": 2,
+    "FEBRUARY": 2,
     "MAR": 3,
+    "MARCH": 3,
     "APR": 4,
+    "APRIL": 4,
     "MAY": 5,
     "JUN": 6,
+    "JUNE": 6,
     "JUL": 7,
+    "JULY": 7,
     "AUG": 8,
+    "AUGUST": 8,
     "SEP": 9,
+    "SEPT": 9,
+    "SEPTEMBER": 9,
     "OCT": 10,
+    "OCTOBER": 10,
     "NOV": 11,
+    "NOVEMBER": 11,
     "DEC": 12,
+    "DECEMBER": 12,
 }
 
 _REQUEST_PHRASE_PATTERN = re.compile(
@@ -97,7 +109,7 @@ def extract_requested_aircraft_from_note(note: str) -> Optional[str]:
 
 
 def _parse_note_date(token: str, *, default_year: Optional[int]) -> Optional[date]:
-    match = re.match(r"^(\d{1,2})([A-Z]{3})(\d{2})?$", token)
+    match = re.match(r"^(\d{1,2})([A-Z]{3,9})(\d{2})?$", token.strip().upper())
     if not match:
         return None
     day = int(match.group(1))
@@ -169,7 +181,7 @@ def parse_route_entries_from_note(
         return []
 
     entries: List[Tuple[date, List[str]]] = []
-    pattern = re.compile(r"^(\d{1,2}[A-Z]{3}(?:\d{2})?)(?:\s*[-:]\s*|\s+)(.*)$")
+    pattern = re.compile(r"^(\d{1,2}[A-Z]{3,9}(?:\d{2})?)(?:\s*[-:]\s*|\s+)(.*)$", re.IGNORECASE)
     stop_hint_pattern = re.compile(r"\b(?:customs|tech|technical|fuel)\s+stop\b", re.IGNORECASE)
     for raw_line in note_text.splitlines():
         line = raw_line.strip().strip("-=").strip()
