@@ -4,27 +4,35 @@ import pandas as pd
 import streamlit as st
 
 from Home import configure_page, password_gate, render_sidebar
-from cj_maintenance_status import (
-    collect_cj_maintenance_events,
-    maintenance_daily_status,
-)
+from cj_maintenance_status import collect_aircraft_maintenance_events, maintenance_daily_status
 from flight_leg_utils import FlightDataError, build_fl3xx_api_config
 
-configure_page(page_title="CJ Maintenance Status")
+configure_page(page_title="Aircraft Maintenance Status")
 password_gate()
 render_sidebar()
 
-st.title("🛠️ CJ Maintenance Status")
+st.title("🛠️ Aircraft Maintenance Status")
 st.write(
     """
-    Pulls each CJ aircraft schedule from FL3XX and counts, per day, how many aircraft are down for:
+    Pulls selected aircraft schedules from FL3XX and counts, per day, how many aircraft are down for:
     - **MAINTENANCE** (scheduled)
     - **UNSCHEDULED_MAINTENANCE**
     - **AOG**
 
-    Use the date controls to review a single day, a custom period, or a full calendar-style table.
+    Use the fleet selector and date controls to review a single day, a custom period, or a full calendar-style table.
     """
 )
+
+fleet_selection = st.multiselect(
+    "Aircraft types",
+    options=["CJ", "Embraer"],
+    default=["CJ"],
+    help="Choose CJ, Embraer, or both fleets to include in the pull.",
+)
+
+if not fleet_selection:
+    st.warning("Select at least one aircraft type to continue.")
+    st.stop()
 
 default_end = date.today() + timedelta(days=30)
 default_start = date.today() - timedelta(days=14)
@@ -49,7 +57,8 @@ if "cj_maintenance_events" not in st.session_state:
     st.session_state["cj_maintenance_events"] = None
     st.session_state["cj_maintenance_warnings"] = []
 
-run_check = st.button("Run CJ Maintenance Pull", type="primary")
+fleet_label = " + ".join(fleet_selection)
+run_check = st.button(f"Run {fleet_label} Maintenance Pull", type="primary")
 
 try:
     api_settings = st.secrets.get("fl3xx_api")  # type: ignore[attr-defined]
@@ -67,8 +76,8 @@ except FlightDataError as exc:
     st.stop()
 
 if run_check:
-    with st.spinner("Pulling aircraft schedule data for all CJs..."):
-        events, warnings = collect_cj_maintenance_events(config)
+    with st.spinner(f"Pulling aircraft schedule data for {fleet_label} fleet(s)..."):
+        events, warnings = collect_aircraft_maintenance_events(config, fleet=fleet_selection)
     st.session_state["cj_maintenance_events"] = events
     st.session_state["cj_maintenance_warnings"] = warnings
 

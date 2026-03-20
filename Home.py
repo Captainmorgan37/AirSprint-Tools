@@ -172,7 +172,7 @@ def _sidebar_links() -> list[dict[str, Any]]:
                 {"path": "pages/Pax Passport Check.py", "label": "Pax Passport Check"},
                 {"path": "pages/Historical Airport Use.py", "label": "Historical Airport Use"},
                 {"path": "pages/Route Watcher.py", "label": "Route Watcher"},
-                {"path": "pages/CJ Maintenance Status.py", "label": "CJ Maintenance Status"},
+                {"path": "pages/Aircraft Maintenance Status.py", "label": "Aircraft Maintenance Status"},
             ],
         },
         {
