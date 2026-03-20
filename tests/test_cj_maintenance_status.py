@@ -3,6 +3,9 @@ from datetime import date
 from cj_maintenance_status import (
     extract_maintenance_events,
     format_tail_for_fl3xx,
+    list_aircraft_tails,
+    list_cj_tails,
+    list_embraer_tails,
     maintenance_daily_status,
 )
 
@@ -201,3 +204,15 @@ def test_maintenance_daily_status_fractional_values_are_rounded_to_hundredths():
 
 def test_format_tail_for_fl3xx_inserts_hyphen():
     assert format_tail_for_fl3xx("CFSEF") == "C-FSEF"
+
+
+def test_list_aircraft_tails_supports_cj_embraer_or_both():
+    cj_tails = set(list_cj_tails())
+    embraer_tails = set(list_embraer_tails())
+
+    assert cj_tails
+    assert embraer_tails
+    assert cj_tails.isdisjoint(embraer_tails)
+    assert set(list_aircraft_tails("CJ")) == cj_tails
+    assert set(list_aircraft_tails("Embraer")) == embraer_tails
+    assert set(list_aircraft_tails(["CJ", "Embraer"])) == cj_tails | embraer_tails
