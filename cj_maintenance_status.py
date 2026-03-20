@@ -15,7 +15,7 @@ from fl3xx_api import DEFAULT_FL3XX_BASE_URL, Fl3xxApiConfig
 from flight_leg_utils import load_airport_tz_lookup
 from flight_leg_utils import safe_parse_dt
 from zoneinfo_compat import ZoneInfo
-from hangar_logic import CJ_TAILS
+from hangar_logic import CJ_TAILS, EMBRAER_TAILS
 
 UTC = timezone.utc
 MAINTENANCE_TYPES: Sequence[str] = (
@@ -54,10 +54,42 @@ class MaintenanceEvent:
     airport_tz: str = "UTC"
 
 
+AIRCRAFT_FLEET_TAILS: Dict[str, Set[str]] = {
+    "CJ": set(CJ_TAILS),
+    "EMBRAER": set(EMBRAER_TAILS),
+}
+
+
+def list_aircraft_tails(fleet: str | Sequence[str] | None = None) -> List[str]:
+    """Return tails for the requested fleet selection formatted for the FL3XX endpoint."""
+
+    if fleet is None:
+        selected_fleets = tuple(AIRCRAFT_FLEET_TAILS)
+    elif isinstance(fleet, str):
+        selected_fleets = (fleet,)
+    else:
+        selected_fleets = tuple(fleet)
+
+    tails: Set[str] = set()
+    for fleet_name in selected_fleets:
+        normalized = str(fleet_name).strip().upper()
+        if normalized not in AIRCRAFT_FLEET_TAILS:
+            raise ValueError(f"Unsupported fleet selection: {fleet_name}")
+        tails.update(AIRCRAFT_FLEET_TAILS[normalized])
+
+    return [format_tail_for_fl3xx(tail) for tail in sorted(tails)]
+
+
 def list_cj_tails() -> List[str]:
     """Return CJ tails sorted and formatted for the FL3XX aircraft endpoint."""
 
-    return [format_tail_for_fl3xx(tail) for tail in sorted(CJ_TAILS)]
+    return list_aircraft_tails("CJ")
+
+
+def list_embraer_tails() -> List[str]:
+    """Return Embraer tails sorted and formatted for the FL3XX aircraft endpoint."""
+
+    return list_aircraft_tails("EMBRAER")
 
 
 def format_tail_for_fl3xx(tail: str) -> str:
@@ -190,12 +222,13 @@ def extract_maintenance_events(tasks: Iterable[Mapping[str, Any]], tail: str) ->
     return events
 
 
-def collect_cj_maintenance_events(
+def collect_aircraft_maintenance_events(
     config: Fl3xxApiConfig,
     *,
     tails: Optional[Sequence[str]] = None,
+    fleet: str | Sequence[str] | None = "CJ",
 ) -> tuple[list[MaintenanceEvent], list[str]]:
-    selected_tails = list(tails) if tails else list_cj_tails()
+    selected_tails = list(tails) if tails else list_aircraft_tails(fleet)
     all_events: List[MaintenanceEvent] = []
     warnings: List[str] = []
 
@@ -208,6 +241,14 @@ def collect_cj_maintenance_events(
                 warnings.append(f"{tail}: {exc}")
 
     return all_events, warnings
+
+
+def collect_cj_maintenance_events(
+    config: Fl3xxApiConfig,
+    *,
+    tails: Optional[Sequence[str]] = None,
+) -> tuple[list[MaintenanceEvent], list[str]]:
+    return collect_aircraft_maintenance_events(config, tails=tails, fleet="CJ")
 
 
 def maintenance_daily_status(
