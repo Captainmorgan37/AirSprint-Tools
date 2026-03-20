@@ -580,27 +580,33 @@ def _extract_rsc_lines(notam_text: str) -> List[str]:
     return matches
 
 
-def _summarize_rsc(lines: Sequence[str]) -> Tuple[str, List[str], str]:
-    if not lines:
-        return "yellow", [], "No RSC NOTAMs found."
-
-    has_value = False
-    has_low_digit = False
+def _lowest_rsc_digit(lines: Sequence[str]) -> Optional[int]:
+    lowest: Optional[int] = None
     for line in lines:
         match = _RSC_VALUE_REGEX.search(line)
         if not match:
             continue
-        has_value = True
         digits = [int(value) for value in match.groups()]
-        if any(value < 6 for value in digits):
-            has_low_digit = True
-            break
+        line_lowest = min(digits)
+        if lowest is None or line_lowest < lowest:
+            lowest = line_lowest
+    return lowest
 
-    if has_low_digit:
-        return "red", list(lines), "RSC below 6/6/6."
-    if has_value:
+
+def _summarize_rsc(lines: Sequence[str]) -> Tuple[str, List[str], str]:
+    if not lines:
+        return "yellow", [], "No RSC NOTAMs found."
+
+    lowest_digit = _lowest_rsc_digit(lines)
+    if lowest_digit is None:
+        return "yellow", list(lines), "RSC NOTAM detected, but format was unexpected."
+    if lowest_digit >= 6:
         return "green", list(lines), "All RSC values are 6/6/6."
-    return "yellow", list(lines), "RSC NOTAM detected, but format was unexpected."
+    if lowest_digit == 5:
+        return "yellow", list(lines), "Lowest reported RSC is 5."
+    if lowest_digit in {2, 3, 4}:
+        return "red", list(lines), "Lowest reported RSC is between 2 and 4."
+    return "critical", list(lines), "Lowest reported RSC is 0 or 1."
 
 
 def _rsc_has_critical_digits(lines: Sequence[str]) -> bool:
@@ -1528,7 +1534,7 @@ for flight in processed_flights:
             if not within_standard_window:
                 if _rsc_has_critical_digits(rsc_lines):
                     status = "critical"
-                    note = "RSC includes 0/1 values."
+                    note = "Lowest reported RSC is 0 or 1."
                 else:
                     status = "neutral"
                     note = "RSC lookahead only highlights 0/1 values."
@@ -1536,12 +1542,11 @@ for flight in processed_flights:
             status = "neutral"
             lines = []
             note = "RSC check runs within 24 hours of arrival."
+        lowest_digit = _lowest_rsc_digit(lines) if lines else None
         if status == "green":
             summary = "6/6/6"
-        elif status == "critical":
-            summary = "0/1"
-        elif status == "red":
-            summary = "<6"
+        elif lowest_digit is not None and status in {"yellow", "red", "critical"}:
+            summary = f"min {lowest_digit}"
         else:
             summary = ""
         flight["rsc_status"] = status
