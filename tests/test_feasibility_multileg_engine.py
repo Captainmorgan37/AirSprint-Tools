@@ -347,6 +347,37 @@ def test_route_validation_flags_unparseable_planning_note() -> None:
     )
 
 
+def test_route_validation_accepts_return_leg_with_full_month_names() -> None:
+    quote = {
+        "bookingIdentifier": "ROUTE-FULL-MONTH-RETURN",
+        "aircraftObj": {"type": "CJ2", "category": "LIGHT_JET"},
+        "workflow": "PRIVATE",
+        "workflowCustomName": "FEX Guaranteed",
+        "legs": [
+            {
+                "id": "LEG-ROUTE-FULL-MONTH-RETURN",
+                "departureAirport": "KSAV",
+                "arrivalAirport": "CYYZ",
+                "departureDateUTC": "2026-03-21T15:00:00Z",
+                "arrivalDateUTC": "2026-03-21T18:30:00Z",
+                "blockTime": 210,
+                "planningNotes": "05MARCH CYYZ- KSAV\n21MARCH KSAV- CYYZ [RETURN]\n-\n8H Infinity CJ2 owner requesting a CJ2",
+            }
+        ],
+    }
+
+    result = run_feasibility_phase1({"quote": quote, "tz_provider": _tz_provider})
+
+    assert any(
+        "Planning notes route for 2026-03-21 matches booked KSAV→CYYZ." in entry
+        for entry in result["validation_checks"]
+    )
+    assert not any(
+        "Planning notes did not contain a dated route entry" in issue
+        for issue in result["issues"]
+    )
+
+
 def test_route_validation_flags_missing_departure_date() -> None:
     quote = {
         "bookingIdentifier": "ROUTE-MISSING-DATE",
