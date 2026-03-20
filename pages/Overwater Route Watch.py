@@ -31,6 +31,11 @@ LAND_BUFFER_NM = 200
 SAMPLES_PER_LEG = 18
 
 
+_MAPBOX_TOKEN = get_secret("mapbox_token")
+if isinstance(_MAPBOX_TOKEN, str) and _MAPBOX_TOKEN.strip():
+    os.environ["MAPBOX_API_KEY"] = _MAPBOX_TOKEN.strip()
+
+
 configure_page(page_title="Overwater Route Watch")
 password_gate()
 render_sidebar()
