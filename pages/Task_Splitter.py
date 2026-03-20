@@ -654,11 +654,10 @@ def assign_preference_weighted(
     total_weight = sum(weights.values()) or float(len(labels))
     baseline_target = total_workload / total_weight if total_weight else 0.0
     workload_targets = {lab: baseline_target * weights[lab] for lab in labels}
-    # Tail count balance is the primary goal, so target an even number of tails
-    # per shift regardless of workload weighting. Workload weights still matter
-    # as a secondary preference when multiple assignments are otherwise similar.
+    # Tail count balance should follow the same workload weighting so reduced
+    # workload shifts also receive proportionally fewer tails.
     count_targets = {
-        lab: (len(packages) / float(len(labels))) if labels else 0.0
+        lab: (len(packages) * (weights[lab] / total_weight)) if total_weight else 0.0
         for lab in labels
     }
 
