@@ -310,7 +310,7 @@ def test_large_package_set_spreads_tail_counts_more_evenly(TailPackage, assign_p
     assert any(pkg.tail.startswith("W") for pkg in buckets[labels[-1]])
 
 
-def test_tail_count_balance_takes_priority_over_weighted_workload_targets(
+def test_tail_count_balance_follows_weighted_workload_targets(
     TailPackage, assign_preference_weighted
 ):
     labels = ["0500", "0800", "1200"]
@@ -327,10 +327,31 @@ def test_tail_count_balance_takes_priority_over_weighted_workload_targets(
     buckets = assign_preference_weighted(packages, labels, weights, force_easterly_first=True)
 
     counts = [len(buckets[label]) for label in labels]
-    assert counts == [2, 2, 2]
+    assert counts == [1, 1, 4]
     assert any(pkg.tail.startswith("E") for pkg in buckets[labels[0]])
     assert any(pkg.tail.startswith("W") for pkg in buckets[labels[-1]])
     assert not any(pkg.tail.startswith("E") for pkg in buckets[labels[-1]])
+
+
+def test_lower_workload_shift_gets_proportionally_fewer_tails(
+    TailPackage, assign_preference_weighted
+):
+    labels = ["0500", "0600", "0800", "0900"]
+    weights = [1.0, 1.0, 1.0, 0.5]
+    packages = [
+        _make_tail(TailPackage, f"E{i}", "America/New_York") for i in range(8)
+    ] + [
+        _make_tail(TailPackage, f"C{i}", "America/Chicago") for i in range(8)
+    ] + [
+        _make_tail(TailPackage, f"W{i}", "America/Los_Angeles") for i in range(14)
+    ]
+
+    buckets = assign_preference_weighted(packages, labels, weights, force_easterly_first=True)
+
+    counts = [len(buckets[label]) for label in labels]
+    assert counts[-1] == 4
+    assert sum(counts[:-1]) == 26
+    assert max(counts[:-1]) - min(counts[:-1]) <= 1
 
 
 def test_timezone_cleanup_swaps_late_eastern_tails_with_early_western_tails(
