@@ -483,6 +483,38 @@ def _extract_roster_home_base_airports(
     return home_airports_by_personnel
 
 
+def _extract_roster_crew_lookup_ids(
+    roster_rows: Iterable[Mapping[str, Any]],
+) -> Dict[str, List[str]]:
+    lookup_ids_by_personnel: Dict[str, List[str]] = {}
+    for row in roster_rows:
+        user = row.get("user") if isinstance(row.get("user"), Mapping) else {}
+        personnel = _normalize_id(user.get("personnelNumber"))
+        if not personnel:
+            continue
+
+        lookup_ids: List[str] = []
+        for candidate in (
+            user.get("internalId"),
+            user.get("id"),
+            user.get("userId"),
+            user.get("personId"),
+            user.get("externalReference"),
+            row.get("internalId"),
+            row.get("id"),
+            row.get("userId"),
+            row.get("personId"),
+        ):
+            normalized = _normalize_id(candidate)
+            if normalized and normalized not in lookup_ids:
+                lookup_ids.append(normalized)
+
+        if lookup_ids:
+            lookup_ids_by_personnel[personnel] = lookup_ids
+
+    return lookup_ids_by_personnel
+
+
 def _extract_roster_positioning_events(
     roster_rows: Iterable[Mapping[str, Any]],
 ) -> Dict[str, List[Dict[str, Any]]]:
@@ -678,6 +710,7 @@ def compute_hotac_coverage(
     roster_window_end = roster_window_start + timedelta(days=1)
     roster_events_by_personnel: Dict[str, List[Dict[str, Any]]] = {}
     roster_home_base_by_personnel: Dict[str, str] = {}
+    roster_lookup_ids_by_personnel: Dict[str, List[str]] = {}
     roster_positioning_only_pilots: Dict[str, Dict[str, Any]] = {}
     troubleshooting_rows: List[Dict[str, Any]] = []
     should_fetch_roster = roster_fetcher is not None or bool(config.api_token or config.auth_header)
@@ -686,6 +719,7 @@ def compute_hotac_coverage(
             roster_rows = fetch_roster(config, roster_window_start, roster_window_end)
             roster_events_by_personnel = _extract_roster_positioning_events(roster_rows)
             roster_home_base_by_personnel = _extract_roster_home_base_airports(roster_rows)
+            roster_lookup_ids_by_personnel = _extract_roster_crew_lookup_ids(roster_rows)
             roster_positioning_only_pilots = _extract_roster_positioning_only_pilots(roster_rows)
         except Exception as exc:
             troubleshooting_rows.append(
@@ -1048,7 +1082,7 @@ def compute_hotac_coverage(
 
                     should_lookup_home_base = (
                         status == "Missing"
-                        and pilot_person_id
+                        and not profile_home_base_airport
                         and end_airport
                         and (
                             _is_canadian_airport(end_airport)
@@ -1056,25 +1090,41 @@ def compute_hotac_coverage(
                         )
                     )
                     if should_lookup_home_base:
-                        try:
-                            crew_member_payload = fetch_crew_member_details(config, pilot_person_id)
-                            home_airport_icao = _extract_home_airport_icao(crew_member_payload)
-                            profile_home_base_airport = home_airport_icao or ""
-                            if home_airport_icao and home_airport_icao == end_airport:
-                                status = "Home base"
-                                notes = f"Pilot ending at home base ({home_airport_icao})"
-                            elif end_airport == "CYHU" and home_airport_icao == "CYUL":
-                                status = "Unsure - crew based at CYUL and may be staying at home"
-                                notes = "Crew ended at CYHU and is CYUL based; may be staying at home"
-                        except Exception as exc:
-                            troubleshooting_rows.append(
-                                {
-                                    "Flight ID": flight_id,
-                                    "Tail": leg.get("tail") or "",
-                                    "Issue": "Unable to fetch pilot home airport",
-                                    "Details": str(exc),
-                            }
-                        )
+                        lookup_ids: List[str] = []
+                        for candidate in (
+                            pilot_person_id,
+                            pilot.get("crew_lookup_id"),
+                            *roster_lookup_ids_by_personnel.get(pilot_personnel or "", []),
+                            pilot_personnel,
+                        ):
+                            normalized = _normalize_id(candidate)
+                            if normalized and normalized not in lookup_ids:
+                                lookup_ids.append(normalized)
+
+                        for lookup_id in lookup_ids:
+                            try:
+                                crew_member_payload = fetch_crew_member_details(config, lookup_id)
+                                home_airport_icao = _extract_home_airport_icao(crew_member_payload)
+                                if not home_airport_icao:
+                                    continue
+
+                                profile_home_base_airport = home_airport_icao
+                                if home_airport_icao == end_airport:
+                                    status = "Home base"
+                                    notes = f"Pilot ending at home base ({home_airport_icao})"
+                                elif end_airport == "CYHU" and home_airport_icao == "CYUL":
+                                    status = "Unsure - crew based at CYUL and may be staying at home"
+                                    notes = "Crew ended at CYHU and is CYUL based; may be staying at home"
+                                break
+                            except Exception as exc:
+                                troubleshooting_rows.append(
+                                    {
+                                        "Flight ID": flight_id,
+                                        "Tail": leg.get("tail") or "",
+                                        "Issue": "Unable to fetch pilot home airport",
+                                        "Details": f"lookup_id={lookup_id}: {exc}",
+                                    }
+                                )
 
                     if positioning_event and reposition_to:
                         notes = f"Positioning note found: {end_airport} → {reposition_to}"
