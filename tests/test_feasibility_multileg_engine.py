@@ -287,6 +287,25 @@ def test_workflow_validation_supports_abbreviated_infinity_and_request() -> None
     assert not any("workflow" in issue.lower() for issue in result["issues"])
 
 
+def test_workflow_validation_supports_owner_lines_without_club_keyword() -> None:
+    quote = _workflow_quote(
+        "FEX Guaranteed",
+        "11JUN CYYC - KLAX [One-way]\n-\n24hr CJ2 owner requesting CJ2",
+    )
+
+    result = run_feasibility_phase1({"quote": quote, "tz_provider": _tz_provider})
+
+    workflow_checks = [
+        entry
+        for entry in result["validation_checks"]
+        if "Workflow 'FEX Guaranteed' aligns with planning notes (Guaranteed)" in entry
+    ]
+
+    assert workflow_checks
+    assert "owner aircraft CJ2 and requested CJ2" in workflow_checks[0]
+    assert not any("workflow" in issue.lower() for issue in result["issues"])
+
+
 def test_workflow_validation_flags_mismatch() -> None:
     quote = _workflow_quote("Club Guaranteed", "INFINITY CJ2 OWNER REQUESTING CJ3")
 

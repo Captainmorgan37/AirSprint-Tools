@@ -411,22 +411,48 @@ def _extract_owner_aircraft_from_note(note: Optional[str]) -> list[str]:
     patterns = (
         r"\b(?:\w+[ 	]+)?(?:\d+)?[ 	]*(?:CLUB|INF(?:INITY)?)[ 	]+([A-Z0-9+,/ 	\-&]{2,40})[ 	]+OWNER\b",
         r"\b([A-Z0-9+,/ 	\-&]{2,40})[ 	]+(?:CLUB|INF(?:INITY)?)[ 	]+OWNER\b",
+        r"\b(?:\d+[ 	]*(?:H|HR|HRS|HOUR|HOURS)|\d+[ 	]*HRS?)[ 	]+([A-Z0-9+,/ 	\-&]{2,40})[ 	]+OWNER\b",
     )
+    ignored_labels = {"CLUB", "INF", "INFINITY", "OWNER", "REQUESTED", "REQUESTING", "REQ", "C"}
 
     labels: list[str] = []
+    seen: set[str] = set()
     for line in normalize_planning_note_text(note).splitlines():
         stripped = line.strip()
-        if not stripped:
+        if not stripped or "OWNER" not in stripped.upper():
             continue
+
+        line_labels: list[str] = []
         for pattern in patterns:
             for match in re.finditer(pattern, stripped, re.IGNORECASE):
                 for raw in re.split(r"[/, 	]+|\band\b|&", match.group(1), flags=re.IGNORECASE):
                     normalized = _normalize_aircraft_label(raw)
-                    if not normalized or normalized.isdigit():
+                    if not normalized or normalized.isdigit() or normalized in ignored_labels:
                         continue
-                    if re.fullmatch(r"\d+(?:H|HR|HRS)", normalized):
+                    if re.fullmatch(r"\d+(?:H|HR|HRS|HOUR|HOURS)", normalized):
                         continue
-                    labels.append(normalized)
+                    if normalized not in seen:
+                        seen.add(normalized)
+                        line_labels.append(normalized)
+
+        if not line_labels:
+            fallback = re.search(
+                r"\b([A-Z0-9+,/ 	\-&]{2,40})[ 	]+OWNER\b",
+                stripped,
+                re.IGNORECASE,
+            )
+            if fallback:
+                for raw in re.split(r"[/, 	]+|\band\b|&", fallback.group(1), flags=re.IGNORECASE):
+                    normalized = _normalize_aircraft_label(raw)
+                    if not normalized or normalized.isdigit() or normalized in ignored_labels:
+                        continue
+                    if re.fullmatch(r"\d+(?:H|HR|HRS|HOUR|HOURS)", normalized):
+                        continue
+                    if normalized not in seen:
+                        seen.add(normalized)
+                        line_labels.append(normalized)
+
+        labels.extend(line_labels)
 
     return labels
 
