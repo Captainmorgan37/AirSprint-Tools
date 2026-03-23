@@ -205,59 +205,63 @@ def _format_date_range(day: DayContext) -> str:
     return ""
 
 
-def _is_european_leg(
+def _has_osa_airport(
     leg: LegContext,
     airport_metadata: AirportMetadataLookup,
-    tz_provider: Callable[[str], Optional[str]],
 ) -> bool:
     for key in ("departure_icao", "arrival_icao"):
         icao = leg.get(key)
         if not isinstance(icao, str) or not icao:
             continue
-        tz_name = tz_provider(icao)
-        if isinstance(tz_name, str) and tz_name.startswith("Europe/"):
+        classification = classify_airport_category(icao, airport_metadata)
+        if classification.category == OSA_CATEGORY:
             return True
-        record = airport_metadata.get(icao.upper()) if isinstance(airport_metadata, Mapping) else None
-        if isinstance(record, Mapping):
-            record_tz = record.get("tz")
-            if isinstance(record_tz, str) and record_tz.startswith("Europe/"):
-                return True
     return False
 
 
-def _manual_review_leg_result(leg: LegContext) -> AirportFeasibilityResult:
+def _manual_review_leg_result(
+    leg: LegContext,
+    airport_metadata: AirportMetadataLookup,
+) -> AirportFeasibilityResult:
     caution = CategoryResult(
         status="CAUTION",
         summary="Manual feasibility review required",
-        issues=["European/OSA leg; complete feasibility manually in Jeppesen/Fl3xx."],
+        issues=["OSA leg; complete feasibility manually in Jeppesen/Fl3xx."],
     )
     passed = CategoryResult(status="PASS", summary="Manual review defers automated check", issues=[])
     info = CategoryResult(
         status="INFO",
         summary="Manual review defers operational note parsing",
-        issues=["Operational notes should be reviewed manually for this European/OSA leg."],
+        issues=["Operational notes should be reviewed manually for this OSA leg."],
     )
 
-    def build_side(icao: str) -> AirportSideResult:
+    def build_side(icao: str, *, osa_only: bool) -> AirportSideResult:
+        osa_result = caution if osa_only else passed
+        operational_notes_result = info if osa_only else passed
         return AirportSideResult(
             icao=icao,
             suitability=passed,
             deice=passed,
             customs=passed,
             slot_ppr=passed,
-            osa_ssa=caution,
+            osa_ssa=osa_result,
             day_ops=passed,
             overflight=passed,
-            operational_notes=info,
+            operational_notes=operational_notes_result,
             parsed_operational_restrictions={},
             parsed_customs_notes={},
             raw_operational_notes=[],
         )
 
+    dep_icao = str(leg.get("departure_icao") or "")
+    arr_icao = str(leg.get("arrival_icao") or "")
+    dep_is_osa = classify_airport_category(dep_icao, airport_metadata).category == OSA_CATEGORY
+    arr_is_osa = classify_airport_category(arr_icao, airport_metadata).category == OSA_CATEGORY
+
     return AirportFeasibilityResult(
         leg_id=str(leg.get("leg_id") or ""),
-        departure=build_side(str(leg.get("departure_icao") or "")),
-        arrival=build_side(str(leg.get("arrival_icao") or "")),
+        departure=build_side(dep_icao, osa_only=dep_is_osa),
+        arrival=build_side(arr_icao, osa_only=arr_is_osa),
         aircraft=passed,
         weight_balance=passed,
     )
@@ -752,8 +756,8 @@ def run_feasibility_phase1(request: FeasibilityRequest) -> FullFeasibilityResult
 
     leg_results: List[AirportFeasibilityResult] = []
     for leg in day["legs"]:
-        if _is_european_leg(leg, airport_metadata, tz_provider):
-            leg_results.append(_manual_review_leg_result(leg))
+        if _has_osa_airport(leg, airport_metadata):
+            leg_results.append(_manual_review_leg_result(leg, airport_metadata))
             continue
         leg_results.append(
             evaluate_airport_feasibility_for_leg(
