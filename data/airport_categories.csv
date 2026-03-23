@@ -17,9 +17,6 @@ KSEA,STANDARD,60,Primary service area airport with no special handling required.
 PANC,SSA,120,Alaska airport treated as SSA; SSA handling only.
 PAFA,SSA,120,Alaska airport treated as SSA; SSA handling only.
 PAKT,SSA,120,Alaska airport treated as SSA; SSA handling only.
-CYFB,SSA,120,Nunavut airport treated as SSA; SSA handling only.
-CYRT,SSA,120,Nunavut airport treated as SSA; SSA handling only.
-CYRB,SSA,120,Nunavut airport treated as SSA; SSA handling only.
 MMMX,SSA,120,Mexico airport treated as SSA; SSA handling only.
 MMUN,SSA,120,Mexico airport treated as SSA; SSA handling only.
 TJSJ,SSA,120,Caribbean airport treated as SSA; SSA handling only.
