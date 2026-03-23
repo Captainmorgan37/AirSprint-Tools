@@ -859,7 +859,11 @@ def evaluate_suitability(
         if is_explicit_deice_note(text_body):
             continue
         body = text_body.lower()
-        if "customs" in body or _is_fuel_service_closure(body, closure_fail_keywords + closure_caution_keywords):
+        if (
+            "customs" in body
+            or _is_fbo_information_note(body)
+            or _is_fuel_service_closure(body, closure_fail_keywords + closure_caution_keywords)
+        ):
             continue
         if leg_date is not None:
             applies = _note_applies_to_leg_date(note, leg_date)
@@ -893,6 +897,12 @@ def evaluate_suitability(
             )
 
     return CategoryResult(status=status, summary=summary, issues=issues)
+
+
+def _is_fbo_information_note(body: str) -> bool:
+    if not body:
+        return False
+    return "fbo information" in body or "contact for services" in body
 
 
 def _is_closure_caution_exempt(icao: str, body: str) -> bool:
