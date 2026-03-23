@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 import re
 from typing import Any, Callable, List, Mapping, Optional, Sequence
 
@@ -17,6 +17,7 @@ from flight_leg_utils import (
 from .airport_module import (
     AirportFeasibilityResult,
     AirportMetadataLookup,
+    AirportSideResult,
     LegContext,
     build_leg_context_from_flight,
     evaluate_airport_feasibility_for_leg,
@@ -32,7 +33,7 @@ from .planning_notes import (
     parse_route_entries_from_note,
 )
 from .quote_lookup import build_quote_leg_options
-from .schemas import CategoryStatus, combine_statuses
+from .schemas import CategoryResult, CategoryStatus, combine_statuses
 
 
 def _coerce_str(value: Any) -> str:
@@ -204,6 +205,58 @@ def _format_date_range(day: DayContext) -> str:
     return ""
 
 
+def _has_osa_airport(
+    leg: LegContext,
+    airport_metadata: AirportMetadataLookup,
+) -> bool:
+    for key in ("departure_icao", "arrival_icao"):
+        icao = leg.get(key)
+        if not isinstance(icao, str) or not icao:
+            continue
+        classification = classify_airport_category(icao, airport_metadata)
+        if classification.category == OSA_CATEGORY:
+            return True
+    return False
+
+
+def _manual_review_leg_result(leg: LegContext) -> AirportFeasibilityResult:
+    caution = CategoryResult(
+        status="CAUTION",
+        summary="Manual feasibility review required",
+        issues=["OSA leg; complete feasibility manually in Jeppesen/Fl3xx."],
+    )
+    passed = CategoryResult(status="PASS", summary="Manual review defers automated check", issues=[])
+    info = CategoryResult(
+        status="INFO",
+        summary="Manual review defers operational note parsing",
+        issues=["Operational notes should be reviewed manually for this OSA leg."],
+    )
+
+    def build_side(icao: str) -> AirportSideResult:
+        return AirportSideResult(
+            icao=icao,
+            suitability=passed,
+            deice=passed,
+            customs=passed,
+            slot_ppr=passed,
+            osa_ssa=caution,
+            day_ops=passed,
+            overflight=passed,
+            operational_notes=info,
+            parsed_operational_restrictions={},
+            parsed_customs_notes={},
+            raw_operational_notes=[],
+        )
+
+    return AirportFeasibilityResult(
+        leg_id=str(leg.get("leg_id") or ""),
+        departure=build_side(str(leg.get("departure_icao") or "")),
+        arrival=build_side(str(leg.get("arrival_icao") or "")),
+        aircraft=passed,
+        weight_balance=passed,
+    )
+
+
 def _determine_flight_category(
     legs: Sequence[LegContext], airport_metadata: AirportMetadataLookup
 ) -> Optional[str]:
@@ -297,6 +350,7 @@ def _collect_planning_note_feedback(day: DayContext) -> tuple[List[str], List[st
     has_planning_notes = False
 
     legs = day.get("legs", [])
+    trip_start_date = _trip_start_local_date(legs, tz_lookup)
     day_origin = (legs[0].get("departure_icao") or "").upper() if legs else ""
     day_destination = (legs[-1].get("arrival_icao") or "").upper() if legs else ""
 
@@ -349,6 +403,12 @@ def _collect_planning_note_feedback(day: DayContext) -> tuple[List[str], List[st
             continue
 
         matching = [(entry_date, route) for entry_date, route in entries if entry_date == dep_dt.date()]
+        if not matching and trip_start_date and dep_dt.date() != trip_start_date:
+            matching = [
+                (entry_date, route)
+                for entry_date, route in entries
+                if entry_date == trip_start_date
+            ]
         if not matching:
             nearest_date = min(entries, key=lambda entry: abs(entry[0] - dep_dt.date()))[0]
             issues.append(
@@ -370,6 +430,26 @@ def _collect_planning_note_feedback(day: DayContext) -> tuple[List[str], List[st
     if not has_planning_notes and day.get("legs"):
         issues.append("No planning notes provided; routes could not be validated against planning notes.")
     return issues, confirmations
+
+
+def _trip_start_local_date(
+    legs: Sequence[LegContext], tz_lookup: Mapping[str, str]
+) -> Optional[date]:
+    if not legs:
+        return None
+    first_leg = legs[0]
+    departure_raw = first_leg.get("departure_date_utc")
+    departure_dt = safe_parse_dt(departure_raw) if departure_raw else None
+    if departure_dt is None:
+        return None
+    dep = (first_leg.get("departure_icao") or "").upper()
+    tz_name = tz_lookup.get(dep)
+    if tz_name:
+        try:
+            departure_dt = departure_dt.astimezone(pytz.timezone(tz_name))
+        except Exception:
+            pass
+    return departure_dt.date()
 
 
 def _normalize_aircraft_label(label: str) -> str:
@@ -658,6 +738,9 @@ def run_feasibility_phase1(request: FeasibilityRequest) -> FullFeasibilityResult
 
     leg_results: List[AirportFeasibilityResult] = []
     for leg in day["legs"]:
+        if _has_osa_airport(leg, airport_metadata):
+            leg_results.append(_manual_review_leg_result(leg))
+            continue
         leg_results.append(
             evaluate_airport_feasibility_for_leg(
                 leg,
