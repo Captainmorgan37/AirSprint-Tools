@@ -879,6 +879,39 @@ def test_flight_category_detects_us_point_to_point() -> None:
     assert result["flight_category"] == "US point-to-point"
 
 
+def test_european_leg_requires_manual_feasibility_review() -> None:
+    quote = {
+        "bookingIdentifier": "EU-MANUAL",
+        "aircraftObj": {"type": "E545", "category": "SUPER_MIDSIZE_JET"},
+        "legs": [
+            {
+                "id": "LEG-EU-1",
+                "departureAirport": "CYFB",
+                "arrivalAirport": "EIDW",
+                "departureDateUTC": "2026-06-09T20:00:00Z",
+                "arrivalDateUTC": "2026-06-10T02:30:00Z",
+                "blockTime": 390,
+            }
+        ],
+    }
+
+    result = run_feasibility_phase1(
+        {
+            "quote": quote,
+            "tz_provider": lambda icao: {
+                "CYFB": "America/Iqaluit",
+                "EIDW": "Europe/Dublin",
+            }.get(icao),
+        }
+    )
+
+    leg = result["legs"][0]
+    assert leg["arrival"]["customs"]["status"] == "PASS"
+    assert leg["arrival"]["osa_ssa"]["status"] == "CAUTION"
+    assert leg["arrival"]["osa_ssa"]["summary"] == "Manual feasibility review required"
+    assert "European/OSA leg; complete feasibility manually in Jeppesen/Fl3xx." in leg["arrival"]["osa_ssa"]["issues"]
+
+
 def test_weight_balance_reads_nested_pax_and_cargo_payload() -> None:
     payload = {
         "paxDetails": {
