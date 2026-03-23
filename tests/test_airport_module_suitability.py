@@ -192,6 +192,31 @@ def test_fuel_service_closure_does_not_trigger_fail() -> None:
     assert result.issues == []
 
 
+def test_fbo_information_hours_do_not_trigger_airport_closure() -> None:
+    profile = _default_profile()
+    leg = {"aircraft_category": "SUPER_MIDSIZE_JET"}
+    notes = [
+        {
+            "note": (
+                "FBO INFORMATION [16MAY24]:\n\nFrobisher Bay Touchdown\n• PH: 867-979-6226\n"
+                "• Email: land@cyfb.ca\n• Hours of operation: 0900L - 1700L Mon to Sat, closed Sun\n"
+                "• Contact for services"
+            )
+        }
+    ]
+
+    result = evaluate_suitability(
+        airport_profile=profile,
+        leg=leg,
+        operational_notes=notes,
+        side="arrival",
+    )
+
+    assert result.status == "PASS"
+    assert result.summary == "Fl3xx category A approved"
+    assert result.issues == []
+
+
 def test_date_specific_closure_note_ignored_when_not_applicable() -> None:
     profile = _default_profile()
     leg = {
