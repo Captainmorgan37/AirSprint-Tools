@@ -453,7 +453,7 @@ def _trip_start_local_date(
 
 
 def _normalize_aircraft_label(label: str) -> str:
-    return re.sub(r"[^A-Z0-9]", "", label or "").upper()
+    return re.sub(r"[^A-Z0-9]", "", (label or "").upper())
 
 
 def _canonical_aircraft_label(label: str) -> str:
@@ -461,7 +461,7 @@ def _canonical_aircraft_label(label: str) -> str:
     if not normalized:
         return ""
 
-    emb_variants = {"E545", "E500", "E550", "P500", "EMB", "L450"}
+    emb_variants = {"E545", "E500", "E550", "P500", "EMB", "EMBRAER", "LEGACY", "PRAETOR", "PHENOM", "L450"}
     if normalized in emb_variants:
         return "EMB"
 
@@ -494,6 +494,12 @@ def _extract_owner_aircraft_from_note(note: Optional[str]) -> list[str]:
         r"\b(?:\d+[ 	]*(?:H|HR|HRS|HOUR|HOURS)|\d+[ 	]*HRS?)[ 	]+([A-Z0-9+,/ 	\-&]{2,40})[ 	]+OWNER\b",
     )
     ignored_labels = {"CLUB", "INF", "INFINITY", "OWNER", "REQUESTED", "REQUESTING", "REQ", "C"}
+    aircraft_aliases = {
+        "EMBRAER": "EMB",
+        "LEGACY": "EMB",
+        "PRAETOR": "EMB",
+        "PHENOM": "EMB",
+    }
 
     labels: list[str] = []
     seen: set[str] = set()
@@ -507,8 +513,9 @@ def _extract_owner_aircraft_from_note(note: Optional[str]) -> list[str]:
             for match in re.finditer(pattern, stripped, re.IGNORECASE):
                 for raw in re.split(r"[/, 	]+|\band\b|&", match.group(1), flags=re.IGNORECASE):
                     normalized = _normalize_aircraft_label(raw)
-                    if not normalized or normalized.isdigit() or normalized in ignored_labels:
+                    if not normalized or len(normalized) < 2 or normalized.isdigit() or normalized in ignored_labels:
                         continue
+                    normalized = aircraft_aliases.get(normalized, normalized)
                     if re.fullmatch(r"\d+(?:H|HR|HRS|HOUR|HOURS)", normalized):
                         continue
                     if normalized not in seen:
@@ -524,8 +531,9 @@ def _extract_owner_aircraft_from_note(note: Optional[str]) -> list[str]:
             if fallback:
                 for raw in re.split(r"[/, 	]+|\band\b|&", fallback.group(1), flags=re.IGNORECASE):
                     normalized = _normalize_aircraft_label(raw)
-                    if not normalized or normalized.isdigit() or normalized in ignored_labels:
+                    if not normalized or len(normalized) < 2 or normalized.isdigit() or normalized in ignored_labels:
                         continue
+                    normalized = aircraft_aliases.get(normalized, normalized)
                     if re.fullmatch(r"\d+(?:H|HR|HRS|HOUR|HOURS)", normalized):
                         continue
                     if normalized not in seen:

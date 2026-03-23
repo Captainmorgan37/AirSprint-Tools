@@ -7,11 +7,10 @@ from typing import Any, Dict, List, Optional, cast
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from feasibility.engine_phase1 import run_feasibility_phase1
+from feasibility.engine_phase1 import _normalize_aircraft_label, run_feasibility_phase1
 from feasibility import checker_weight_balance
 from feasibility.duty_module import evaluate_generic_duty_day
 from feasibility.models import DayContext
-
 
 def _build_simple_quote() -> Dict[str, Any]:
     return {
@@ -43,13 +42,11 @@ def _build_simple_quote() -> Dict[str, Any]:
         ],
     }
 
-
 def _tz_provider(icao: str) -> Optional[str]:
     return {
         "CYYC": "America/Edmonton",
         "CYEG": "America/Edmonton",
     }.get(icao)
-
 
 def test_phase1_engine_runs_for_entire_quote() -> None:
     quote = _build_simple_quote()
@@ -62,7 +59,6 @@ def test_phase1_engine_runs_for_entire_quote() -> None:
     assert result["duty"]["total_duty"] == 270
     assert result["duty"]["status"] == "PASS"
     assert all(leg["weightBalance"]["status"] == "PASS" for leg in result["legs"])
-
 
 def test_phase1_engine_uses_pax_details_fetcher() -> None:
     quote = {
@@ -104,7 +100,6 @@ def test_phase1_engine_uses_pax_details_fetcher() -> None:
     assert details["paxBreakdown"]["Male"] == 1
     assert details["paxBreakdown"]["Female"] == 1
 
-
 def test_phase1_engine_prefers_flight_id_when_fetching_pax_details() -> None:
     quote = {
         "bookingIdentifier": "NESTED-ID",
@@ -138,7 +133,6 @@ def test_phase1_engine_prefers_flight_id_when_fetching_pax_details() -> None:
         {"quote": quote, "tz_provider": _tz_provider, "pax_details_fetcher": _fetcher}
     )
 
-
 def _workflow_quote(workflow_custom: str, planning_note: str) -> Dict[str, Any]:
     return {
         "bookingIdentifier": "WFLOW",
@@ -159,6 +153,8 @@ def _workflow_quote(workflow_custom: str, planning_note: str) -> Dict[str, Any]:
         ],
     }
 
+def test_normalize_aircraft_label_keeps_spelled_out_names() -> None:
+    assert _normalize_aircraft_label("Embraer") == "EMBRAER"
 
 def test_workflow_validation_matches_guaranteed_request() -> None:
     quote = _workflow_quote("Club Guaranteed", "CLUB CJ3 OWNER REQUESTING CJ3")
@@ -170,7 +166,6 @@ def test_workflow_validation_matches_guaranteed_request() -> None:
         for entry in result["validation_checks"]
     )
     assert not any("workflow" in issue.lower() for issue in result["issues"])
-
 
 def test_workflow_validation_allows_multi_type_owner_request() -> None:
     quote = _workflow_quote(
@@ -185,7 +180,6 @@ def test_workflow_validation_allows_multi_type_owner_request() -> None:
     )
     assert not any("workflow" in issue.lower() for issue in result["issues"])
 
-
 def test_workflow_validation_handles_club_owning_two_types() -> None:
     quote = _workflow_quote(
         "Club Guaranteed", "CLUB P500 CJ2 OWNER REQUESTING CJ2"
@@ -198,7 +192,6 @@ def test_workflow_validation_handles_club_owning_two_types() -> None:
         for entry in result["validation_checks"]
     )
     assert not any("workflow" in issue.lower() for issue in result["issues"])
-
 
 def test_workflow_validation_supports_ampersand_between_owner_types() -> None:
     quote = _workflow_quote(
@@ -213,7 +206,6 @@ def test_workflow_validation_supports_ampersand_between_owner_types() -> None:
     )
     assert not any("workflow" in issue.lower() for issue in result["issues"])
 
-
 def test_workflow_validation_supports_and_between_owner_types() -> None:
     quote = _workflow_quote(
         "FEX Guaranteed", "24HR CLUB L450 and CJ3 OWNER REQUESTING CJ3"
@@ -226,7 +218,6 @@ def test_workflow_validation_supports_and_between_owner_types() -> None:
         for entry in result["validation_checks"]
     )
     assert not any("workflow" in issue.lower() for issue in result["issues"])
-
 
 def test_workflow_validation_handles_mixed_club_and_infinity_ownership() -> None:
     quote = _workflow_quote(
@@ -241,8 +232,6 @@ def test_workflow_validation_handles_mixed_club_and_infinity_ownership() -> None
     )
     assert not any("workflow" in issue.lower() for issue in result["issues"])
 
-
-
 def test_workflow_validation_supports_plus_suffix_aircraft_labels() -> None:
     quote = _workflow_quote("FEX Guaranteed", "24HR CLUB CJ3+ OWNER REQUESTING CJ3+")
 
@@ -253,7 +242,6 @@ def test_workflow_validation_supports_plus_suffix_aircraft_labels() -> None:
         for entry in result["validation_checks"]
     )
     assert not any("workflow" in issue.lower() for issue in result["issues"])
-
 
 def test_workflow_validation_supports_aircraft_before_club_owner_phrase() -> None:
     quote = _workflow_quote(
@@ -274,7 +262,6 @@ def test_workflow_validation_supports_aircraft_before_club_owner_phrase() -> Non
     assert "CYUL" not in workflow_checks[0]
     assert not any("workflow" in issue.lower() for issue in result["issues"])
 
-
 def test_workflow_validation_supports_abbreviated_infinity_and_request() -> None:
     quote = _workflow_quote("Club Guaranteed", "8HR INF CJ2 OWNER REQ CJ2")
 
@@ -285,7 +272,6 @@ def test_workflow_validation_supports_abbreviated_infinity_and_request() -> None
         for entry in result["validation_checks"]
     )
     assert not any("workflow" in issue.lower() for issue in result["issues"])
-
 
 def test_workflow_validation_supports_owner_lines_without_club_keyword() -> None:
     quote = _workflow_quote(
@@ -305,7 +291,6 @@ def test_workflow_validation_supports_owner_lines_without_club_keyword() -> None
     assert "owner aircraft CJ2 and requested CJ2" in workflow_checks[0]
     assert not any("workflow" in issue.lower() for issue in result["issues"])
 
-
 def test_workflow_validation_flags_mismatch() -> None:
     quote = _workflow_quote("Club Guaranteed", "INFINITY CJ2 OWNER REQUESTING CJ3")
 
@@ -316,7 +301,6 @@ def test_workflow_validation_flags_mismatch() -> None:
         for entry in result["validation_checks"]
     )
     assert any("planning notes indicate Interchange" in issue for issue in result["issues"])
-
 
 def test_missing_planning_notes_are_flagged() -> None:
     quote = _workflow_quote("Club Guaranteed", "")
@@ -331,7 +315,6 @@ def test_missing_planning_notes_are_flagged() -> None:
         "No planning notes provided; routes could not be validated against planning notes." in issue
         for issue in result["issues"]
     )
-
 
 def test_route_validation_flags_unparseable_planning_note() -> None:
     quote = {
@@ -365,7 +348,6 @@ def test_route_validation_flags_unparseable_planning_note() -> None:
         for issue in result["issues"]
     )
 
-
 def test_route_validation_accepts_return_leg_with_full_month_names() -> None:
     quote = {
         "bookingIdentifier": "ROUTE-FULL-MONTH-RETURN",
@@ -395,7 +377,6 @@ def test_route_validation_accepts_return_leg_with_full_month_names() -> None:
         "Planning notes did not contain a dated route entry" in issue
         for issue in result["issues"]
     )
-
 
 def test_route_validation_flags_missing_departure_date() -> None:
     quote = {
@@ -428,7 +409,6 @@ def test_route_validation_flags_missing_departure_date() -> None:
         for issue in result["issues"]
     )
 
-
 def test_workflow_validation_allows_owner_prefix_typos() -> None:
     quote = _workflow_quote(
         "FEX Interchange", "05DEC KPSP - CYEG\n-\n24Club CJ3 owner requesting interchange to EMB"
@@ -442,6 +422,19 @@ def test_workflow_validation_allows_owner_prefix_typos() -> None:
     )
     assert not any("workflow" in issue.lower() for issue in result["issues"])
 
+def test_workflow_validation_supports_spelled_out_embraer_labels() -> None:
+    quote = _workflow_quote(
+        "FEX Priority Guaranteed",
+        "25Mar KASE - CYYZ [One way]\n-\n8 hrs Infinity Embraer owner requesting Embraer",
+    )
+
+    result = run_feasibility_phase1({"quote": quote, "tz_provider": _tz_provider})
+
+    assert any(
+        "Workflow 'FEX Priority Guaranteed' aligns with planning notes (Guaranteed)" in entry
+        for entry in result["validation_checks"]
+    )
+    assert not any("workflow" in issue.lower() for issue in result["issues"])
 
 def test_workflow_validation_handles_cj_fleet_request_with_escaped_note_newlines() -> None:
     quote = _workflow_quote(
@@ -457,7 +450,6 @@ def test_workflow_validation_handles_cj_fleet_request_with_escaped_note_newlines
     )
     assert not any("workflow" in issue.lower() for issue in result["issues"])
 
-
 def test_workflow_validation_treats_fex_shared_like_guaranteed() -> None:
     quote = _workflow_quote("FEX-Shared", "CLUB CJ3 OWNER REQUESTING CJ3")
 
@@ -468,7 +460,6 @@ def test_workflow_validation_treats_fex_shared_like_guaranteed() -> None:
         for entry in result["validation_checks"]
     )
     assert not any("workflow" in issue.lower() for issue in result["issues"])
-
 
 def test_workflow_validation_treats_fex_shared_priority_like_guaranteed() -> None:
     quote = _workflow_quote("FEX-Shared Priority", "CLUB CJ3 OWNER REQUESTING CJ3")
@@ -481,14 +472,12 @@ def test_workflow_validation_treats_fex_shared_priority_like_guaranteed() -> Non
     )
     assert not any("workflow" in issue.lower() for issue in result["issues"])
 
-
 def test_as_available_workflow_validates_without_notes() -> None:
     quote = _workflow_quote("FEX As Available", "")
 
     result = run_feasibility_phase1({"quote": quote, "tz_provider": _tz_provider})
 
     assert "Workflow 'FEX As Available' validated as As Available." in result["validation_checks"]
-
 
 def test_phase1_engine_uses_flight_info_id_for_pax_details() -> None:
     quote = {
@@ -519,7 +508,6 @@ def test_phase1_engine_uses_flight_info_id_for_pax_details() -> None:
 
     assert fetched_ids == ["FLIGHT-INFO-999"]
 
-
 def test_phase1_engine_surfaces_pax_details_error() -> None:
     quote = {
         "bookingIdentifier": "PAX-ERR",
@@ -548,7 +536,6 @@ def test_phase1_engine_surfaces_pax_details_error() -> None:
     assert details["payloadSource"] == "api_error"
     assert "Unauthorized" in details.get("payloadError", "")
 
-
 def test_planning_notes_route_mismatch_flags_issue() -> None:
     quote = {
         "bookingIdentifier": "ROUTE-MISMATCH",
@@ -572,7 +559,6 @@ def test_planning_notes_route_mismatch_flags_issue() -> None:
     assert any(
         "Planning notes route" in entry for entry in result.get("validation_checks", [])
     )
-
 
 def test_planning_notes_route_date_mismatch_flags_issue() -> None:
     quote = {
@@ -598,7 +584,6 @@ def test_planning_notes_route_date_mismatch_flags_issue() -> None:
         "route date" in entry for entry in result.get("validation_checks", [])
     )
 
-
 def test_planning_notes_route_match_no_issue() -> None:
     quote = {
         "bookingIdentifier": "ROUTE-MATCH",
@@ -623,7 +608,6 @@ def test_planning_notes_route_match_no_issue() -> None:
         "Planning notes route" in entry and "matches booked" in entry
         for entry in result.get("validation_checks", [])
     )
-
 
 def test_planning_notes_summary_route_allows_fuel_stop() -> None:
     quote = {
@@ -658,7 +642,6 @@ def test_planning_notes_summary_route_allows_fuel_stop() -> None:
         "Planning notes route" in entry and "matches booked" in entry
         for entry in result.get("validation_checks", [])
     )
-
 
 def test_planning_notes_summary_route_allows_customs_stop_note() -> None:
     quote = {
@@ -696,7 +679,6 @@ def test_planning_notes_summary_route_allows_customs_stop_note() -> None:
     ]
     assert len(matches) >= 2
 
-
 def test_planning_notes_allow_missing_country_prefix_in_route() -> None:
     quote = {
         "bookingIdentifier": "ROUTE-PREFIX-OPTIONAL",
@@ -721,7 +703,6 @@ def test_planning_notes_allow_missing_country_prefix_in_route() -> None:
         "Planning notes route" in entry and "matches booked" in entry
         for entry in result.get("validation_checks", [])
     )
-
 
 def test_planning_notes_route_confirmation_surfaces_alongside_other_checks() -> None:
     quote = {
@@ -752,7 +733,6 @@ def test_planning_notes_route_confirmation_surfaces_alongside_other_checks() -> 
         for entry in result.get("validation_checks", [])
     )
 
-
 def test_requested_aircraft_type_mismatch_flags_issue() -> None:
     quote = {
         "bookingIdentifier": "REQ-MISMATCH",
@@ -778,7 +758,6 @@ def test_requested_aircraft_type_mismatch_flags_issue() -> None:
         for entry in result.get("validation_checks", [])
     )
 
-
 def test_requested_aircraft_synonyms_match_citation_jets() -> None:
     quote = {
         "bookingIdentifier": "REQ-CJ2-EQUIV",
@@ -803,7 +782,6 @@ def test_requested_aircraft_synonyms_match_citation_jets() -> None:
         for entry in result.get("validation_checks", [])
     )
 
-
 def test_requested_aircraft_synonyms_match_emb_family() -> None:
     quote = {
         "bookingIdentifier": "REQ-EMB-EQUIV",
@@ -827,7 +805,6 @@ def test_requested_aircraft_synonyms_match_emb_family() -> None:
         "Requested aircraft type" in entry
         for entry in result.get("validation_checks", [])
     )
-
 
 def test_flight_category_highlights_osa_routes() -> None:
     quote = {
@@ -857,7 +834,6 @@ def test_flight_category_highlights_osa_routes() -> None:
 
     assert result["flight_category"] == "OSA"
 
-
 def test_flight_category_detects_us_point_to_point() -> None:
     quote = {
         "bookingIdentifier": "US-DOMESTIC",
@@ -878,6 +854,37 @@ def test_flight_category_detects_us_point_to_point() -> None:
 
     assert result["flight_category"] == "US point-to-point"
 
+def test_european_leg_requires_manual_feasibility_review() -> None:
+    quote = {
+        "bookingIdentifier": "EU-MANUAL",
+        "aircraftObj": {"type": "E545", "category": "SUPER_MIDSIZE_JET"},
+        "legs": [
+            {
+                "id": "LEG-EU-1",
+                "departureAirport": "CYFB",
+                "arrivalAirport": "EIDW",
+                "departureDateUTC": "2026-06-09T20:00:00Z",
+                "arrivalDateUTC": "2026-06-10T02:30:00Z",
+                "blockTime": 390,
+            }
+        ],
+    }
+
+    result = run_feasibility_phase1(
+        {
+            "quote": quote,
+            "tz_provider": lambda icao: {
+                "CYFB": "America/Iqaluit",
+                "EIDW": "Europe/Dublin",
+            }.get(icao),
+        }
+    )
+
+    leg = result["legs"][0]
+    assert leg["arrival"]["customs"]["status"] == "PASS"
+    assert leg["arrival"]["osa_ssa"]["status"] == "CAUTION"
+    assert leg["arrival"]["osa_ssa"]["summary"] == "Manual feasibility review required"
+    assert "European/OSA leg; complete feasibility manually in Jeppesen/Fl3xx." in leg["arrival"]["osa_ssa"]["issues"]
 
 def test_osa_leg_requires_manual_feasibility_review() -> None:
     quote = {
@@ -961,7 +968,6 @@ def test_weight_balance_reads_nested_pax_and_cargo_payload() -> None:
     assert details["paxBreakdown"]["Female"] == 1
     assert details["cargoWeight"] == 260
 
-
 def test_weight_balance_reads_deeply_nested_payloads() -> None:
     payload = {
         "payload": {
@@ -992,7 +998,6 @@ def test_weight_balance_reads_deeply_nested_payloads() -> None:
     assert details["paxBreakdown"]["Female"] == 1
     assert details["cargoWeight"] == 260
     assert details["highRiskCargo"] is True
-
 
 def test_weight_balance_counts_animals_as_cargo() -> None:
     payload = {
@@ -1028,7 +1033,6 @@ def test_weight_balance_counts_animals_as_cargo() -> None:
         {"note": "Jet the dog", "type": None, "unit": None, "weight": 49.0},
     ]
 
-
 def test_weight_balance_defaults_missing_animal_weight() -> None:
     payload = {
         "pax": {
@@ -1053,7 +1057,6 @@ def test_weight_balance_defaults_missing_animal_weight() -> None:
     details = result.details
     assert details["cargoWeight"] == 45
     assert {entry["weight"] for entry in details["cargoEntries"]} == {30.0, 15.0}
-
 
 def test_aircraft_endurance_is_evaluated_for_each_leg() -> None:
     quote = {
@@ -1081,7 +1084,6 @@ def test_aircraft_endurance_is_evaluated_for_each_leg() -> None:
     assert "Overweight" in "".join(leg["weightBalance"].get("issues", []))
     assert result["overall_status"] == "FAIL"
     assert any("Aircraft" in issue for issue in result["issues"])
-
 
 def test_duty_module_flags_extended_day_and_split_window() -> None:
     legs = [
@@ -1122,7 +1124,6 @@ def test_duty_module_flags_extended_day_and_split_window() -> None:
     assert result["split_duty_possible"] is True
     assert result["reset_duty_possible"] is False
 
-
 def test_split_duty_extension_extends_allowable_window() -> None:
     legs = [
         {
@@ -1161,7 +1162,6 @@ def test_split_duty_extension_extends_allowable_window() -> None:
     assert result["status"] == "PASS"
     assert result["split_duty_possible"] is True
     assert any("allows" in issue for issue in result["issues"])
-
 
 def test_reset_duty_day_allows_new_segments() -> None:
     legs = [
