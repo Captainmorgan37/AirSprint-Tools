@@ -38,8 +38,15 @@ _MONTH_MAP = {
 _REQUEST_PHRASE_PATTERN = re.compile(
     r"\b(?:request(?:ing|ed)?|req)\b([^\n\r]*)", re.IGNORECASE
 )
-_REQUEST_TOKEN_PATTERN = re.compile(r"[A-Z0-9+/\-]{2,8}", re.IGNORECASE)
+_REQUEST_TOKEN_PATTERN = re.compile(r"[A-Z][A-Z0-9+/\-]{1,11}", re.IGNORECASE)
 _LETTER_ONLY_CODES = {"EMB", "CJ"}
+_REQUEST_TOKEN_ALIASES = {
+    "EMBRAER": "EMB",
+    "LEGACY": "EMB",
+    "PRAETOR": "EMB",
+    "PHENOM": "EMB",
+    "CITATION": "CJ",
+}
 
 
 def normalize_planning_note_text(note: Optional[str]) -> str:
@@ -98,6 +105,9 @@ def extract_requested_aircraft_from_note(note: str) -> Optional[str]:
     request_tail = match.group(1)
     for token in _REQUEST_TOKEN_PATTERN.findall(request_tail):
         normalized = re.sub(r"[^A-Z0-9]", "", token.upper())
+        if not normalized:
+            continue
+        normalized = _REQUEST_TOKEN_ALIASES.get(normalized, normalized)
         if len(normalized) < 2 or len(normalized) > 6:
             continue
         if not re.search(r"[A-Z]", normalized):
