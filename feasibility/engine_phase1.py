@@ -205,23 +205,17 @@ def _format_date_range(day: DayContext) -> str:
     return ""
 
 
-def _is_european_leg(
+def _has_osa_airport(
     leg: LegContext,
     airport_metadata: AirportMetadataLookup,
-    tz_provider: Callable[[str], Optional[str]],
 ) -> bool:
     for key in ("departure_icao", "arrival_icao"):
         icao = leg.get(key)
         if not isinstance(icao, str) or not icao:
             continue
-        tz_name = tz_provider(icao)
-        if isinstance(tz_name, str) and tz_name.startswith("Europe/"):
+        classification = classify_airport_category(icao, airport_metadata)
+        if classification.category == OSA_CATEGORY:
             return True
-        record = airport_metadata.get(icao.upper()) if isinstance(airport_metadata, Mapping) else None
-        if isinstance(record, Mapping):
-            record_tz = record.get("tz")
-            if isinstance(record_tz, str) and record_tz.startswith("Europe/"):
-                return True
     return False
 
 
@@ -229,13 +223,13 @@ def _manual_review_leg_result(leg: LegContext) -> AirportFeasibilityResult:
     caution = CategoryResult(
         status="CAUTION",
         summary="Manual feasibility review required",
-        issues=["European/OSA leg; complete feasibility manually in Jeppesen/Fl3xx."],
+        issues=["OSA leg; complete feasibility manually in Jeppesen/Fl3xx."],
     )
     passed = CategoryResult(status="PASS", summary="Manual review defers automated check", issues=[])
     info = CategoryResult(
         status="INFO",
         summary="Manual review defers operational note parsing",
-        issues=["Operational notes should be reviewed manually for this European/OSA leg."],
+        issues=["Operational notes should be reviewed manually for this OSA leg."],
     )
 
     def build_side(icao: str) -> AirportSideResult:
@@ -752,7 +746,7 @@ def run_feasibility_phase1(request: FeasibilityRequest) -> FullFeasibilityResult
 
     leg_results: List[AirportFeasibilityResult] = []
     for leg in day["legs"]:
-        if _is_european_leg(leg, airport_metadata, tz_provider):
+        if _has_osa_airport(leg, airport_metadata):
             leg_results.append(_manual_review_leg_result(leg))
             continue
         leg_results.append(
