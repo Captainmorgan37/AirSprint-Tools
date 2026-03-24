@@ -3,17 +3,19 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Dict, Iterable, List, Mapping, Optional, Set
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
+from flight_leg_utils import load_airport_metadata_lookup
 from .common import parse_datetime
+from .overflight_route import find_route_overflight_countries
 from .schemas import CategoryResult
 
 _PERMIT_RULES: Dict[str, int] = {
     "CUBA": 72,
-    "RUSSIA": 72,
-    "CHINA": 96,
-    "SAUDI ARABIA": 72,
-    "MEXICO": 24,
+    "HONDURAS": 72,
+    "NICARAGUA": 72,
+    "EL SALVADOR": 72,
+    "GUATEMALA": 72,
 }
 
 _ROUTE_KEYS = (
@@ -51,6 +53,66 @@ def _collect_route_countries(flight: Mapping[str, Any]) -> Set[str]:
     return countries
 
 
+def _coerce_float(value: Any) -> Optional[float]:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _extract_point_from_airport_code(
+    flight: Mapping[str, Any],
+    *,
+    departure: bool,
+) -> Optional[Tuple[float, float]]:
+    airport_keys = (
+        ("departureAirport", "depAirport", "airportFrom")
+        if departure
+        else ("arrivalAirport", "arrAirport", "airportTo")
+    )
+    metadata = load_airport_metadata_lookup()
+    for key in airport_keys:
+        code = flight.get(key)
+        if not isinstance(code, str):
+            continue
+        record = metadata.get(code.strip().upper(), {})
+        lat = _coerce_float(record.get("lat"))
+        lon = _coerce_float(record.get("lon"))
+        if lat is None or lon is None:
+            continue
+        return (lat, lon)
+    return None
+
+
+def _extract_endpoint(
+    flight: Mapping[str, Any],
+    *,
+    departure: bool,
+) -> Optional[Tuple[float, float]]:
+    lat_keys = (
+        ("departureLat", "depLat", "departureLatitude")
+        if departure
+        else ("arrivalLat", "arrLat", "arrivalLatitude")
+    )
+    lon_keys = (
+        ("departureLon", "depLon", "departureLongitude")
+        if departure
+        else ("arrivalLon", "arrLon", "arrivalLongitude")
+    )
+    for lat_key in lat_keys:
+        lat = _coerce_float(flight.get(lat_key))
+        if lat is None:
+            continue
+        for lon_key in lon_keys:
+            lon = _coerce_float(flight.get(lon_key))
+            if lon is None:
+                continue
+            return (lat, lon)
+    return _extract_point_from_airport_code(flight, departure=departure)
+
+
 def evaluate_overflight(
     flight: Mapping[str, Any],
     *,
@@ -72,11 +134,17 @@ def evaluate_overflight(
 
     route_countries = _collect_route_countries(flight)
     if not route_countries:
-        return CategoryResult(
-            status="PASS",
-            summary="No overflight permit triggers",
-            issues=["Route countries not supplied; using departure/arrival permits only."],
+        departure = _extract_endpoint(flight, departure=True)
+        arrival = _extract_endpoint(flight, departure=False)
+        route_countries = set(
+            find_route_overflight_countries(departure, arrival, eligible_countries=rules.keys())
         )
+        if not route_countries:
+            return CategoryResult(
+                status="PASS",
+                summary="No overflight permit triggers",
+                issues=["No permit countries detected on supplied route/country inputs."],
+            )
 
     alerts: List[str] = []
     issues: List[str] = []

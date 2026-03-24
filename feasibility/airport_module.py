@@ -34,6 +34,7 @@ from .airport_notes_parser import (
 )
 from . import checker_aircraft, checker_weight_balance
 from .common import extract_airport_code
+from .overflight_route import find_route_overflight_countries
 from .data_access import (
     AirportCategoryRecord,
     CustomsRule,
@@ -69,6 +70,10 @@ class LegContext(TypedDict, total=False):
     fir_codes: Sequence[str]
     departure_country: str
     arrival_country: str
+    departure_lat: Optional[float]
+    departure_lon: Optional[float]
+    arrival_lat: Optional[float]
+    arrival_lon: Optional[float]
     is_international: bool
 
 
@@ -430,6 +435,10 @@ def build_leg_context_from_flight(
         "fir_codes": _normalize_sequence(flight.get("firCodes")),
         "departure_country": str(dep_meta.get("country") or "").strip(),
         "arrival_country": str(arr_meta.get("country") or "").strip(),
+        "departure_lat": _coerce_float(dep_meta.get("lat")),
+        "departure_lon": _coerce_float(dep_meta.get("lon")),
+        "arrival_lat": _coerce_float(arr_meta.get("lat")),
+        "arrival_lon": _coerce_float(arr_meta.get("lon")),
     }
 
     dep_country = leg.get("departure_country")
@@ -559,10 +568,10 @@ def get_overflight_rules() -> OverflightRules:
     return OverflightRules(
         permit_lead_days={
             "CUBA": 3,
-            "MEXICO": 1,
-            "RUSSIA": 7,
-            "CHINA": 7,
-            "GREENLAND": 3,
+            "HONDURAS": 3,
+            "NICARAGUA": 3,
+            "EL SALVADOR": 3,
+            "GUATEMALA": 3,
         }
     )
 
@@ -1633,6 +1642,25 @@ def evaluate_overflight(
 
     route_countries = [country for country in leg.get("route_countries", []) if isinstance(country, str)]
     if not route_countries:
+        departure_lat = leg.get("departure_lat")
+        departure_lon = leg.get("departure_lon")
+        arrival_lat = leg.get("arrival_lat")
+        arrival_lon = leg.get("arrival_lon")
+        if (
+            isinstance(departure_lat, (int, float))
+            and isinstance(departure_lon, (int, float))
+            and isinstance(arrival_lat, (int, float))
+            and isinstance(arrival_lon, (int, float))
+        ):
+            route_countries.extend(
+                find_route_overflight_countries(
+                    (float(departure_lat), float(departure_lon)),
+                    (float(arrival_lat), float(arrival_lon)),
+                    eligible_countries=overflight_rules.permit_lead_days.keys(),
+                )
+            )
+
+    if not route_countries:
         for key in ("departure_country", "arrival_country"):
             country = leg.get(key)
             if isinstance(country, str) and country:
@@ -1675,5 +1703,3 @@ CLOSURE_CAUTIONS_TO_IGNORE: Mapping[str, tuple[str, ...]] = {
         " contact phone number prior to departure if required by notam",
     ),
 }
-
-
