@@ -8,6 +8,7 @@ from oca_reports import (
     MaxFlightTimeAlert,
     ZfwFlightCheck,
     evaluate_flights_for_max_time,
+    evaluate_flights_for_runway_length,
     evaluate_mel_hold_items,
     evaluate_flights_for_zfw_check,
     format_duration_label,
@@ -423,6 +424,49 @@ def test_zfw_report_skips_flights_below_threshold_or_missing_pax():
     assert diagnostics["missing_pax_count"] == 1
     assert diagnostics["flagged_flights"] == 0
     assert items == []
+
+
+def test_runway_report_resolves_iata_to_icao_via_airport_metadata(monkeypatch):
+    flights = [
+        {
+            "flightId": 991,
+            "quoteId": "Q-RWY-1",
+            "airportFrom": "XBR",
+            "airportTo": "CYYZ",
+            "blocksoffestimated": "2026-03-24T11:00:00Z",
+            "blocksonestimated": "2026-03-24T13:00:00Z",
+        }
+    ]
+
+    def fake_fetch_flights(config, from_date, to_date):
+        return flights, {"from_date": from_date.isoformat(), "to_date": to_date.isoformat()}
+
+    monkeypatch.setattr(
+        "oca_reports._RUNWAY_LENGTH_CACHE",
+        {
+            "CNL3": 4500,
+            "CYYZ": 12000,
+        },
+    )
+    monkeypatch.setattr(
+        "oca_reports._RUNWAY_IDENT_ALIAS_CACHE",
+        {"XBR": "CNL3"},
+    )
+
+    items, _metadata, diagnostics = evaluate_flights_for_runway_length(
+        Fl3xxApiConfig(),
+        from_date=dt.date(2026, 3, 24),
+        to_date=dt.date(2026, 3, 25),
+        runway_threshold_ft=5000,
+        fetch_flights_fn=fake_fetch_flights,
+    )
+
+    assert diagnostics["flagged_flights"] == 1
+    assert diagnostics["missing_departure_length"] == 0
+    assert len(items) == 1
+    assert items[0].airport_from == "XBR"
+    assert items[0].departure_runway_length_ft == 4500
+    assert items[0].departure_below_threshold is True
 
 
 class _DummyResponse:
