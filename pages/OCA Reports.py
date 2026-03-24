@@ -872,6 +872,8 @@ def _render_mel_results(state: Mapping[str, Any]) -> None:
     df["has_description"] = df.get("has_description", False)
     df["has_limitation"] = df.get("has_limitation", False)
     df["has_client_impact"] = df.get("has_client_impact", False)
+    df["autobrake_related"] = df.get("autobrake_related", False)
+    df["runway_limit_ft"] = df.get("runway_limit_ft", None)
     df["tail"] = df["tail"].apply(_format_tail_for_api)
     scheduled_tails = {
         _format_tail_for_api(tail) for tail in mel_state.get("scheduled_tails", [])
@@ -880,6 +882,10 @@ def _render_mel_results(state: Mapping[str, Any]) -> None:
         _format_tail_for_api(tail) for tail in mel_state.get("scheduled_priority_tails", [])
     }
     scheduled_lookup_error = mel_state.get("scheduled_flights_error")
+    autobrake_tails = [
+        _format_tail_for_api(tail) for tail in mel_state.get("autobrake_tails", [])
+    ]
+    autobrake_short_runway_flights = mel_state.get("autobrake_short_runway_flights", [])
 
     primary_df = df[df["has_description"] & df["has_limitation"]].copy()
     secondary_df = df[~(df["has_description"] & df["has_limitation"])].copy()
@@ -888,6 +894,51 @@ def _render_mel_results(state: Mapping[str, Any]) -> None:
 
     st.subheader("MELs with descriptions and limitations")
     st.caption("These hold items include both a description and a limitation.")
+
+    if autobrake_tails:
+        limit_text = "4,500"
+        st.error(
+            f"⚠️ AUTOBRAKE MEL detected: {', '.join(sorted(set(autobrake_tails), key=_tail_order_key))} "
+            f"should be treated as limited to {limit_text}' runways."
+        )
+        if scheduled_lookup_error:
+            st.warning("Unable to validate upcoming runway usage due to scheduled flight lookup issues.")
+        elif autobrake_short_runway_flights:
+            runway_df = pd.DataFrame(autobrake_short_runway_flights).fillna("")
+            runway_df["tail"] = runway_df["registration"].apply(_format_tail_for_api)
+            runway_df["Departure runway (ft)"] = runway_df["departure_runway_length_ft"].map(
+                lambda v: f"{int(v):,}" if isinstance(v, (int, float)) else "Unknown"
+            )
+            runway_df["Arrival runway (ft)"] = runway_df["arrival_runway_length_ft"].map(
+                lambda v: f"{int(v):,}" if isinstance(v, (int, float)) else "Unknown"
+            )
+            st.warning("Upcoming flights for AUTOBRAKE tails include runways below 4,500'.")
+            st.dataframe(
+                runway_df[
+                    [
+                        "tail",
+                        "flight_reference",
+                        "airport_from",
+                        "Departure runway (ft)",
+                        "airport_to",
+                        "Arrival runway (ft)",
+                        "departure_utc",
+                        "arrival_utc",
+                    ]
+                ].rename(
+                    columns={
+                        "tail": "Tail",
+                        "flight_reference": "Flight reference",
+                        "airport_from": "From",
+                        "airport_to": "To",
+                        "departure_utc": "Departure (UTC)",
+                        "arrival_utc": "Arrival (UTC)",
+                    }
+                ),
+                width="stretch",
+            )
+        else:
+            st.success("No upcoming flights for AUTOBRAKE MEL tails are currently on runways below 4,500'.")
 
     report_text = _build_mel_report_text(primary_df)
     if report_text:
@@ -918,6 +969,7 @@ def _render_mel_results(state: Mapping[str, Any]) -> None:
                 "description",
                 "limitations",
                 "limitations_description",
+                "autobrake_related",
                 "Upcoming flights (next 5 days)",
                 "Priority workflow (next 5 days)",
             ]
@@ -927,9 +979,13 @@ def _render_mel_results(state: Mapping[str, Any]) -> None:
                 "description": "Description",
                 "limitations": "Limitations",
                 "limitations_description": "Limitations Description",
+                "autobrake_related": "AUTOBRAKE 4,500' RWY limit",
                 "Upcoming flights (next 5 days)": "Upcoming flights (next 5 days)",
                 "Priority workflow (next 5 days)": "Priority workflow (next 5 days)",
             }
+        )
+        primary_display["AUTOBRAKE 4,500' RWY limit"] = primary_display["AUTOBRAKE 4,500' RWY limit"].map(
+            lambda value: "⚠️ YES" if bool(value) else ""
         )
 
         st.dataframe(primary_display, width="stretch")
@@ -955,6 +1011,7 @@ def _render_mel_results(state: Mapping[str, Any]) -> None:
                 "description",
                 "limitations",
                 "limitations_description",
+                "autobrake_related",
                 "Upcoming flights (next 5 days)",
                 "Priority workflow (next 5 days)",
             ]
@@ -964,9 +1021,13 @@ def _render_mel_results(state: Mapping[str, Any]) -> None:
                 "description": "Description",
                 "limitations": "Limitations",
                 "limitations_description": "Limitations Description",
+                "autobrake_related": "AUTOBRAKE 4,500' RWY limit",
                 "Upcoming flights (next 5 days)": "Upcoming flights (next 5 days)",
                 "Priority workflow (next 5 days)": "Priority workflow (next 5 days)",
             }
+        )
+        secondary_display["AUTOBRAKE 4,500' RWY limit"] = secondary_display["AUTOBRAKE 4,500' RWY limit"].map(
+            lambda value: "⚠️ YES" if bool(value) else ""
         )
         st.dataframe(secondary_display, width="stretch")
 
@@ -1277,11 +1338,20 @@ with mel_tab:
                             "start_date": mel_start_date.isoformat(),
                             "end_date": mel_end_date.isoformat(),
                         }
+                        autobrake_tails = sorted(
+                            {
+                                _format_tail_for_api(item.tail)
+                                for item in mel_items
+                                if isinstance(item, MelHoldItem) and item.autobrake_related
+                            },
+                            key=_tail_order_key,
+                        )
                         scheduled_flights_error = None
                         scheduled_tails: list[str] = []
                         scheduled_priority_tails: list[str] = []
                         scheduled_metadata: Dict[str, Any] = {}
                         scheduled_diagnostics: Dict[str, Any] = {}
+                        autobrake_short_runway_flights: list[Dict[str, Any]] = []
                         try:
                             with st.spinner("Checking upcoming flights (next 5 days)..."):
                                 scheduled_start = _default_start_date()
@@ -1306,6 +1376,32 @@ with mel_tab:
                                     "from_date": scheduled_start.isoformat(),
                                     "to_date": scheduled_end.isoformat(),
                                 }
+                                if autobrake_tails:
+                                    runway_items, _, runway_diagnostics = evaluate_flights_for_runway_length(
+                                        config,
+                                        from_date=scheduled_start,
+                                        to_date=scheduled_end,
+                                        runway_threshold_ft=4500,
+                                        fetch_flights_fn=lambda _config, from_date, to_date: (
+                                            flights,
+                                            {
+                                                "from_date": from_date.isoformat(),
+                                                "to_date": to_date.isoformat(),
+                                            },
+                                        ),
+                                    )
+                                    autobrake_tail_lookup = set(autobrake_tails)
+                                    autobrake_short_runway_flights = [
+                                        item.as_dict()
+                                        for item in runway_items
+                                        if _format_tail_for_api(item.registration or "")
+                                        in autobrake_tail_lookup
+                                    ]
+                                    scheduled_diagnostics["autobrake_tails"] = len(autobrake_tails)
+                                    scheduled_diagnostics["autobrake_short_runway_flights"] = len(
+                                        autobrake_short_runway_flights
+                                    )
+                                    scheduled_diagnostics["runway_scan"] = runway_diagnostics
                         except Exception as exc:  # pragma: no cover - defensive UI path
                             scheduled_flights_error = str(exc)
 
@@ -1314,6 +1410,8 @@ with mel_tab:
                         mel_state["scheduled_metadata"] = scheduled_metadata
                         mel_state["scheduled_diagnostics"] = scheduled_diagnostics
                         mel_state["scheduled_flights_error"] = scheduled_flights_error
+                        mel_state["autobrake_tails"] = autobrake_tails
+                        mel_state["autobrake_short_runway_flights"] = autobrake_short_runway_flights
 
                     _store_state({"mel": mel_state})
                     st.rerun()

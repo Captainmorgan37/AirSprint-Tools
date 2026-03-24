@@ -8,6 +8,7 @@ from oca_reports import (
     MaxFlightTimeAlert,
     ZfwFlightCheck,
     evaluate_flights_for_max_time,
+    evaluate_mel_hold_items,
     evaluate_flights_for_zfw_check,
     format_duration_label,
 )
@@ -422,3 +423,76 @@ def test_zfw_report_skips_flights_below_threshold_or_missing_pax():
     assert diagnostics["missing_pax_count"] == 1
     assert diagnostics["flagged_flights"] == 0
     assert items == []
+
+
+class _DummyResponse:
+    def __init__(self, payload: Any):
+        self._payload = payload
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> Any:
+        return self._payload
+
+
+class _DummySession:
+    def __init__(self, payload_by_tail: Dict[str, Any]):
+        self.payload_by_tail = payload_by_tail
+
+    def get(self, url: str, params=None, headers=None, timeout=None, verify=None):
+        tail = url.split("/")[-2]
+        return _DummyResponse(self.payload_by_tail.get(tail, []))
+
+
+def test_mel_hold_items_flags_autobrake_and_runway_limit():
+    payloads = {
+        "C-GFSD": [
+            {
+                "id": 11,
+                "description": "Autobrake system deferred IAW MEL 32-41-00-1 Cat. C",
+                "limitationsDescription": "Crew SOP applies",
+                "limitations": "Operational limitation",
+                "source": "MEL",
+            }
+        ]
+    }
+    items, _metadata, diagnostics = evaluate_mel_hold_items(
+        Fl3xxApiConfig(),
+        tails=["C-GFSD"],
+        from_date=dt.date(2026, 3, 1),
+        to_date=dt.date(2026, 3, 24),
+        session=_DummySession(payloads),
+    )
+
+    assert diagnostics["items_returned"] == 1
+    assert len(items) == 1
+    item = items[0]
+    assert item.autobrake_related is True
+    assert item.runway_limit_ft == 4500
+
+
+def test_mel_hold_items_does_not_flag_non_autobrake():
+    payloads = {
+        "C-GFSD": [
+            {
+                "id": 12,
+                "description": "Lavatory light deferred",
+                "limitationsDescription": "No client impact",
+                "limitations": "None",
+                "source": "MEL",
+            }
+        ]
+    }
+    items, _metadata, _diagnostics = evaluate_mel_hold_items(
+        Fl3xxApiConfig(),
+        tails=["C-GFSD"],
+        from_date=dt.date(2026, 3, 1),
+        to_date=dt.date(2026, 3, 24),
+        session=_DummySession(payloads),
+    )
+
+    assert len(items) == 1
+    item = items[0]
+    assert item.autobrake_related is False
+    assert item.runway_limit_ft is None

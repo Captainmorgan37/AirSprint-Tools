@@ -253,6 +253,8 @@ class MelHoldItem:
     has_description: bool
     has_limitation: bool
     has_client_impact: bool
+    autobrake_related: bool
+    runway_limit_ft: Optional[int]
 
     def as_dict(self) -> Dict[str, Any]:
         return {
@@ -267,6 +269,8 @@ class MelHoldItem:
             "has_description": self.has_description,
             "has_limitation": self.has_limitation,
             "has_client_impact": self.has_client_impact,
+            "autobrake_related": self.autobrake_related,
+            "runway_limit_ft": self.runway_limit_ft,
         }
 
 
@@ -1352,6 +1356,20 @@ def _format_epoch_millis(value: Any) -> Optional[str]:
     return datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _is_autobrake_related(*values: Optional[str]) -> bool:
+    checks = []
+    for raw in values:
+        text = _clean_text(raw)
+        if text:
+            checks.append(text.lower())
+    if not checks:
+        return False
+    combined = " ".join(checks)
+    if "autobrake" in combined:
+        return True
+    return "32-41" in combined
+
+
 def evaluate_mel_hold_items(
     config: Fl3xxApiConfig,
     *,
@@ -1429,6 +1447,12 @@ def evaluate_mel_hold_items(
                     diagnostics["items_with_limitation"] += 1
                 if has_description and has_limitation:
                     diagnostics["items_with_both"] += 1
+                autobrake_related = _is_autobrake_related(
+                    description,
+                    limitations,
+                    limitations_description,
+                    _clean_text(entry.get("title")),
+                )
 
                 item = MelHoldItem(
                     tail=tail_value,
@@ -1442,6 +1466,8 @@ def evaluate_mel_hold_items(
                     has_description=has_description,
                     has_limitation=has_limitation,
                     has_client_impact=has_client_impact,
+                    autobrake_related=autobrake_related,
+                    runway_limit_ft=4500 if autobrake_related else None,
                 )
                 items.append(item)
                 diagnostics["items_returned"] += 1
