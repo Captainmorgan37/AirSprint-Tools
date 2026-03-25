@@ -224,6 +224,20 @@ def _normalize(value: Optional[str]) -> Optional[str]:
     return text.upper() if text else None
 
 
+def _normalize_subdivision(value: Optional[str]) -> Optional[str]:
+    normalized = _normalize(value)
+    if not normalized:
+        return None
+    alias_map = {
+        "DC": "DISTRICT OF COLUMBIA",
+        "D.C.": "DISTRICT OF COLUMBIA",
+        "DIST OF COLUMBIA": "DISTRICT OF COLUMBIA",
+        "DIST. OF COLUMBIA": "DISTRICT OF COLUMBIA",
+    }
+    collapsed = " ".join(normalized.replace(".", " ").split())
+    return alias_map.get(normalized) or alias_map.get(collapsed) or collapsed
+
+
 def _format_region(value: Optional[str]) -> str:
     if not value:
         return "unknown region"
@@ -236,7 +250,7 @@ def classify_airport_category(
 ) -> AirportCategoryResult:
     code = (airport_code or "").strip().upper() or None
     country = _normalize(get_country_for_airport(airport_code, lookup))
-    subdivision = _normalize(get_subdivision_for_airport(airport_code, lookup))
+    subdivision = _normalize_subdivision(get_subdivision_for_airport(airport_code, lookup))
 
     display = code or "Unknown airport"
 
