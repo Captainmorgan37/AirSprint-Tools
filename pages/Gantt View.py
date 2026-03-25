@@ -158,6 +158,13 @@ def _extract_workflow(task: Mapping[str, Any]) -> str:
     return " | ".join(values)
 
 
+def _crew_label(value: Any) -> str:
+    names = [part.strip() for part in str(value or "").split("|") if part.strip()]
+    if not names:
+        return ""
+    return "<br>".join(names[:2])
+
+
 def _classify(task: Mapping[str, Any], workflow_text: str) -> str:
     task_id = str(task.get("id") or "").strip().lower()
     task_type = str(task.get("taskType") or "").strip().upper()
@@ -434,6 +441,8 @@ for lane in active_lanes:
     )
 
 plot_df = pd.concat([filtered_schedule_df, pd.DataFrame(plot_rows)], ignore_index=True)
+plot_df["crew_label"] = plot_df["crew"].apply(_crew_label)
+plot_df.loc[~plot_df["category"].isin(["Client Flight", "OCS Flight"]), "crew_label"] = ""
 
 lane_plot_order: List[str] = []
 for lane in active_lanes:
@@ -469,6 +478,7 @@ fig = px.timeline(
         "start_utc": "|%Y-%m-%d %H:%M UTC",
         "end_utc": "|%Y-%m-%d %H:%M UTC",
     },
+    text="crew_label",
 )
 fig.update_yaxes(title="Tail / Row")
 fig.update_xaxes(
@@ -476,7 +486,30 @@ fig.update_xaxes(
     range=[zoom_start_dt, zoom_end_dt],
     rangeslider_visible=True,
 )
-fig.update_layout(height=max(750, 24 * len(lane_plot_order)), legend_title_text="Activity Type")
+fig.update_layout(
+    height=max(750, 30 * len(lane_plot_order)),
+    legend_title_text="Activity Type",
+    bargap=0.18,
+)
+fig.update_traces(textposition="inside", insidetextanchor="start", textfont_size=10)
+
+day_cursor = zoom_start_dt
+shade_toggle = False
+while day_cursor < zoom_end_dt:
+    next_day = min(day_cursor + timedelta(days=1), zoom_end_dt)
+    if shade_toggle:
+        fig.add_vrect(
+            x0=day_cursor,
+            x1=next_day,
+            fillcolor="rgba(255,255,255,0.035)",
+            layer="below",
+            line_width=0,
+        )
+    shade_toggle = not shade_toggle
+    day_cursor = next_day
+
+fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor="rgba(255,255,255,0.22)")
+
 for trace in fig.data:
     if trace.name == "Lane Placeholder":
         trace.showlegend = False

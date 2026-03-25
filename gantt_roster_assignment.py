@@ -139,6 +139,11 @@ def assign_roster_to_schedule_rows(
 ) -> List[Dict[str, Any]]:
     """Attach crew, positioning, and roster flight details to schedule rows."""
 
+    def _append_unique(target: List[str], values: Iterable[str]) -> None:
+        for value in values:
+            if value and value not in target:
+                target.append(value)
+
     index_by_tuple: Dict[Tuple[str, str, str, int], Dict[str, Any]] = {}
     index_by_task_id: Dict[str, Dict[str, Any]] = {}
 
@@ -215,7 +220,7 @@ def assign_roster_to_schedule_rows(
                             positioning_markers.append(marker)
 
             bucket: Dict[str, Any] = {
-                "crew": set(crew_names),
+                "crew": list(crew_names),
                 "positioning": list(positioning_markers),
                 "roster_flight_id": str(_pick(flight, ("flightId", "id")) or ""),
                 "booking_reference": str(_pick(flight, ("bookingReference", "bookingIdentifier")) or ""),
@@ -225,8 +230,8 @@ def assign_roster_to_schedule_rows(
             }
 
             if key is not None:
-                existing = index_by_tuple.setdefault(key, {"crew": set(), "positioning": []})
-                existing["crew"].update(bucket["crew"])
+                existing = index_by_tuple.setdefault(key, {"crew": [], "positioning": []})
+                _append_unique(existing["crew"], bucket["crew"])
                 for marker in bucket["positioning"]:
                     if marker not in existing["positioning"]:
                         existing["positioning"].append(marker)
@@ -241,8 +246,8 @@ def assign_roster_to_schedule_rows(
                         existing[meta_field] = bucket.get(meta_field)
 
             if task_id:
-                existing = index_by_task_id.setdefault(task_id, {"crew": set(), "positioning": []})
-                existing["crew"].update(bucket["crew"])
+                existing = index_by_task_id.setdefault(task_id, {"crew": [], "positioning": []})
+                _append_unique(existing["crew"], bucket["crew"])
                 for marker in bucket["positioning"]:
                     if marker not in existing["positioning"]:
                         existing["positioning"].append(marker)
@@ -279,9 +284,9 @@ def assign_roster_to_schedule_rows(
         if bucket is None and key is not None:
             bucket = index_by_tuple.get(key)
         if bucket is None:
-            bucket = {"crew": set(), "positioning": []}
+            bucket = {"crew": [], "positioning": []}
 
-        row["crew"] = " | ".join(sorted(bucket.get("crew") or []))
+        row["crew"] = " | ".join(bucket.get("crew") or [])
         row["positioning"] = " | ".join(bucket.get("positioning") or [])
         row["roster_flight_id"] = str(bucket.get("roster_flight_id") or "")
         row["booking_reference"] = str(bucket.get("booking_reference") or "")
