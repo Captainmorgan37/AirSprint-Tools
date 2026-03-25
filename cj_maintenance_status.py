@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 import re
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
 import pandas as pd
 import requests
@@ -106,9 +106,24 @@ def _derive_api_root(base_url: str) -> str:
     return f"{parsed.scheme}://{parsed.netloc}"
 
 
-def _schedule_url(config: Fl3xxApiConfig, tail: str) -> str:
+def _schedule_url(
+    config: Fl3xxApiConfig,
+    tail: str,
+    *,
+    from_date: date | None = None,
+    to_date: date | None = None,
+    init_location: bool = False,
+) -> str:
     root = _derive_api_root(config.base_url)
-    return f"{root}/api/external/aircraft/{tail}/schedule"
+    query = {}
+    if from_date is not None:
+        query["from"] = from_date.isoformat()
+    if to_date is not None:
+        query["to"] = to_date.isoformat()
+    query["initLocation"] = str(init_location).lower()
+    if not query:
+        return f"{root}/api/external/aircraft/{tail}/schedule"
+    return f"{root}/api/external/aircraft/{tail}/schedule?{urlencode(query)}"
 
 
 def _parse_utc(value: Any) -> Optional[datetime]:
@@ -124,13 +139,27 @@ def fetch_aircraft_schedule(
     config: Fl3xxApiConfig,
     tail: str,
     *,
+    from_date: date | None = None,
+    to_date: date | None = None,
+    day_window: int = 60,
+    init_location: bool = False,
     session: Optional[requests.Session] = None,
 ) -> List[Dict[str, Any]]:
+    today = datetime.now(tz=UTC).date()
+    effective_from = from_date or (today - timedelta(days=day_window))
+    effective_to = to_date or (today + timedelta(days=day_window))
+
     http = session or requests.Session()
     close_session = session is None
     try:
         response = http.get(
-            _schedule_url(config, tail),
+            _schedule_url(
+                config,
+                tail,
+                from_date=effective_from,
+                to_date=effective_to,
+                init_location=init_location,
+            ),
             headers=config.build_headers(),
             timeout=config.timeout,
             verify=config.verify_ssl,

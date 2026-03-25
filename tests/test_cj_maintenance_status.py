@@ -1,13 +1,16 @@
-from datetime import date
+from datetime import date, datetime, timezone
 
 from cj_maintenance_status import (
+    _schedule_url,
     extract_maintenance_events,
+    fetch_aircraft_schedule,
     format_tail_for_fl3xx,
     list_aircraft_tails,
     list_cj_tails,
     list_embraer_tails,
     maintenance_daily_status,
 )
+from fl3xx_api import Fl3xxApiConfig
 
 
 def test_extract_maintenance_events_filters_supported_types_only():
@@ -216,3 +219,49 @@ def test_list_aircraft_tails_supports_cj_embraer_or_both():
     assert set(list_aircraft_tails("CJ")) == cj_tails
     assert set(list_aircraft_tails("Embraer")) == embraer_tails
     assert set(list_aircraft_tails(["CJ", "Embraer"])) == cj_tails | embraer_tails
+
+
+def test_schedule_url_includes_date_window_and_init_location():
+    config = Fl3xxApiConfig(base_url="https://app.fl3xx.us/api/external/flight/flights")
+
+    url = _schedule_url(
+        config,
+        "C-FSFP",
+        from_date=date(2026, 3, 16),
+        to_date=date(2026, 4, 16),
+        init_location=False,
+    )
+
+    assert (
+        url
+        == "https://app.fl3xx.us/api/external/aircraft/C-FSFP/schedule"
+        "?from=2026-03-16&to=2026-04-16&initLocation=false"
+    )
+
+
+def test_fetch_aircraft_schedule_defaults_to_plus_minus_60_day_window(monkeypatch):
+    captured: dict[str, str] = {}
+
+    class _Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return []
+
+    class _Session:
+        def get(self, url, **kwargs):
+            captured["url"] = url
+            return _Response()
+
+    fake_now = datetime(2026, 3, 25, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr("cj_maintenance_status.datetime", type("FakeDateTime", (), {"now": staticmethod(lambda tz=None: fake_now)}))
+
+    config = Fl3xxApiConfig(base_url="https://app.fl3xx.us/api/external/flight/flights")
+    fetch_aircraft_schedule(config, "C-FSFP", session=_Session())
+
+    assert (
+        captured["url"]
+        == "https://app.fl3xx.us/api/external/aircraft/C-FSFP/schedule"
+        "?from=2026-01-24&to=2026-05-24&initLocation=false"
+    )
