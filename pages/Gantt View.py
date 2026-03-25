@@ -384,8 +384,14 @@ filtered_schedule_df["lane_plot"] = filtered_schedule_df.apply(
 
 min_start = filtered_schedule_df["start_utc"].min()
 max_end = filtered_schedule_df["end_utc"].max()
-default_start_date = min_start.date()
-default_end_date = max_end.date()
+min_date = min_start.date()
+max_date = max_end.date()
+today_utc_date = datetime.now(UTC).date()
+default_start_date = max(min_date, today_utc_date - timedelta(days=1))
+default_end_date = min(max_date, today_utc_date + timedelta(days=5))
+if default_end_date < default_start_date:
+    default_start_date = min_date
+    default_end_date = max_date
 
 with control_col3:
     selected_dates = st.date_input(
@@ -454,6 +460,11 @@ fig = px.timeline(
         "task_id": True,
         "crew": True,
         "positioning": True,
+        "roster_flight_id": True,
+        "booking_reference": True,
+        "flight_status": True,
+        "workflow_name": True,
+        "pax_number": True,
         "category": True,
         "start_utc": "|%Y-%m-%d %H:%M UTC",
         "end_utc": "|%Y-%m-%d %H:%M UTC",
@@ -475,6 +486,6 @@ st.plotly_chart(fig, use_container_width=True)
 
 with st.expander("Raw activity data"):
     st.dataframe(
-        filtered_schedule_df[["lane", "tail", "start_utc", "end_utc", "category", "task_type", "workflow", "crew", "positioning", "notes"]],
+        filtered_schedule_df[["lane", "tail", "start_utc", "end_utc", "category", "task_type", "workflow", "crew", "positioning", "roster_flight_id", "booking_reference", "flight_status", "workflow_name", "pax_number", "notes"]],
         width="stretch",
     )
