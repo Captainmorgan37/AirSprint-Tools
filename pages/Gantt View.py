@@ -78,6 +78,21 @@ COLOR_MAP = {
     "Lane Placeholder": "rgba(0,0,0,0)",
 }
 
+VIEW_PRESETS: Dict[str, Dict[str, str]] = {
+    "Legacy View": {
+        "start_lane": "Add EMB West",
+        "end_lane": "C-FASN",
+    },
+    "CJ View": {
+        "start_lane": "Add CJ2+ West",
+        "end_lane": "C-FSVP",
+    },
+    "Full View": {
+        "start_lane": LANE_DEFINITIONS[0],
+        "end_lane": LANE_DEFINITIONS[-1],
+    },
+}
+
 
 configure_page(page_title="Gantt View")
 password_gate()
@@ -256,10 +271,40 @@ if not rows:
 
 schedule_df = pd.DataFrame(rows).sort_values(["lane", "start_utc"])
 
+control_col1, control_col2, control_col3 = st.columns([1, 1, 2])
+with control_col1:
+    selected_view = st.selectbox(
+        "Chart view",
+        options=list(VIEW_PRESETS.keys()),
+        index=2,
+        help="Choose a lane subset to focus the chart.",
+    )
+with control_col2:
+    show_notes = st.toggle(
+        "Show notes",
+        value=False,
+        help="Notes are hidden by default to reduce visual noise.",
+    )
+
+selected_preset = VIEW_PRESETS[selected_view]
+start_index = LANE_DEFINITIONS.index(selected_preset["start_lane"])
+end_index = LANE_DEFINITIONS.index(selected_preset["end_lane"])
+active_lanes = LANE_DEFINITIONS[start_index : end_index + 1]
+
+filtered_schedule_df = schedule_df[schedule_df["lane"].isin(active_lanes)].copy()
+if not show_notes:
+    filtered_schedule_df = filtered_schedule_df[filtered_schedule_df["category"] != "Note"].copy()
+
+if filtered_schedule_df.empty:
+    st.info("No schedule entries match the selected view and note visibility filters.")
+    st.stop()
+
 # Notes can overlap, so assign additional sub-lanes per tail for notes only.
 note_slot_labels: Dict[str, str] = {}
-for lane in LANE_DEFINITIONS:
-    lane_notes = schedule_df[(schedule_df["lane"] == lane) & (schedule_df["category"] == "Note")].copy()
+for lane in active_lanes:
+    lane_notes = filtered_schedule_df[
+        (filtered_schedule_df["lane"] == lane) & (filtered_schedule_df["category"] == "Note")
+    ].copy()
     if lane_notes.empty:
         continue
     lane_notes = lane_notes.sort_values(["start_utc", "end_utc"])
@@ -285,14 +330,41 @@ for lane in LANE_DEFINITIONS:
         label = lane if slot == 0 else f"{lane} (Note {slot + 1})"
         note_slot_labels[row_index] = label
 
-schedule_df["lane_plot"] = schedule_df.apply(
+filtered_schedule_df["lane_plot"] = filtered_schedule_df.apply(
     lambda row: note_slot_labels.get(row.name, row["lane"]),
     axis=1,
 )
 
+min_start = filtered_schedule_df["start_utc"].min()
+max_end = filtered_schedule_df["end_utc"].max()
+default_start_date = min_start.date()
+default_end_date = max_end.date()
+
+with control_col3:
+    selected_dates = st.date_input(
+        "Zoom window (UTC dates)",
+        value=(default_start_date, default_end_date),
+        min_value=default_start_date,
+        max_value=default_end_date,
+        help="Pick start/end dates to zoom into a specific section of the timeline.",
+    )
+
+if isinstance(selected_dates, tuple):
+    zoom_start_date, zoom_end_date = selected_dates
+else:
+    zoom_start_date = selected_dates
+    zoom_end_date = selected_dates
+
+if zoom_end_date < zoom_start_date:
+    st.warning("End date cannot be before start date; using start date for both.")
+    zoom_end_date = zoom_start_date
+
+zoom_start_dt = datetime.combine(zoom_start_date, datetime.min.time(), tzinfo=UTC)
+zoom_end_dt = datetime.combine(zoom_end_date + timedelta(days=1), datetime.min.time(), tzinfo=UTC)
+
 now_utc = datetime.now(UTC)
 plot_rows: List[Dict[str, Any]] = []
-for lane in LANE_DEFINITIONS:
+for lane in active_lanes:
     plot_rows.append(
         {
             "lane": lane,
@@ -308,10 +380,10 @@ for lane in LANE_DEFINITIONS:
         }
     )
 
-plot_df = pd.concat([schedule_df, pd.DataFrame(plot_rows)], ignore_index=True)
+plot_df = pd.concat([filtered_schedule_df, pd.DataFrame(plot_rows)], ignore_index=True)
 
 lane_plot_order: List[str] = []
-for lane in LANE_DEFINITIONS:
+for lane in active_lanes:
     lane_plot_order.append(lane)
     lane_note_labels = sorted(
         {label for label in note_slot_labels.values() if label.startswith(f"{lane} (Note ")},
@@ -341,7 +413,7 @@ fig = px.timeline(
 fig.update_yaxes(title="Tail / Row")
 fig.update_xaxes(
     title="Time (UTC)",
-    range=[now_utc - timedelta(hours=2), now_utc + timedelta(days=3)],
+    range=[zoom_start_dt, zoom_end_dt],
     rangeslider_visible=True,
 )
 fig.update_layout(height=max(750, 24 * len(lane_plot_order)), legend_title_text="Activity Type")
@@ -354,6 +426,6 @@ st.plotly_chart(fig, use_container_width=True)
 
 with st.expander("Raw activity data"):
     st.dataframe(
-        schedule_df[["lane", "tail", "start_utc", "end_utc", "category", "task_type", "workflow", "notes"]],
+        filtered_schedule_df[["lane", "tail", "start_utc", "end_utc", "category", "task_type", "workflow", "notes"]],
         width="stretch",
     )
