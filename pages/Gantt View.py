@@ -127,17 +127,26 @@ def _pick_dt(task: Mapping[str, Any], candidates: List[str]) -> Optional[datetim
 
 
 def _extract_workflow(task: Mapping[str, Any]) -> str:
+    values: List[str] = []
+
+    workflow_custom_name = task.get("workflowCustomName")
+    if workflow_custom_name not in (None, ""):
+        values.append(str(workflow_custom_name))
+
     workflow = task.get("workflow")
     if isinstance(workflow, Mapping):
-        return " ".join(str(v) for v in workflow.values() if v not in (None, ""))
-    if isinstance(workflow, list):
-        return " ".join(str(item) for item in workflow if item not in (None, ""))
-    if workflow not in (None, ""):
-        return str(workflow)
+        values.extend(str(v) for v in workflow.values() if v not in (None, ""))
+    elif isinstance(workflow, list):
+        values.extend(str(item) for item in workflow if item not in (None, ""))
+    elif workflow not in (None, ""):
+        values.append(str(workflow))
+
     for key in ("workflowName", "workflowType", "workflowLabel"):
-        if task.get(key) not in (None, ""):
-            return str(task.get(key))
-    return ""
+        value = task.get(key)
+        if value not in (None, ""):
+            values.append(str(value))
+
+    return " | ".join(values)
 
 
 def _classify(task: Mapping[str, Any], workflow_text: str) -> str:
