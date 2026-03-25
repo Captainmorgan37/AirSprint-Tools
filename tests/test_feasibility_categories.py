@@ -36,6 +36,11 @@ def test_cross_border_core_leg_is_regular() -> None:
     assert any("Cross-border" in reason for reason in result.reasons)
 
 
+def test_contiguous_us_airport_with_district_alias_is_regular() -> None:
+    result = classify_airport_category("KIAD", LOOKUP)
+    assert result.category == REGULAR_CATEGORY
+
+
 def test_mexico_leg_is_ssa() -> None:
     result = classify_flight_category("CYYZ", "MMMX", LOOKUP)
     assert result.category == SSA_CATEGORY
