@@ -11,6 +11,8 @@ import streamlit as st
 from Home import configure_page, password_gate, render_sidebar
 from cj_maintenance_status import fetch_aircraft_schedule
 from flight_leg_utils import FlightDataError, build_fl3xx_api_config, safe_parse_dt
+from fl3xx_api import fetch_staff_roster
+from gantt_roster_assignment import assign_roster_to_schedule_rows, roster_window_bounds
 
 
 UTC = timezone.utc
@@ -124,6 +126,15 @@ def _pick_dt(task: Mapping[str, Any], candidates: List[str]) -> Optional[datetim
     return None
 
 
+
+
+def _pick_airport(task: Mapping[str, Any], candidates: List[str]) -> str:
+    for key in candidates:
+        value = task.get(key)
+        if value not in (None, ""):
+            return str(value).strip().upper()
+    return ""
+
 def _extract_workflow(task: Mapping[str, Any]) -> str:
     values: List[str] = []
 
@@ -207,10 +218,12 @@ def _task_to_row(tail: str, lane: str, task: Mapping[str, Any]) -> Optional[Dict
         "workflow": workflow_text,
         "notes": str(task.get("notes") or ""),
         "task_id": str(task.get("id") or ""),
+        "departure_airport": _pick_airport(task, ["departureAirport", "fromAirport", "departureAirportIcao"]),
+        "arrival_airport": _pick_airport(task, ["arrivalAirport", "toAirport", "arrivalAirportIcao"]),
     }
 
 
-def _pull_gantt_rows(config: Any) -> tuple[List[Dict[str, Any]], List[str]]:
+def _pull_gantt_rows(config: Any) -> tuple[List[Dict[str, Any]], List[str], Dict[str, str]]:
     rows: List[Dict[str, Any]] = []
     warnings: List[str] = []
 
@@ -231,12 +244,33 @@ def _pull_gantt_rows(config: Any) -> tuple[List[Dict[str, Any]], List[str]]:
                 if row is not None:
                     rows.append(row)
 
-    return rows, warnings
+    roster_window = roster_window_bounds()
+    roster_meta = {
+        "from": roster_window[0].strftime("%Y-%m-%dT%H:%M"),
+        "to": roster_window[1].strftime("%Y-%m-%dT%H:%M"),
+    }
+    try:
+        with requests.Session() as roster_session:
+            roster_rows = fetch_staff_roster(
+                config,
+                from_time=roster_window[0],
+                to_time=roster_window[1],
+                filter_value="STAFF",
+                include_flights=True,
+                drop_empty_rows=True,
+                session=roster_session,
+            )
+        rows = assign_roster_to_schedule_rows(rows, roster_rows)
+    except Exception as exc:
+        warnings.append(f"Roster pull failed: {exc}")
+
+    return rows, warnings, roster_meta
 
 
 if "gantt_rows" not in st.session_state:
     st.session_state["gantt_rows"] = None
     st.session_state["gantt_warnings"] = []
+    st.session_state["gantt_roster_meta"] = {}
 
 try:
     api_settings = st.secrets.get("fl3xx_api")  # type: ignore[attr-defined]
@@ -255,12 +289,14 @@ except FlightDataError as exc:
 
 if st.button("Pull Tail Schedules", type="primary"):
     with st.spinner("Pulling schedules for configured tails..."):
-        rows, warnings = _pull_gantt_rows(config)
+        rows, warnings, roster_meta = _pull_gantt_rows(config)
     st.session_state["gantt_rows"] = rows
     st.session_state["gantt_warnings"] = warnings
+    st.session_state["gantt_roster_meta"] = roster_meta
 
 rows = st.session_state.get("gantt_rows")
 warnings = st.session_state.get("gantt_warnings", [])
+roster_meta = st.session_state.get("gantt_roster_meta", {})
 
 if rows is None:
     st.info("Press **Pull Tail Schedules** to load the current schedule timeline.")
@@ -270,6 +306,11 @@ if warnings:
     st.warning("Some tails could not be loaded:")
     for warning in warnings:
         st.caption(f"• {warning}")
+
+if roster_meta:
+    st.caption(
+        f"Roster enrichment window (UTC): {roster_meta.get('from', '')} to {roster_meta.get('to', '')} (default -10/+5 days)."
+    )
 
 if not rows:
     st.info("No schedule entries found for the configured tails.")
@@ -343,8 +384,14 @@ filtered_schedule_df["lane_plot"] = filtered_schedule_df.apply(
 
 min_start = filtered_schedule_df["start_utc"].min()
 max_end = filtered_schedule_df["end_utc"].max()
-default_start_date = min_start.date()
-default_end_date = max_end.date()
+min_date = min_start.date()
+max_date = max_end.date()
+today_utc_date = datetime.now(UTC).date()
+default_start_date = max(min_date, today_utc_date - timedelta(days=1))
+default_end_date = min(max_date, today_utc_date + timedelta(days=5))
+if default_end_date < default_start_date:
+    default_start_date = min_date
+    default_end_date = max_date
 
 with control_col3:
     selected_dates = st.date_input(
@@ -411,6 +458,13 @@ fig = px.timeline(
         "workflow": True,
         "notes": True,
         "task_id": True,
+        "crew": True,
+        "positioning": True,
+        "roster_flight_id": True,
+        "booking_reference": True,
+        "flight_status": True,
+        "workflow_name": True,
+        "pax_number": True,
         "category": True,
         "start_utc": "|%Y-%m-%d %H:%M UTC",
         "end_utc": "|%Y-%m-%d %H:%M UTC",
@@ -432,6 +486,6 @@ st.plotly_chart(fig, use_container_width=True)
 
 with st.expander("Raw activity data"):
     st.dataframe(
-        filtered_schedule_df[["lane", "tail", "start_utc", "end_utc", "category", "task_type", "workflow", "notes"]],
+        filtered_schedule_df[["lane", "tail", "start_utc", "end_utc", "category", "task_type", "workflow", "crew", "positioning", "roster_flight_id", "booking_reference", "flight_status", "workflow_name", "pax_number", "notes"]],
         width="stretch",
     )
