@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 import re
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import quote, urlencode, urlsplit
 
 import pandas as pd
 import requests
@@ -115,6 +115,7 @@ def _schedule_url(
     init_location: bool = False,
 ) -> str:
     root = _derive_api_root(config.base_url)
+    tail_path = quote(str(tail), safe="-")
     query = {}
     if from_date is not None:
         query["from"] = from_date.isoformat()
@@ -122,8 +123,8 @@ def _schedule_url(
         query["to"] = to_date.isoformat()
     query["initLocation"] = str(init_location).lower()
     if not query:
-        return f"{root}/api/external/aircraft/{tail}/schedule"
-    return f"{root}/api/external/aircraft/{tail}/schedule?{urlencode(query)}"
+        return f"{root}/api/external/aircraft/{tail_path}/schedule"
+    return f"{root}/api/external/aircraft/{tail_path}/schedule?{urlencode(query)}"
 
 
 def _parse_utc(value: Any) -> Optional[datetime]:

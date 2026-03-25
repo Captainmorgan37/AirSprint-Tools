@@ -239,6 +239,24 @@ def test_schedule_url_includes_date_window_and_init_location():
     )
 
 
+def test_schedule_url_encodes_non_standard_aircraft_names():
+    config = Fl3xxApiConfig(base_url="https://app.fl3xx.us/api/external/flight/flights")
+
+    url = _schedule_url(
+        config,
+        "Add CJ2+ West",
+        from_date=date(2026, 3, 16),
+        to_date=date(2026, 4, 16),
+        init_location=False,
+    )
+
+    assert (
+        url
+        == "https://app.fl3xx.us/api/external/aircraft/Add%20CJ2%2B%20West/schedule"
+        "?from=2026-03-16&to=2026-04-16&initLocation=false"
+    )
+
+
 def test_fetch_aircraft_schedule_defaults_to_plus_minus_60_day_window(monkeypatch):
     captured: dict[str, str] = {}
 
