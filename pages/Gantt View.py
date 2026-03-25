@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Mapping, Optional
 
@@ -15,7 +14,6 @@ from flight_leg_utils import FlightDataError, build_fl3xx_api_config, safe_parse
 
 
 UTC = timezone.utc
-TAIL_PATTERN = re.compile(r"^C-[A-Z0-9]{4}$")
 LANE_DEFINITIONS: List[str] = [
     "Add EMB West",
     "Add EMB East",
@@ -216,21 +214,20 @@ def _pull_gantt_rows(config: Any) -> tuple[List[Dict[str, Any]], List[str]]:
     rows: List[Dict[str, Any]] = []
     warnings: List[str] = []
 
-    tails = [lane for lane in LANE_DEFINITIONS if TAIL_PATTERN.match(lane)]
-    lane_for_tail = {tail: tail for tail in tails}
+    lane_targets = list(LANE_DEFINITIONS)
 
     with requests.Session() as session:
-        for tail in tails:
+        for lane in lane_targets:
             try:
-                schedule = fetch_aircraft_schedule(config, tail, session=session)
+                schedule = fetch_aircraft_schedule(config, lane, session=session)
             except Exception as exc:
-                warnings.append(f"{tail}: {exc}")
+                warnings.append(f"{lane}: {exc}")
                 continue
 
             for task in schedule:
                 if not isinstance(task, Mapping):
                     continue
-                row = _task_to_row(tail, lane_for_tail[tail], task)
+                row = _task_to_row(lane, lane, task)
                 if row is not None:
                     rows.append(row)
 
