@@ -74,6 +74,8 @@ COLOR_MAP = {
     "Client Flight": "#2ca02c",
     "OCS Flight": "#ff7f0e",
     "Maintenance": "#7f7f7f",
+    "Note": "#f1c40f",
+    "Lane Placeholder": "rgba(0,0,0,0)",
 }
 
 
@@ -84,7 +86,7 @@ render_sidebar()
 st.title("📊 Gantt View")
 st.write(
     "Builds a per-tail FL3XX schedule timeline with color-coded activity: "
-    "green = client flight, orange = OCS workflow, grey = maintenance."
+    "green = client flight, orange = OCS workflow, grey = maintenance, yellow = note."
 )
 
 
@@ -124,7 +126,14 @@ def _extract_workflow(task: Mapping[str, Any]) -> str:
 
 
 def _classify(task: Mapping[str, Any], workflow_text: str) -> str:
+    task_id = str(task.get("id") or "").strip().lower()
     task_type = str(task.get("taskType") or "").strip().upper()
+    if task_id.startswith("task"):
+        if task_type == "NOTE":
+            return "Note"
+        return "Maintenance"
+    if task_id and not task_id.startswith("flight"):
+        return "Maintenance"
     if task_type in MAINTENANCE_TYPES or "MAINT" in task_type:
         return "Maintenance"
     if "OCS" in workflow_text.upper():
@@ -247,15 +256,77 @@ if not rows:
 
 schedule_df = pd.DataFrame(rows).sort_values(["lane", "start_utc"])
 
+# Notes can overlap, so assign additional sub-lanes per tail for notes only.
+note_slot_labels: Dict[str, str] = {}
+for lane in LANE_DEFINITIONS:
+    lane_notes = schedule_df[(schedule_df["lane"] == lane) & (schedule_df["category"] == "Note")].copy()
+    if lane_notes.empty:
+        continue
+    lane_notes = lane_notes.sort_values(["start_utc", "end_utc"])
+    active_until: List[datetime] = []
+    assigned_slots: List[int] = []
+    for _, note_row in lane_notes.iterrows():
+        start = note_row["start_utc"]
+        end = note_row["end_utc"]
+        slot_index: Optional[int] = None
+        for idx, active_end in enumerate(active_until):
+            if active_end <= start:
+                slot_index = idx
+                active_until[idx] = end
+                break
+        if slot_index is None:
+            active_until.append(end)
+            slot_index = len(active_until) - 1
+        assigned_slots.append(slot_index)
+
+    lane_notes.loc[:, "note_slot"] = assigned_slots
+    for row_index, note_row in lane_notes.iterrows():
+        slot = int(note_row["note_slot"])
+        label = lane if slot == 0 else f"{lane} (Note {slot + 1})"
+        note_slot_labels[row_index] = label
+
+schedule_df["lane_plot"] = schedule_df.apply(
+    lambda row: note_slot_labels.get(row.name, row["lane"]),
+    axis=1,
+)
+
 now_utc = datetime.now(UTC)
+plot_rows: List[Dict[str, Any]] = []
+for lane in LANE_DEFINITIONS:
+    plot_rows.append(
+        {
+            "lane": lane,
+            "lane_plot": lane,
+            "tail": lane,
+            "start_utc": now_utc,
+            "end_utc": now_utc + timedelta(minutes=1),
+            "category": "Lane Placeholder",
+            "task_type": "",
+            "workflow": "",
+            "notes": "",
+            "task_id": "",
+        }
+    )
+
+plot_df = pd.concat([schedule_df, pd.DataFrame(plot_rows)], ignore_index=True)
+
+lane_plot_order: List[str] = []
+for lane in LANE_DEFINITIONS:
+    lane_plot_order.append(lane)
+    lane_note_labels = sorted(
+        {label for label in note_slot_labels.values() if label.startswith(f"{lane} (Note ")},
+        key=lambda label: int(label.split("Note ")[1].rstrip(")")),
+    )
+    lane_plot_order.extend(lane_note_labels)
+
 fig = px.timeline(
-    schedule_df,
+    plot_df,
     x_start="start_utc",
     x_end="end_utc",
-    y="lane",
+    y="lane_plot",
     color="category",
     color_discrete_map=COLOR_MAP,
-    category_orders={"lane": list(reversed(LANE_DEFINITIONS))},
+    category_orders={"lane_plot": lane_plot_order},
     hover_data={
         "tail": True,
         "task_type": True,
@@ -273,7 +344,11 @@ fig.update_xaxes(
     range=[now_utc - timedelta(hours=2), now_utc + timedelta(days=3)],
     rangeslider_visible=True,
 )
-fig.update_layout(height=max(750, 24 * len(LANE_DEFINITIONS)), legend_title_text="Activity Type")
+fig.update_layout(height=max(750, 24 * len(lane_plot_order)), legend_title_text="Activity Type")
+for trace in fig.data:
+    if trace.name == "Lane Placeholder":
+        trace.showlegend = False
+        trace.opacity = 0
 
 st.plotly_chart(fig, use_container_width=True)
 
