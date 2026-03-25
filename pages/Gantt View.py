@@ -487,11 +487,11 @@ fig.update_xaxes(
     rangeslider_visible=True,
 )
 fig.update_layout(
-    height=max(750, 30 * len(lane_plot_order)),
+    height=max(900, 40 * len(lane_plot_order)),
     legend_title_text="Activity Type",
-    bargap=0.18,
+    bargap=0.08,
 )
-fig.update_traces(textposition="inside", insidetextanchor="start", textfont_size=10)
+fig.update_traces(textposition="inside", insidetextanchor="start", textfont_size=12)
 
 day_cursor = zoom_start_dt
 shade_toggle = False
