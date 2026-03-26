@@ -69,3 +69,36 @@ def test_crew_at_airport_uses_home_base_for_a_day() -> None:
 
     assert len(results) == 1
     assert results[0].status == "Home/A-day"
+
+
+def test_positioning_end_in_epoch_milliseconds_is_supported() -> None:
+    roster_rows = [
+        {
+            "user": {
+                "firstName": "Taylor",
+                "lastName": "Position",
+                "role": "FO",
+                "fleet": "CJ2",
+                "baseAirport": "CYYZ",
+            },
+            "flights": [],
+            "entries": [
+                {
+                    "eventType": "POSITIONING",
+                    "toAirport": "CYYZ",
+                    # 2026-03-25 14:00:00 UTC in epoch milliseconds
+                    "end": 1774447200000,
+                }
+            ],
+        }
+    ]
+
+    results = crew_at_airport(
+        roster_rows,
+        at_time=datetime(2026, 3, 25, 18, 0, tzinfo=UTC),
+        airport="CYYZ",
+        fleet="CJ2",
+    )
+
+    assert len(results) == 1
+    assert results[0].status == "Positioned"

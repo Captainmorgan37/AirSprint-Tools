@@ -30,7 +30,17 @@ def _to_utc(value: Any) -> Optional[datetime]:
         except ValueError:
             return None
     if isinstance(value, (int, float)):
-        return datetime.fromtimestamp(float(value), tz=UTC)
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return None
+        # FL3XX payloads can include epoch milliseconds.
+        if abs(numeric) > 10_000_000_000:
+            numeric = numeric / 1000.0
+        try:
+            return datetime.fromtimestamp(numeric, tz=UTC)
+        except (OverflowError, OSError, ValueError):
+            return None
     return None
 
 
@@ -92,8 +102,8 @@ def _is_a_day_entry(entry: Mapping[str, Any]) -> bool:
 
 
 def _in_flight_at_time(flight: Mapping[str, Any], at_time: datetime) -> bool:
-    start = _to_utc(_pick(flight, ("departureTime", "blockOffEstUTC", "etd", "from", "start", "out")))
-    end = _to_utc(_pick(flight, ("arrivalTime", "blockOnEstUTC", "eta", "to", "end", "in")))
+    start = _to_utc(_pick(flight, ("departureTime", "blockOffEstUTC", "etd", "start", "out", "from")))
+    end = _to_utc(_pick(flight, ("arrivalTime", "blockOnEstUTC", "eta", "end", "in", "to")))
     if not isinstance(start, datetime) or not isinstance(end, datetime):
         return False
     return start <= at_time <= end
@@ -104,7 +114,7 @@ def _latest_arrival(flights: Iterable[Mapping[str, Any]], at_time: datetime) -> 
     best_time: Optional[datetime] = None
     source = ""
     for flight in flights:
-        end = _to_utc(_pick(flight, ("arrivalTime", "blockOnEstUTC", "eta", "to", "end", "in")))
+        end = _to_utc(_pick(flight, ("arrivalTime", "blockOnEstUTC", "eta", "end", "in", "to")))
         if not isinstance(end, datetime) or end > at_time:
             continue
         arr = _airport(_pick(flight, ("toAirport", "arrivalAirport", "airportTo", "realAirportTo")))
@@ -125,7 +135,7 @@ def _latest_positioning(entries: Iterable[Mapping[str, Any]], at_time: datetime)
         event_type = str(_pick(entry, ("type", "eventType", "code")) or "").upper()
         if event_type not in {"P", "POSITIONING"}:
             continue
-        end = _to_utc(_pick(entry, ("to", "end", "arrivalTime", "in")))
+        end = _to_utc(_pick(entry, ("end", "arrivalTime", "in", "to")))
         if not isinstance(end, datetime) or end > at_time:
             continue
         arr = _airport(_pick(entry, ("toAirport", "arrivalAirport", "airportTo", "to")))
