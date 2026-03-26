@@ -302,3 +302,11 @@ def test_non_restrictive_aircraft_mentions_do_not_trigger_aircraft_limit_flag() 
     parsed = parse_operational_restrictions([note])
 
     assert parsed["aircraft_type_limits"] == []
+
+
+def test_approved_for_aircraft_list_without_limiting_language_does_not_trigger() -> None:
+    note = "APPROVED FOR: CJ2+, CJ3+, and Embraer operations."
+
+    parsed = parse_operational_restrictions([note])
+
+    assert parsed["aircraft_type_limits"] == []
