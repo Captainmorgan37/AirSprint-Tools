@@ -378,6 +378,49 @@ def test_route_validation_accepts_return_leg_with_full_month_names() -> None:
         for issue in result["issues"]
     )
 
+def test_route_validation_accepts_round_trip_with_spaced_month_token() -> None:
+    quote = {
+        "bookingIdentifier": "ROUTE-SPACED-MONTH-ROUNDTRIP",
+        "aircraftObj": {"type": "CJ2", "category": "LIGHT_JET"},
+        "workflow": "PRIVATE",
+        "workflowCustomName": "FEX Guaranteed",
+        "legs": [
+            {
+                "id": "LEG-ROUTE-SPACED-MONTH-OUTBOUND",
+                "departureAirport": "CYOW",
+                "arrivalAirport": "CSR3",
+                "departureDateUTC": "2026-03-27T15:00:00Z",
+                "arrivalDateUTC": "2026-03-27T16:15:00Z",
+                "blockTime": 75,
+                "planningNotes": "27 MARCH CYOW - CSR3 - CYOW \n-\n8hr Infinity P500 owner requesting P500",
+            },
+            {
+                "id": "LEG-ROUTE-SPACED-MONTH-RETURN",
+                "departureAirport": "CSR3",
+                "arrivalAirport": "CYOW",
+                "departureDateUTC": "2026-03-27T18:00:00Z",
+                "arrivalDateUTC": "2026-03-27T19:15:00Z",
+                "blockTime": 75,
+                "planningNotes": "27 MARCH CYOW - CSR3 - CYOW \n-\n8hr Infinity P500 owner requesting P500",
+            },
+        ],
+    }
+
+    result = run_feasibility_phase1({"quote": quote, "tz_provider": _tz_provider})
+
+    assert any(
+        "Planning notes route for 2026-03-27 matches booked CYOW→CSR3." in entry
+        for entry in result["validation_checks"]
+    )
+    assert any(
+        "Planning notes route for 2026-03-27 matches booked CSR3→CYOW." in entry
+        for entry in result["validation_checks"]
+    )
+    assert not any(
+        "Planning notes did not contain a dated route entry" in issue
+        for issue in result["issues"]
+    )
+
 def test_route_validation_flags_missing_departure_date() -> None:
     quote = {
         "bookingIdentifier": "ROUTE-MISSING-DATE",

@@ -55,3 +55,9 @@ def test_find_route_mismatch_accepts_four_digit_year_tokens() -> None:
     )
 
     assert find_route_mismatch("KATL", "CYOW", "2026-03-28T15:00:00Z", note) is None
+
+def test_find_route_mismatch_accepts_spaced_month_tokens() -> None:
+    note = "27 MARCH CYOW - CSR3 - CYOW \n-\n8hr Infinity P500 owner requesting P500"
+
+    assert find_route_mismatch("CYOW", "CSR3", "2026-03-27T15:00:00Z", note) is None
+    assert find_route_mismatch("CSR3", "CYOW", "2026-03-27T18:30:00Z", note) is None
