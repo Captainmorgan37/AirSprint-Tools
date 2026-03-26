@@ -119,7 +119,7 @@ def extract_requested_aircraft_from_note(note: str) -> Optional[str]:
 
 
 def _parse_note_date(token: str, *, default_year: Optional[int]) -> Optional[date]:
-    match = re.match(r"^(\d{1,2})([A-Z]{3,9})(\d{2})?$", token.strip().upper())
+    match = re.match(r"^(\d{1,2})([A-Z]{3,9})(\d{2}|\d{4})?$", token.strip().upper())
     if not match:
         return None
     day = int(match.group(1))
@@ -129,7 +129,10 @@ def _parse_note_date(token: str, *, default_year: Optional[int]) -> Optional[dat
     year_component = match.group(3)
     year = default_year or date.today().year
     if year_component:
-        year = 2000 + int(year_component)
+        if len(year_component) == 2:
+            year = 2000 + int(year_component)
+        else:
+            year = int(year_component)
     try:
         return date(year, month, day)
     except ValueError:
@@ -191,7 +194,10 @@ def parse_route_entries_from_note(
         return []
 
     entries: List[Tuple[date, List[str]]] = []
-    pattern = re.compile(r"^(\d{1,2}[A-Z]{3,9}(?:\d{2})?)(?:\s*[-:]\s*|\s+)(.*)$", re.IGNORECASE)
+    pattern = re.compile(
+        r"^(\d{1,2}[A-Z]{3,9}(?:\d{2}|\d{4})?)(?:\s*[-:]\s*|\s+)(.*)$",
+        re.IGNORECASE,
+    )
     stop_hint_pattern = re.compile(r"\b(?:customs|tech|technical|fuel)\s+stop\b", re.IGNORECASE)
     for raw_line in note_text.splitlines():
         line = raw_line.strip().strip("-=").strip()
