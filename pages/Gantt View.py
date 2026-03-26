@@ -13,6 +13,7 @@ from cj_maintenance_status import fetch_aircraft_schedule
 from flight_leg_utils import FlightDataError, build_fl3xx_api_config, safe_parse_dt
 from fl3xx_api import fetch_staff_roster
 from gantt_roster_assignment import assign_roster_to_schedule_rows, roster_window_bounds
+from reserve_calendar_checker import select_reserve_dates_in_range
 
 
 UTC = timezone.utc
@@ -179,6 +180,66 @@ def _classify(task: Mapping[str, Any], workflow_text: str) -> str:
     if "OCS" in workflow_text.upper():
         return "OCS Flight"
     return "Client Flight"
+
+
+def _workflow_contains_keyword(workflow_text: str, keyword: str) -> bool:
+    return keyword.casefold() in (workflow_text or "").casefold()
+
+
+def _daily_flight_minutes_by_category(
+    day_start: datetime,
+    day_end: datetime,
+    flights_df: pd.DataFrame,
+) -> Dict[str, float]:
+    totals = {"OCS Flight": 0.0, "Client Flight": 0.0}
+    for _, row in flights_df.iterrows():
+        overlap_start = max(day_start, row["start_utc"])
+        overlap_end = min(day_end, row["end_utc"])
+        if overlap_end <= overlap_start:
+            continue
+        minutes = (overlap_end - overlap_start).total_seconds() / 60.0
+        category = row["category"]
+        if category in totals:
+            totals[category] += minutes
+    return totals
+
+
+def _build_daily_metrics_table(
+    flights_df: pd.DataFrame,
+    start_dt: datetime,
+    end_dt: datetime,
+) -> pd.DataFrame:
+    daily_rows: List[Dict[str, Any]] = []
+    day_cursor = start_dt
+    while day_cursor < end_dt:
+        next_day = min(day_cursor + timedelta(days=1), end_dt)
+        day_rows = flights_df[(flights_df["end_utc"] > day_cursor) & (flights_df["start_utc"] < next_day)]
+        ocs_pct_rows = day_rows[~day_rows["lane"].astype(str).str.startswith(("Add ", "Remove "), na=False)]
+
+        minute_totals = _daily_flight_minutes_by_category(day_cursor, next_day, ocs_pct_rows)
+        ocs_minutes = minute_totals["OCS Flight"]
+        client_minutes = minute_totals["Client Flight"]
+        overall_minutes = ocs_minutes + client_minutes
+        ocs_percent = (ocs_minutes / overall_minutes * 100.0) if overall_minutes else 0.0
+
+        daily_rows.append(
+            {
+                "date_utc": day_cursor.date(),
+                "ocs_pct": ocs_percent,
+                "as_available_flights": int(
+                    day_rows["workflow"].fillna("").apply(lambda text: _workflow_contains_keyword(text, "as available")).sum()
+                ),
+                "upgrade_flights": int(
+                    day_rows["workflow"].fillna("").apply(lambda text: _workflow_contains_keyword(text, "upgrade")).sum()
+                ),
+                "interchange_flights": int(
+                    day_rows["workflow"].fillna("").apply(lambda text: _workflow_contains_keyword(text, "interchange")).sum()
+                ),
+            }
+        )
+        day_cursor = next_day
+
+    return pd.DataFrame(daily_rows)
 
 
 def _task_to_row(tail: str, lane: str, task: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
@@ -493,10 +554,20 @@ fig.update_layout(
 )
 fig.update_traces(textposition="inside", insidetextanchor="start", textfont_size=12)
 
+reserve_dates = set(select_reserve_dates_in_range(zoom_start_date, zoom_end_date))
 day_cursor = zoom_start_dt
 shade_toggle = False
 while day_cursor < zoom_end_dt:
     next_day = min(day_cursor + timedelta(days=1), zoom_end_dt)
+    current_date = day_cursor.date()
+    if current_date in reserve_dates:
+        fig.add_vrect(
+            x0=day_cursor,
+            x1=next_day,
+            fillcolor="rgba(99, 179, 237, 0.20)",
+            layer="below",
+            line_width=0,
+        )
     if shade_toggle:
         fig.add_vrect(
             x0=day_cursor,
@@ -516,6 +587,28 @@ for trace in fig.data:
         trace.opacity = 0
 
 st.plotly_chart(fig, use_container_width=True)
+st.caption("Blue day shading indicates 2026 reserve calendar days.")
+
+visible_flights_df = filtered_schedule_df[
+    (filtered_schedule_df["category"].isin(["Client Flight", "OCS Flight"]))
+    & (filtered_schedule_df["end_utc"] > zoom_start_dt)
+    & (filtered_schedule_df["start_utc"] < zoom_end_dt)
+].copy()
+
+daily_metrics_df = _build_daily_metrics_table(visible_flights_df, zoom_start_dt, zoom_end_dt)
+if not daily_metrics_df.empty:
+    st.subheader("Daily flight metrics (UTC)")
+    st.caption(
+        "OCS% is calculated as OCS flight minutes divided by total flight minutes (OCS + client) for each day in the zoom window, excluding Add/Remove lanes."
+    )
+    st.dataframe(
+        daily_metrics_df.style.format(
+            {
+                "ocs_pct": "{:.1f}%",
+            }
+        ),
+        width="stretch",
+    )
 
 with st.expander("Raw activity data"):
     st.dataframe(
