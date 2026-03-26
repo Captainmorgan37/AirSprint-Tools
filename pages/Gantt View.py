@@ -214,8 +214,9 @@ def _build_daily_metrics_table(
     while day_cursor < end_dt:
         next_day = min(day_cursor + timedelta(days=1), end_dt)
         day_rows = flights_df[(flights_df["end_utc"] > day_cursor) & (flights_df["start_utc"] < next_day)]
+        ocs_pct_rows = day_rows[~day_rows["lane"].astype(str).str.startswith(("Add ", "Remove "), na=False)]
 
-        minute_totals = _daily_flight_minutes_by_category(day_cursor, next_day, day_rows)
+        minute_totals = _daily_flight_minutes_by_category(day_cursor, next_day, ocs_pct_rows)
         ocs_minutes = minute_totals["OCS Flight"]
         client_minutes = minute_totals["Client Flight"]
         overall_minutes = ocs_minutes + client_minutes
@@ -225,9 +226,6 @@ def _build_daily_metrics_table(
             {
                 "date_utc": day_cursor.date(),
                 "ocs_pct": ocs_percent,
-                "ocs_minutes": round(ocs_minutes, 1),
-                "client_minutes": round(client_minutes, 1),
-                "total_minutes": round(overall_minutes, 1),
                 "as_available_flights": int(
                     day_rows["workflow"].fillna("").apply(lambda text: _workflow_contains_keyword(text, "as available")).sum()
                 ),
@@ -601,15 +599,12 @@ daily_metrics_df = _build_daily_metrics_table(visible_flights_df, zoom_start_dt,
 if not daily_metrics_df.empty:
     st.subheader("Daily flight metrics (UTC)")
     st.caption(
-        "OCS% is calculated as OCS flight minutes divided by total flight minutes (OCS + client) for each day in the zoom window."
+        "OCS% is calculated as OCS flight minutes divided by total flight minutes (OCS + client) for each day in the zoom window, excluding Add/Remove lanes."
     )
     st.dataframe(
         daily_metrics_df.style.format(
             {
                 "ocs_pct": "{:.1f}%",
-                "ocs_minutes": "{:.1f}",
-                "client_minutes": "{:.1f}",
-                "total_minutes": "{:.1f}",
             }
         ),
         width="stretch",
