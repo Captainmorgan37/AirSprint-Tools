@@ -238,9 +238,7 @@ RESTRICTIONS:
 CYPG,YPG,,Portage La Prairie,Portage,Canada,49.902778,-98.274722,AirSprint Inc.: A,,"DE-ICE/ANTI-ICE:
 
 - Not Available",Yes
-CYPK,,,Pitt Meadows,Pitt Meadows,Canada,49.216111,-122.712778,AirSprint Inc.: A,,"DEICE/ANTI-ICE:
-
-•	Type 1 De-Ice fluid now available in CYPK. 20JAN25",No
+CYPK,,,Pitt Meadows,Pitt Meadows,Canada,49.216111,-122.712778,AirSprint Inc.: A,,"DEICE/ANTI-ICE: Not Available",Yes
 CYPL,YPL,,Pickle Lake,Pickle Lake,Canada,51.4464833,-90.2141333,AirSprint Inc.: A,,No Deice Mentions Found,
 CYPN,YPN,,Port-Menier,Port-Menier,Canada,49.8365167,-64.2886194,AirSprint Inc.: A,,No Deice Mentions Found,
 CYPQ,YPQ,,Peterborough,Peterborough,Canada,44.23,-78.363333,AirSprint Inc.: A,,"DEICE/ANTI-ICE:
@@ -527,20 +525,7 @@ CYXT,YXT,,Terrace,Terrace,Canada,54.468611,-128.578333,AirSprint Inc.: A,,"DEICE
 
 •	Type 1 & 4 available",No
 CYXU,YXU,,London International,London,Canada,43.0330528,-81.151,AirSprint Inc.: A,A_5,"DEICE/ANTI-ICE: Type 1 and 4 available",No
-CYXX,YXX,,Abbotsford ,Abbotsford,Canada,49.0252667,-122.3599556,AirSprint Inc.: A,,"DEICE/ANTI-ICE:
-
-Executive Aviation
-•	Type 1 (UCARXL 54) and 4 (UCAR INDULGENCE) available
-•	PH: Site office is 604-302-4929, Supervisor Duncan Lundy cell 778-548-3842
-•	Ice man freq: 129.20 
-•	Hours of operation: Closed between 0100-0300. After hours service available w/ 24h notice",No
-CYXX-_DEL_,,,Abbotsford OUTDATED,OUTDATED,Canada,49.025278,-122.36,AirSprint Inc.: A,,"DEICE/ANTI ICE: 
-Type 1 (UCAR XL 54) and 4 (UCAR INDULGENCE) available.
-Executive Aviation.
-Site office phone is 604-302-4929
-Supervisor Duncan Lundy cell 778-548-3842.
-Ice man Frq 129.20
-Closed between 0100-0300. After hours service available w/ 24h notice.",No
+CYXX,YXX,,Abbotsford ,Abbotsford,Canada,49.0252667,-122.3599556,AirSprint Inc.: A,,"DEICE/ANTI-ICE Type 1 (UCARXL 54) and 4 (UCAR INDULGENCE) available,No
 CYXY,YXY,,Whitehorse - Erik Nielsen International,Whitehorse,Canada,60.709444,-135.067222,AirSprint Inc.: A,,"DEICE/ANTI-ICE:
 
 •	Contact Air North 
