@@ -45,3 +45,19 @@ def test_find_route_mismatch_accepts_full_month_names() -> None:
     note = "05MARCH CYYZ- KSAV\n21MARCH KSAV- CYYZ [RETURN]\n-\n8H Infinity CJ2 owner requesting a CJ2"
 
     assert find_route_mismatch("KSAV", "CYYZ", "2026-03-21T15:00:00Z", note) is None
+
+def test_find_route_mismatch_accepts_four_digit_year_tokens() -> None:
+    note = (
+        "26MAR2026 CYOW - KATL (Empty leg)\n"
+        "28MAR2026 - KATL - CYOW\n"
+        "-\n"
+        "24HR CLUB CJ2 OWNER REQUESTING CJ Fleet"
+    )
+
+    assert find_route_mismatch("KATL", "CYOW", "2026-03-28T15:00:00Z", note) is None
+
+def test_find_route_mismatch_accepts_spaced_month_tokens() -> None:
+    note = "27 MARCH CYOW - CSR3 - CYOW \n-\n8hr Infinity P500 owner requesting P500"
+
+    assert find_route_mismatch("CYOW", "CSR3", "2026-03-27T15:00:00Z", note) is None
+    assert find_route_mismatch("CSR3", "CYOW", "2026-03-27T18:30:00Z", note) is None

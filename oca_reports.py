@@ -19,10 +19,11 @@ from fl3xx_api import (
     fetch_leg_details,
 )
 from feasibility.checker_weight_balance import STD_WEIGHTS, determine_season
-from flight_leg_utils import FlightDataError, format_utc, safe_parse_dt
+from flight_leg_utils import FlightDataError, format_utc, load_airport_metadata_lookup, safe_parse_dt
 
 _RUNWAY_DATA_PATH = Path(__file__).with_name("runways.csv")
 _RUNWAY_LENGTH_CACHE: Optional[Dict[str, int]] = None
+_RUNWAY_IDENT_ALIAS_CACHE: Optional[Dict[str, str]] = None
 
 _NOTE_KEYS: Tuple[str, ...] = (
     "bookingNote",
@@ -187,9 +188,38 @@ def _lookup_max_runway_length(airport: Optional[str]) -> Optional[int]:
     ident = _normalise_airport_ident(airport)
     if not ident:
         return None
+
+    if len(ident) == 3:
+        alias_cache = _load_runway_ident_alias_cache()
+        resolved_ident = alias_cache.get(ident)
+        if resolved_ident:
+            ident = resolved_ident
+
     cache = _load_runway_length_cache()
     length = cache.get(ident)
     return int(length) if length is not None else None
+
+
+def _load_runway_ident_alias_cache() -> Dict[str, str]:
+    global _RUNWAY_IDENT_ALIAS_CACHE
+    if _RUNWAY_IDENT_ALIAS_CACHE is not None:
+        return _RUNWAY_IDENT_ALIAS_CACHE
+
+    aliases: Dict[str, str] = {}
+    metadata = load_airport_metadata_lookup()
+    for code, record in metadata.items():
+        code_ident = _normalise_airport_ident(code)
+        if not code_ident or len(code_ident) != 3:
+            continue
+        if not isinstance(record, Mapping):
+            continue
+        icao_ident = _normalise_airport_ident(record.get("icao"))
+        if not icao_ident or len(icao_ident) != 4:
+            continue
+        aliases[code_ident] = icao_ident
+
+    _RUNWAY_IDENT_ALIAS_CACHE = aliases
+    return aliases
 
 
 @dataclass(frozen=True)
