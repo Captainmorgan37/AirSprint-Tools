@@ -691,6 +691,13 @@ def _extract_aircraft_limits(
     has_restriction_language = ACFT_APPROVAL_TERMS_RE.search(lower) is not None
     if not has_restriction_language:
         return
+    if "approved for" in lower:
+        approved_for_restrictive = re.search(
+            r"\b(only|not\s+approved|no\s+[a-z0-9+\-/]+\s+ops?|restricted|restrcited|limitations?)\b",
+            lower,
+        )
+        if not approved_for_restrictive:
+            return
 
     if add_note:
         out["aircraft_type_limits"].append(note)
