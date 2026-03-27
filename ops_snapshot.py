@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+import time
 from typing import Any, Dict, List, Mapping, Optional
 
 import requests
@@ -67,6 +69,60 @@ DEFAULT_LANE_DEFINITIONS: List[str] = [
 ]
 
 MAINTENANCE_TYPES = {"MAINTENANCE", "UNSCHEDULED_MAINTENANCE", "AOG"}
+ROSTER_MIN_TIMEOUT_SECONDS = 60
+ROSTER_PULL_MAX_ATTEMPTS = 3
+
+
+def _roster_pull_config(config: Any) -> Any:
+    timeout_value = getattr(config, "timeout", None)
+    try:
+        timeout_seconds = int(timeout_value)
+    except (TypeError, ValueError):
+        timeout_seconds = 30
+
+    if timeout_seconds >= ROSTER_MIN_TIMEOUT_SECONDS:
+        return config
+
+    if hasattr(config, "__dataclass_fields__"):
+        try:
+            return replace(config, timeout=ROSTER_MIN_TIMEOUT_SECONDS)
+        except Exception:
+            pass
+
+    return config
+
+
+def _fetch_roster_rows_with_retry(config: Any, roster_window: tuple[datetime, datetime]) -> List[Mapping[str, Any]]:
+    roster_config = _roster_pull_config(config)
+    last_error: Optional[Exception] = None
+
+    for attempt in range(1, ROSTER_PULL_MAX_ATTEMPTS + 1):
+        try:
+            with requests.Session() as roster_session:
+                return list(
+                    fetch_staff_roster(
+                        roster_config,
+                        from_time=roster_window[0],
+                        to_time=roster_window[1],
+                        filter_value="STAFF",
+                        include_flights=True,
+                        drop_empty_rows=True,
+                        session=roster_session,
+                    )
+                )
+        except (requests.Timeout, requests.ConnectionError) as exc:
+            last_error = exc
+            if attempt >= ROSTER_PULL_MAX_ATTEMPTS:
+                break
+            time.sleep(float(attempt))
+
+    if last_error is not None:
+        raise RuntimeError(
+            f"{last_error} (after {ROSTER_PULL_MAX_ATTEMPTS} attempts; roster timeout "
+            f"raised to at least {ROSTER_MIN_TIMEOUT_SECONDS}s)"
+        ) from last_error
+
+    return []
 
 
 def _to_utc(value: Any) -> Optional[datetime]:
@@ -216,18 +272,7 @@ def pull_ops_snapshot(config: Any, lane_targets: Optional[List[str]] = None) -> 
     }
 
     try:
-        with requests.Session() as roster_session:
-            roster_rows = list(
-                fetch_staff_roster(
-                    config,
-                    from_time=roster_window[0],
-                    to_time=roster_window[1],
-                    filter_value="STAFF",
-                    include_flights=True,
-                    drop_empty_rows=True,
-                    session=roster_session,
-                )
-            )
+        roster_rows = _fetch_roster_rows_with_retry(config, roster_window)
         rows = assign_roster_to_schedule_rows(rows, roster_rows)
     except Exception as exc:
         warnings.append(f"Roster pull failed: {exc}")
