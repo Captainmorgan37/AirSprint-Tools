@@ -1011,6 +1011,88 @@ def test_ssa_leg_does_not_trigger_manual_osa_review() -> None:
     assert not any("OSA leg; complete feasibility manually" in issue for issue in leg["arrival"]["osa_ssa"]["issues"])
 
 
+def test_osa_leg_requires_manual_feasibility_review() -> None:
+    quote = {
+        "bookingIdentifier": "EU-MANUAL",
+        "aircraftObj": {"type": "E545", "category": "SUPER_MIDSIZE_JET"},
+        "legs": [
+            {
+                "id": "LEG-EU-1",
+                "departureAirport": "CYFB",
+                "arrivalAirport": "EIDW",
+                "departureDateUTC": "2026-06-09T20:00:00Z",
+                "arrivalDateUTC": "2026-06-10T02:30:00Z",
+                "blockTime": 390,
+            }
+        ],
+    }
+
+    result = run_feasibility_phase1(
+        {
+            "quote": quote,
+            "tz_provider": lambda icao: {
+                "CYFB": "America/Iqaluit",
+                "EIDW": "Europe/Dublin",
+            }.get(icao),
+        }
+    )
+
+    leg = result["legs"][0]
+    assert leg["arrival"]["customs"]["status"] == "PASS"
+    assert leg["arrival"]["osa_ssa"]["status"] == "CAUTION"
+    assert leg["arrival"]["osa_ssa"]["summary"] == "Manual feasibility review required"
+    assert "OSA leg; complete feasibility manually in Jeppesen/Fl3xx." in leg["arrival"]["osa_ssa"]["issues"]
+    assert leg["departure"]["osa_ssa"]["status"] == "PASS"
+
+
+def test_only_osa_side_of_leg_gets_manual_review_warning() -> None:
+    quote = {
+        "bookingIdentifier": "OSA-DEP-ONLY",
+        "aircraftObj": {"type": "E545", "category": "SUPER_MIDSIZE_JET"},
+        "legs": [
+            {
+                "id": "LEG-EU-DEP",
+                "departureAirport": "EGGW",
+                "arrivalAirport": "CYFB",
+                "departureDateUTC": "2026-06-22T08:00:00Z",
+                "arrivalDateUTC": "2026-06-22T16:00:00Z",
+                "blockTime": 480,
+            }
+        ],
+    }
+
+    result = run_feasibility_phase1({"quote": quote, "tz_provider": lambda _icao: None})
+
+    leg = result["legs"][0]
+    assert leg["departure"]["osa_ssa"]["status"] == "CAUTION"
+    assert leg["departure"]["osa_ssa"]["summary"] == "Manual feasibility review required"
+    assert leg["arrival"]["osa_ssa"]["status"] == "PASS"
+    assert leg["arrival"]["osa_ssa"]["summary"] != "Manual feasibility review required"
+
+
+def test_ssa_leg_does_not_trigger_manual_osa_review() -> None:
+    quote = {
+        "bookingIdentifier": "SSA-NORMAL",
+        "aircraftObj": {"type": "CJ3", "category": "LIGHT_JET"},
+        "legs": [
+            {
+                "id": "LEG-SSA-1",
+                "departureAirport": "CYYZ",
+                "arrivalAirport": "CYFB",
+                "departureDateUTC": "2026-06-09T12:00:00Z",
+                "arrivalDateUTC": "2026-06-09T16:00:00Z",
+                "blockTime": 240,
+            }
+        ],
+    }
+
+    result = run_feasibility_phase1({"quote": quote, "tz_provider": lambda _icao: None})
+
+    leg = result["legs"][0]
+    assert leg["arrival"]["osa_ssa"]["summary"] != "Manual feasibility review required"
+    assert not any("OSA leg; complete feasibility manually" in issue for issue in leg["arrival"]["osa_ssa"]["issues"])
+
+
 def test_weight_balance_reads_nested_pax_and_cargo_payload() -> None:
     payload = {
         "paxDetails": {
