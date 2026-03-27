@@ -31,6 +31,16 @@ LAND_BUFFER_NM = 200
 SAMPLES_PER_LEG = 18
 
 
+_MAPBOX_TOKEN = st.secrets.get("mapbox_token")  # type: ignore[attr-defined]
+if isinstance(_MAPBOX_TOKEN, str) and _MAPBOX_TOKEN.strip():
+    # Streamlit's pydeck integration reads the token from the environment
+    # (matching how the feasibility app works), and we also propagate it to
+    # pydeck settings for good measure.
+    _MAPBOX_TOKEN = _MAPBOX_TOKEN.strip()
+    os.environ["MAPBOX_API_KEY"] = _MAPBOX_TOKEN
+    pdk.settings.mapbox_api_key = _MAPBOX_TOKEN
+
+
 configure_page(page_title="Overwater Route Watch")
 password_gate()
 render_sidebar()
@@ -309,7 +319,7 @@ def _render_tail_section(tail: str, legs: List[Dict[str, Any]]) -> None:
         layers=[layer_lines, layer_points],
         tooltip={"text": "{tooltip}"},
     )
-    st.pydeck_chart(deck)
+    st.pydeck_chart(deck, use_container_width=True)
 
 
 now_mt = datetime.now(tz=MOUNTAIN_TIME_ZONE)
