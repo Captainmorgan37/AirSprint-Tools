@@ -62,6 +62,7 @@ st.write(
 
 STATUS_EMOJI = {"PASS": "✅", "CAUTION": "⚠️", "FAIL": "❌"}
 STATUS_COLORS = {"FAIL": "#b91c1c", "CAUTION": "#d97706"}
+SPECIAL_EVENT_FEE_COLOR = "#f472b6"
 SECTION_ORDER = [
     "suitability",
     "day_ops",
@@ -820,6 +821,8 @@ def _collect_entries(values: Any, *, explode: bool = False) -> list[str]:
 
 def _status_color_for_line(text: str, highlight_status: Optional[str] = None) -> Optional[str]:
     normalized = text.upper()
+    if "SPECIAL EVENT FEE" in normalized:
+        return SPECIAL_EVENT_FEE_COLOR
     if highlight_status:
         target = highlight_status.upper()
         forced_color = STATUS_COLORS.get(target)

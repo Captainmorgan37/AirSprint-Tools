@@ -722,6 +722,45 @@ def test_planning_notes_summary_route_allows_customs_stop_note() -> None:
     ]
     assert len(matches) >= 2
 
+
+def test_summary_surfaces_special_event_fee_note_without_failing_leg() -> None:
+    quote = {
+        "bookingIdentifier": "SPECIAL-FEE",
+        "aircraftObj": {"type": "CJ3", "category": "LIGHT_JET"},
+        "legs": [
+            {
+                "id": "LEG-SPECIAL-FEE",
+                "departureAirport": "CYYC",
+                "arrivalAirport": "CYEG",
+                "departureDateUTC": "2025-11-19T15:00:00Z",
+                "arrivalDateUTC": "2025-11-19T16:15:00Z",
+                "pax": 2,
+                "blockTime": 75,
+            }
+        ],
+    }
+
+    def _operational_notes_fetcher(icao: str, _date_local: str | None) -> List[Dict[str, Any]]:
+        if icao == "CYEG":
+            return [
+                {
+                    "note": "OS SPECIAL EVENT FEES: Masters week pricing applies for arrivals.",
+                }
+            ]
+        return []
+
+    result = run_feasibility_phase1(
+        {
+            "quote": quote,
+            "tz_provider": _tz_provider,
+            "operational_notes_fetcher": _operational_notes_fetcher,
+        }
+    )
+
+    assert "Leg 1 (CYYC→CYEG):" in result["summary"]
+    assert "- All checks PASS." in result["summary"]
+    assert "Special Event Fee indicated in operational notes for CYEG" in result["summary"]
+
 def test_planning_notes_allow_missing_country_prefix_in_route() -> None:
     quote = {
         "bookingIdentifier": "ROUTE-PREFIX-OPTIONAL",

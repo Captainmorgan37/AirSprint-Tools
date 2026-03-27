@@ -307,6 +307,29 @@ def _build_summary(
     leg_results: Sequence[AirportFeasibilityResult],
     duty_result: Mapping[str, Any],
 ) -> str:
+    def _special_event_fee_notes(result: AirportFeasibilityResult, leg: Mapping[str, Any]) -> List[str]:
+        matches: List[str] = []
+        for side_label, side, icao_key in (
+            ("departure", result.departure, "departure_icao"),
+            ("arrival", result.arrival, "arrival_icao"),
+        ):
+            icao = (leg.get(icao_key) or "").upper()
+            if not icao:
+                continue
+            for entry in side.raw_operational_notes:
+                if not isinstance(entry, Mapping):
+                    continue
+                text = str(entry.get("note") or entry.get("text") or "").strip()
+                if not text:
+                    continue
+                if "special event fee" not in text.lower():
+                    continue
+                matches.append(
+                    f"Special Event Fee indicated in operational notes for {icao}; check operational notes."
+                )
+                break
+        return matches
+
     legs = day.get("legs", [])
     lines: List[str] = []
     lines.append(f"Quote {day.get('bookingIdentifier')} ({day.get('aircraft_type')})")
@@ -326,14 +349,18 @@ def _build_summary(
     lines.append("")
     for index, (leg, result) in enumerate(zip(legs, leg_results), start=1):
         lines.append(f"Leg {index} ({leg['departure_icao']}→{leg['arrival_icao']}):")
-        status = _leg_status(result)
+        special_event_issues = _special_event_fee_notes(result, leg)
         non_pass_entries = [entry for entry in result.iter_all_categories() if entry[1].status != "PASS"]
         if not non_pass_entries:
             lines.append("- All checks PASS.")
+            for issue in special_event_issues:
+                lines.append(f"- {issue}")
         else:
             for label, category in non_pass_entries:
                 detail = category.summary or category.status
                 lines.append(f"- {label}: {detail} ({category.status})")
+            for issue in special_event_issues:
+                lines.append(f"- {issue}")
         lines.append("")
     return "\n".join(line for line in lines if line is not None)
 
