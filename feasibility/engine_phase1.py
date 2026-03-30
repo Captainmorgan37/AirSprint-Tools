@@ -34,6 +34,10 @@ from .planning_notes import (
 )
 from .quote_lookup import build_quote_leg_options
 from .schemas import CategoryResult, CategoryStatus, combine_statuses
+from reserve_calendar_checker import TARGET_DATES
+
+
+RESERVE_CALENDAR_DATES = frozenset(TARGET_DATES)
 
 
 def _coerce_str(value: Any) -> str:
@@ -582,26 +586,113 @@ def _extract_owner_aircraft_from_note(note: Optional[str]) -> list[str]:
     return labels
 
 
-def _classify_expected_workflow(owner_aircraft: list[str], requested: str) -> Optional[str]:
+def _owner_entry_matches_requested(requested_canonical: str, owner_canonical: str) -> bool:
+    if not requested_canonical or not owner_canonical:
+        return False
+    if requested_canonical == owner_canonical:
+        return True
+    if requested_canonical == "CJ" and owner_canonical.startswith("CJ"):
+        return True
+    if owner_canonical == "EMB" and requested_canonical.startswith("CJ"):
+        return True
+    return False
+
+
+def _classify_expected_workflow(
+    owner_entries: list[tuple[str, str]],
+    requested: str,
+    *,
+    reserve_day: bool,
+) -> Optional[str]:
     requested_canonical = _canonical_aircraft_label(requested)
-    owner_canonicals = [_canonical_aircraft_label(label) for label in owner_aircraft]
+    owner_canonicals = [(_coerce_str(owner_type), _canonical_aircraft_label(label)) for owner_type, label in owner_entries]
     if not requested_canonical or not any(owner_canonicals):
         return None
 
-    if requested_canonical in owner_canonicals:
-        return "guaranteed"
-
-    if requested_canonical == "CJ" and any(label.startswith("CJ") for label in owner_canonicals):
-        return "guaranteed"
-
-    if "EMB" in owner_canonicals and requested_canonical.startswith("CJ"):
+    matching_programs = {
+        owner_type
+        for owner_type, owner_canonical in owner_canonicals
+        if _owner_entry_matches_requested(requested_canonical, owner_canonical)
+    }
+    if matching_programs:
+        if reserve_day:
+            if any("INF" in program for program in matching_programs):
+                return "guaranteed"
+            if any("CLUB" in program for program in matching_programs):
+                return "as available"
+            return None
         return "guaranteed"
 
     return "interchange"
 
 
+def _extract_owner_entries_from_note(note: Optional[str]) -> list[tuple[str, str]]:
+    if not note:
+        return []
+
+    patterns = (
+        r"\b(?:\w+[ \t]+)?(?:\d+)?[ \t]*(CLUB|INF(?:INITY)?)[ \t]+([A-Z0-9+,/ \t\-&]{2,40})[ \t]+OWNER\b",
+        r"\b([A-Z0-9+,/ \t\-&]{2,40})[ \t]+(CLUB|INF(?:INITY)?)[ \t]+OWNER\b",
+    )
+    ignored_labels = {
+        "OWNER",
+        "REQUESTING",
+        "REQUESTED",
+        "REQ",
+        "REQUEST",
+        "CLUB",
+        "INFINITY",
+        "INF",
+    }
+    aircraft_aliases = {
+        "L450": "P500",
+        "LEGACY450": "P500",
+        "E545": "P500",
+        "E500": "P500",
+        "E550": "P500",
+        "PHENOM500": "P500",
+        "C25A": "CJ2",
+        "C25B": "CJ3",
+        "EMBRAER": "P500",
+    }
+
+    entries: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for line in normalize_planning_note_text(note).splitlines():
+        stripped = line.strip()
+        if not stripped or "OWNER" not in stripped.upper():
+            continue
+
+        for pattern in patterns:
+            for match in re.finditer(pattern, stripped, re.IGNORECASE):
+                if len(match.groups()) != 2:
+                    continue
+                first, second = match.group(1), match.group(2)
+                if re.fullmatch(r"CLUB|INF(?:INITY)?", first or "", re.IGNORECASE):
+                    owner_type = _normalize_aircraft_label(first)
+                    aircraft_blob = second
+                else:
+                    owner_type = _normalize_aircraft_label(second)
+                    aircraft_blob = first
+
+                for raw in re.split(r"[/, \t]+|\band\b|&", aircraft_blob, flags=re.IGNORECASE):
+                    normalized = _normalize_aircraft_label(raw)
+                    if not normalized or len(normalized) < 2 or normalized.isdigit() or normalized in ignored_labels:
+                        continue
+                    normalized = aircraft_aliases.get(normalized, normalized)
+                    if re.fullmatch(r"\d+(?:H|HR|HRS|HOUR|HOURS)", normalized):
+                        continue
+                    entry = (owner_type, normalized)
+                    if entry not in seen:
+                        seen.add(entry)
+                        entries.append(entry)
+
+    return entries
+
+
 def _infer_expected_workflow(day: DayContext) -> tuple[Optional[str], Optional[str]]:
     inferred: list[tuple[str, str, str]] = []
+    reserve_day = _is_reserve_calendar_day(day)
 
     for leg in day.get("legs", []):
         note = leg.get("planning_notes")
@@ -609,8 +700,11 @@ def _infer_expected_workflow(day: DayContext) -> tuple[Optional[str], Optional[s
             continue
 
         owner_aircraft = _extract_owner_aircraft_from_note(note)
+        owner_entries = _extract_owner_entries_from_note(note)
+        if not owner_entries:
+            owner_entries = [("UNKNOWN", label) for label in owner_aircraft]
         requested = extract_requested_aircraft_from_note(note)
-        expected = _classify_expected_workflow(owner_aircraft, requested or "")
+        expected = _classify_expected_workflow(owner_entries, requested or "", reserve_day=reserve_day)
         if expected:
             inferred.append((expected, owner_aircraft, requested or ""))
 
@@ -618,8 +712,11 @@ def _infer_expected_workflow(day: DayContext) -> tuple[Optional[str], Optional[s
         day_note = day.get("planning_notes")
         if day_note:
             owner_aircraft = _extract_owner_aircraft_from_note(day_note)
+            owner_entries = _extract_owner_entries_from_note(day_note)
+            if not owner_entries:
+                owner_entries = [("UNKNOWN", label) for label in owner_aircraft]
             requested = extract_requested_aircraft_from_note(day_note)
-            expected = _classify_expected_workflow(owner_aircraft, requested or "")
+            expected = _classify_expected_workflow(owner_entries, requested or "", reserve_day=reserve_day)
             if expected:
                 inferred.append((expected, owner_aircraft, requested or ""))
         if not inferred:
@@ -645,6 +742,25 @@ def _infer_expected_workflow(day: DayContext) -> tuple[Optional[str], Optional[s
     detail = " and ".join(detail_parts) or None
 
     return bucket, detail
+
+
+def _is_reserve_calendar_day(day: DayContext) -> bool:
+    tz_lookup = load_airport_tz_lookup()
+    for leg in day.get("legs", []):
+        departure_raw = leg.get("departure_date_utc")
+        departure_dt = safe_parse_dt(departure_raw) if departure_raw else None
+        if departure_dt is None:
+            continue
+        dep = (leg.get("departure_icao") or "").upper()
+        tz_name = tz_lookup.get(dep)
+        if tz_name:
+            try:
+                departure_dt = departure_dt.astimezone(pytz.timezone(tz_name))
+            except Exception:
+                pass
+        if departure_dt.date() in RESERVE_CALENDAR_DATES:
+            return True
+    return False
 
 
 def _extract_workflow_bucket(day: DayContext) -> tuple[Optional[str], str]:

@@ -133,7 +133,12 @@ def test_phase1_engine_prefers_flight_id_when_fetching_pax_details() -> None:
         {"quote": quote, "tz_provider": _tz_provider, "pax_details_fetcher": _fetcher}
     )
 
-def _workflow_quote(workflow_custom: str, planning_note: str) -> Dict[str, Any]:
+def _workflow_quote(
+    workflow_custom: str,
+    planning_note: str,
+    *,
+    departure_date_utc: str = "2025-11-19T15:00:00Z",
+) -> Dict[str, Any]:
     return {
         "bookingIdentifier": "WFLOW",
         "aircraftObj": {"type": "CJ3", "category": "LIGHT_JET"},
@@ -144,7 +149,7 @@ def _workflow_quote(workflow_custom: str, planning_note: str) -> Dict[str, Any]:
                 "id": "LEG-WORKFLOW",
                 "departureAirport": "CYYC",
                 "arrivalAirport": "CYEG",
-                "departureDateUTC": "2025-11-19T15:00:00Z",
+                "departureDateUTC": departure_date_utc,
                 "arrivalDateUTC": "2025-11-19T16:15:00Z",
                 "pax": 2,
                 "blockTime": 75,
@@ -301,6 +306,54 @@ def test_workflow_validation_flags_mismatch() -> None:
         for entry in result["validation_checks"]
     )
     assert any("planning notes indicate Interchange" in issue for issue in result["issues"])
+
+
+def test_reserve_day_club_owner_request_requires_as_available() -> None:
+    quote = _workflow_quote(
+        "FEX Guaranteed",
+        "8HR CLUB P500 OWNER REQUESTING P500",
+        departure_date_utc="2026-05-18T15:00:00Z",
+    )
+
+    result = run_feasibility_phase1({"quote": quote, "tz_provider": _tz_provider})
+
+    assert any(
+        "Workflow 'FEX Guaranteed' is Guaranteed but planning notes indicate As Available" in entry
+        for entry in result["validation_checks"]
+    )
+    assert any("planning notes indicate As Available" in issue for issue in result["issues"])
+
+
+def test_reserve_day_infinity_owner_request_can_remain_guaranteed() -> None:
+    quote = _workflow_quote(
+        "FEX Guaranteed",
+        "8HR INFINITY P500 OWNER REQUESTING P500",
+        departure_date_utc="2026-05-18T15:00:00Z",
+    )
+
+    result = run_feasibility_phase1({"quote": quote, "tz_provider": _tz_provider})
+
+    assert any(
+        "Workflow 'FEX Guaranteed' aligns with planning notes (Guaranteed)" in entry
+        for entry in result["validation_checks"]
+    )
+    assert not any("planning notes indicate As Available" in issue for issue in result["issues"])
+
+
+def test_reserve_day_mixed_ownership_uses_requested_aircraft_program() -> None:
+    quote = _workflow_quote(
+        "FEX Guaranteed",
+        "8HR INFINITY P500 and 24HR CLUB CJ3 OWNER REQUESTING P500",
+        departure_date_utc="2026-05-18T15:00:00Z",
+    )
+
+    result = run_feasibility_phase1({"quote": quote, "tz_provider": _tz_provider})
+
+    assert any(
+        "Workflow 'FEX Guaranteed' aligns with planning notes (Guaranteed)" in entry
+        for entry in result["validation_checks"]
+    )
+    assert not any("planning notes indicate As Available" in issue for issue in result["issues"])
 
 def test_missing_planning_notes_are_flagged() -> None:
     quote = _workflow_quote("Club Guaranteed", "")
