@@ -643,7 +643,68 @@ def _classify_expected_workflow(
             return None
         return "guaranteed"
 
-    return "interchange"
+def _extract_owner_entries_from_note(note: Optional[str]) -> list[tuple[str, str]]:
+    if not note:
+        return []
+
+    patterns = (
+        r"\b(?:\w+[ \t]+)?(?:\d+)?[ \t]*(CLUB|INF(?:INITY)?)[ \t]+([A-Z0-9+,/ \t\-&]{2,40})[ \t]+OWNER\b",
+        r"\b([A-Z0-9+,/ \t\-&]{2,40})[ \t]+(CLUB|INF(?:INITY)?)[ \t]+OWNER\b",
+    )
+    ignored_labels = {
+        "OWNER",
+        "REQUESTING",
+        "REQUESTED",
+        "REQ",
+        "REQUEST",
+        "CLUB",
+        "INFINITY",
+        "INF",
+    }
+    aircraft_aliases = {
+        "L450": "P500",
+        "LEGACY450": "P500",
+        "E545": "P500",
+        "E500": "P500",
+        "E550": "P500",
+        "PHENOM500": "P500",
+        "C25A": "CJ2",
+        "C25B": "CJ3",
+        "EMBRAER": "P500",
+    }
+
+    entries: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for line in normalize_planning_note_text(note).splitlines():
+        stripped = line.strip()
+        if not stripped or "OWNER" not in stripped.upper():
+            continue
+
+        for pattern in patterns:
+            for match in re.finditer(pattern, stripped, re.IGNORECASE):
+                if len(match.groups()) != 2:
+                    continue
+                first, second = match.group(1), match.group(2)
+                if re.fullmatch(r"CLUB|INF(?:INITY)?", first or "", re.IGNORECASE):
+                    owner_type = _normalize_aircraft_label(first)
+                    aircraft_blob = second
+                else:
+                    owner_type = _normalize_aircraft_label(second)
+                    aircraft_blob = first
+
+                for raw in re.split(r"[/, \t]+|\band\b|&", aircraft_blob, flags=re.IGNORECASE):
+                    normalized = _normalize_aircraft_label(raw)
+                    if not normalized or len(normalized) < 2 or normalized.isdigit() or normalized in ignored_labels:
+                        continue
+                    normalized = aircraft_aliases.get(normalized, normalized)
+                    if re.fullmatch(r"\d+(?:H|HR|HRS|HOUR|HOURS)", normalized):
+                        continue
+                    entry = (owner_type, normalized)
+                    if entry not in seen:
+                        seen.add(entry)
+                        entries.append(entry)
+
+    return entries
 
 
 def _extract_owner_entries_from_note(note: Optional[str]) -> list[tuple[str, str]]:
