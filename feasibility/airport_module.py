@@ -877,6 +877,7 @@ def evaluate_suitability(
         if (
             "customs" in body
             or _is_fbo_information_note(body)
+            or _is_tower_closure_reference(body)
             or _is_fuel_service_closure(body, closure_fail_keywords + closure_caution_keywords)
         ):
             continue
@@ -931,6 +932,14 @@ def _is_closure_caution_exempt(icao: str, body: str) -> bool:
         normalized_exemption and normalized_exemption in body_normalized
         for normalized_exemption in (_normalize_text(exemption) for exemption in exemptions)
     )
+
+
+def _is_tower_closure_reference(body: str) -> bool:
+    if not body:
+        return False
+    if "tower" not in body or "closed" not in body:
+        return False
+    return "clearance number" in body or "clearance" in body
 
 
 def _get_leg_date(leg: LegContext, side: str) -> date | None:
