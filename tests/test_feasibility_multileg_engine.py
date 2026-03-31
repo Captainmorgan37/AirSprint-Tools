@@ -321,6 +321,7 @@ def test_reserve_day_club_owner_request_requires_as_available() -> None:
         "Workflow 'FEX Guaranteed' is Guaranteed but planning notes indicate As Available" in entry
         for entry in result["validation_checks"]
     )
+    assert any("Club owner aircraft P500 and requested P500" in entry for entry in result["validation_checks"])
     assert any("planning notes indicate As Available" in issue for issue in result["issues"])
 
 
@@ -337,6 +338,10 @@ def test_reserve_day_infinity_owner_request_can_remain_guaranteed() -> None:
         "Workflow 'FEX Guaranteed' aligns with planning notes (Guaranteed)" in entry
         for entry in result["validation_checks"]
     )
+    assert any(
+        "Infinity owner aircraft" in entry and "requested P500" in entry
+        for entry in result["validation_checks"]
+    )
     assert not any("planning notes indicate As Available" in issue for issue in result["issues"])
 
 
@@ -351,6 +356,10 @@ def test_reserve_day_mixed_ownership_uses_requested_aircraft_program() -> None:
 
     assert any(
         "Workflow 'FEX Guaranteed' aligns with planning notes (Guaranteed)" in entry
+        for entry in result["validation_checks"]
+    )
+    assert any(
+        "Infinity owner aircraft" in entry and "requested P500" in entry
         for entry in result["validation_checks"]
     )
     assert not any("planning notes indicate As Available" in issue for issue in result["issues"])
