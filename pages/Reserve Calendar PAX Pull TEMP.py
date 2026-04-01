@@ -66,6 +66,7 @@ for day in result.days:
     st.caption(
         f"Fetched: {day.diagnostics.get('fetched', 0)} | "
         f"In window (02:00-23:59 MT): {day.diagnostics.get('in_window', 0)} | "
+        f"Skipped OCS workflows: {day.diagnostics.get('skipped_ocs', 0)} | "
         f"PAX flights: {day.diagnostics.get('pax_flights', 0)}"
     )
 

@@ -17,6 +17,7 @@ def test_run_reserve_pax_pull_filters_window_and_pax(monkeypatch):
             "flightId": "F-1",
             "dep_time": "2025-01-04T09:00:00Z",  # 02:00 MT
             "paxNumber": 3,
+            "bookingIdentifier": "LIFTY",
             "bookingReference": "BK-1",
             "accountName": "Owner A",
             "workflowCustomName": "CANADA Customs",
@@ -37,6 +38,14 @@ def test_run_reserve_pax_pull_filters_window_and_pax(monkeypatch):
             "accountName": "Owner C",
             "workflowCustomName": "US Customs",
         },
+        {
+            "flightId": "F-4",
+            "dep_time": "2025-01-04T11:00:00Z",
+            "paxNumber": 4,
+            "bookingIdentifier": "OKCTA",
+            "accountName": "Owner D",
+            "workflowCustomName": "OCS - Clearance",
+        },
     ]
 
     def stub_fetch_flights(config, from_date, to_date, session=None):
@@ -50,6 +59,7 @@ def test_run_reserve_pax_pull_filters_window_and_pax(monkeypatch):
     jan4 = next(day for day in result.days if day.date == target)
 
     assert jan4.diagnostics["pax_flights"] == 1
-    assert jan4.rows[0]["Flight Ref"] == "BK-1"
+    assert jan4.diagnostics["skipped_ocs"] == 1
+    assert jan4.rows[0]["Flight Ref"] == "LIFTY"
     assert jan4.rows[0]["Owner"] == "Owner A"
     assert jan4.rows[0]["PAX"] == 3

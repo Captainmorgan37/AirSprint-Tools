@@ -84,12 +84,19 @@ def _flight_is_in_window(row: Mapping[str, Any], target_date: date) -> bool:
     return time(2, 0) <= dep_tod <= time(23, 59, 59)
 
 
+
+
+def _is_ocs_workflow(workflow_name: Optional[str]) -> bool:
+    if not workflow_name:
+        return False
+    return "ocs" in workflow_name.lower()
+
 def _build_output_row(row: Mapping[str, Any], target_date: date) -> Dict[str, Any]:
     flight_ref = _extract_first_text(
         row,
         (
-            "bookingReference",
             "bookingIdentifier",
+            "bookingReference",
             "bookingCode",
             "bookingId",
             "flightId",
@@ -175,7 +182,20 @@ def run_reserve_pax_pull(
 
             in_window_rows = [row for row in filtered_rows if _flight_is_in_window(row, target_date)]
             pax_rows = []
+            skipped_ocs = 0
             for row in in_window_rows:
+                workflow = _extract_first_text(
+                    row,
+                    (
+                        "workflowCustomName",
+                        "workflow_custom_name",
+                        "workflowName",
+                        "workflow",
+                    ),
+                )
+                if _is_ocs_workflow(workflow):
+                    skipped_ocs += 1
+                    continue
                 pax = _extract_pax_number(row)
                 if pax is None or pax <= 0:
                     continue
@@ -187,6 +207,7 @@ def run_reserve_pax_pull(
                 "skipped_subcharter": skipped_subcharter,
                 "in_window": len(in_window_rows),
                 "pax_flights": len(pax_rows),
+                "skipped_ocs": skipped_ocs,
                 "fetch_metadata": metadata,
             }
 
