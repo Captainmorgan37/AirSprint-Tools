@@ -6,6 +6,10 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 from streamlit.errors import StreamlitSecretNotFoundError
+try:
+    from st_keyup import st_keyup
+except Exception:  # pragma: no cover
+    st_keyup = None
 
 from feasibility.operational_notes import fetch_airport_notes
 from flight_leg_utils import FlightDataError, build_fl3xx_api_config
@@ -183,7 +187,15 @@ if not isinstance(mapbox_token, str) or not mapbox_token.strip():
     st.error("Mapbox token is missing in Streamlit secrets (`mapbox_token`).")
     st.stop()
 
-address = st.text_input("Address", placeholder="1600 Amphitheatre Parkway, Mountain View, CA")
+if st_keyup is not None:
+    address = st_keyup(
+        "Address",
+        placeholder="1600 Amphitheatre Parkway, Mountain View, CA",
+        key="airport-proximity-address-keyup",
+    )
+else:
+    address = st.text_input("Address", placeholder="1600 Amphitheatre Parkway, Mountain View, CA")
+    st.caption("Install `streamlit-keyup` for live suggestions on each keystroke.")
 selected_address = address
 
 if len(address.strip()) >= 3:
