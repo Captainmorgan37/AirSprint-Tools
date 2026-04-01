@@ -83,7 +83,19 @@ for day in result.days:
 
     df = pd.DataFrame(day.rows)
     all_rows.extend(day.rows)
-    daily_totals.append({"Date": date_label, "Flights": len(day.rows)})
+    as_available_count = sum(
+        1
+        for row in day.rows
+        if "as available" in str(row.get("Customs Workflow", "")).strip().lower()
+    )
+    daily_totals.append(
+        {
+            "Date": date_label,
+            "Flights": len(day.rows),
+            "As Available": as_available_count,
+            "Not As Available": len(day.rows) - as_available_count,
+        }
+    )
     st.dataframe(df, width="stretch", hide_index=True)
 
 if all_rows:
@@ -93,7 +105,17 @@ if all_rows:
     st.dataframe(combined_df, width="stretch", hide_index=True)
 
     totals_df = pd.DataFrame(daily_totals)
-    year_total_row = pd.DataFrame([{"Date": f"YEAR TOTAL ({selected_year})", "Flights": len(all_rows)}])
+    total_as_available = int(totals_df["As Available"].sum()) if not totals_df.empty else 0
+    year_total_row = pd.DataFrame(
+        [
+            {
+                "Date": f"YEAR TOTAL ({selected_year})",
+                "Flights": len(all_rows),
+                "As Available": total_as_available,
+                "Not As Available": len(all_rows) - total_as_available,
+            }
+        ]
+    )
     totals_sheet_df = pd.concat([totals_df, year_total_row], ignore_index=True)
 
     workbook_buffer = io.BytesIO()
