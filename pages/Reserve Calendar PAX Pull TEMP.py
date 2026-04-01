@@ -1,3 +1,5 @@
+import io
+
 import pandas as pd
 import streamlit as st
 
@@ -60,7 +62,7 @@ if not result.days:
     st.stop()
 
 all_rows = []
-export_rows = []
+daily_totals = []
 for day in result.days:
     date_label = day.date.strftime("%Y-%m-%d")
     st.subheader(date_label)
@@ -81,40 +83,30 @@ for day in result.days:
 
     df = pd.DataFrame(day.rows)
     all_rows.extend(day.rows)
-    export_rows.extend(day.rows)
-    export_rows.append(
-        {
-            "Date": date_label,
-            "Dep Time (MT)": "",
-            "Flight Ref": f"DAY TOTAL ({date_label})",
-            "Owner": "",
-            "PAX": len(day.rows),
-            "Customs Workflow": "",
-        }
-    )
+    daily_totals.append({"Date": date_label, "Flights": len(day.rows)})
     st.dataframe(df, width="stretch", hide_index=True)
 
 if all_rows:
     st.markdown("---")
     st.subheader("Combined export")
-    export_rows.append(
-        {
-            "Date": str(selected_year),
-            "Dep Time (MT)": "",
-            "Flight Ref": "COMBINED TOTAL",
-            "Owner": "",
-            "PAX": len(all_rows),
-            "Customs Workflow": "",
-        }
-    )
-    combined_df = pd.DataFrame(export_rows)
+    combined_df = pd.DataFrame(all_rows)
     st.dataframe(combined_df, width="stretch", hide_index=True)
-    csv_data = combined_df.to_csv(index=False).encode("utf-8")
+
+    totals_df = pd.DataFrame(daily_totals)
+    year_total_row = pd.DataFrame([{"Date": f"YEAR TOTAL ({selected_year})", "Flights": len(all_rows)}])
+    totals_sheet_df = pd.concat([totals_df, year_total_row], ignore_index=True)
+
+    workbook_buffer = io.BytesIO()
+    with pd.ExcelWriter(workbook_buffer, engine="openpyxl") as writer:
+        combined_df.to_excel(writer, sheet_name="Flight Breakdown", index=False)
+        totals_sheet_df.to_excel(writer, sheet_name="Totals", index=False)
+
+    workbook_data = workbook_buffer.getvalue()
     st.download_button(
-        "Download CSV",
-        data=csv_data,
-        file_name=f"reserve_pax_pull_{selected_year}.csv",
-        mime="text/csv",
+        "Download Workbook (2 sheets)",
+        data=workbook_data,
+        file_name=f"reserve_pax_pull_{selected_year}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
 if result.warnings:
