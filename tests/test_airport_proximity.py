@@ -92,3 +92,15 @@ def test_best_suggestion_index_prefers_startswith_match() -> None:
     index = ap.best_suggestion_index("36 macewan drive nw, calgary", suggestions)
 
     assert index == 1
+
+
+def test_sort_suggestions_for_query_places_best_match_first() -> None:
+    suggestions = [
+        ap.AddressSuggestion("36 Macewan Terrace NW, Calgary, Alberta, Canada", 51.1, -114.1),
+        ap.AddressSuggestion("36 Macewan Drive NW, Calgary, Alberta, Canada", 51.2, -114.2),
+        ap.AddressSuggestion("36 Macewan Park Way NW, Calgary, Alberta, Canada", 51.3, -114.3),
+    ]
+
+    sorted_suggestions = ap.sort_suggestions_for_query("36 macewan drive nw", suggestions)
+
+    assert sorted_suggestions[0].label.startswith("36 Macewan Drive NW")

@@ -150,27 +150,40 @@ def suggest_addresses_mapbox(
     return suggestions
 
 
+def _suggestion_rank(query: str, suggestion: AddressSuggestion, index: int) -> tuple[int, int, int]:
+    normalized_query = re.sub(r"\s+", " ", str(query or "").strip().lower())
+    normalized_label = re.sub(r"\s+", " ", suggestion.label.strip().lower())
+    if normalized_label == normalized_query:
+        return (0, len(normalized_label), index)
+    if normalized_label.startswith(normalized_query):
+        return (1, len(normalized_label), index)
+    if normalized_query in normalized_label:
+        return (2, len(normalized_label), index)
+    return (3, len(normalized_label), index)
+
+
+def sort_suggestions_for_query(query: str, suggestions: Sequence[AddressSuggestion]) -> List[AddressSuggestion]:
+    """Return suggestions sorted by best relevance to the typed query."""
+
+    if not suggestions:
+        return []
+    normalized_query = re.sub(r"\s+", " ", str(query or "").strip().lower())
+    if not normalized_query:
+        return list(suggestions)
+
+    with_rank = [(_suggestion_rank(normalized_query, suggestion, idx), suggestion) for idx, suggestion in enumerate(suggestions)]
+    with_rank.sort(key=lambda row: row[0])
+    return [item[1] for item in with_rank]
+
+
 def best_suggestion_index(query: str, suggestions: Sequence[AddressSuggestion]) -> int:
     """Pick the best default suggestion for a typed query."""
 
     if not suggestions:
         return 0
-    normalized_query = re.sub(r"\s+", " ", str(query or "").strip().lower())
-    if not normalized_query:
-        return 0
-
-    def _rank(suggestion: AddressSuggestion, index: int) -> tuple[int, int, int]:
-        normalized_label = re.sub(r"\s+", " ", suggestion.label.strip().lower())
-        if normalized_label == normalized_query:
-            return (0, len(normalized_label), index)
-        if normalized_label.startswith(normalized_query):
-            return (1, len(normalized_label), index)
-        if normalized_query in normalized_label:
-            return (2, len(normalized_label), index)
-        return (3, len(normalized_label), index)
-
-    ranked = [_rank(suggestion, idx) for idx, suggestion in enumerate(suggestions)]
-    return min(ranked)[2]
+    sorted_suggestions = sort_suggestions_for_query(query, suggestions)
+    best = sorted_suggestions[0]
+    return list(suggestions).index(best)
 
 
 @lru_cache(maxsize=1)

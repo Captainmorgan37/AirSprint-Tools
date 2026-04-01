@@ -1,7 +1,6 @@
 # Core framework
 streamlit>=1.36.0
 streamlit-keyup>=0.2.4
-streamlit-searchbox>=0.1.21
 
 # Authentication
 streamlit-authenticator==0.3.3

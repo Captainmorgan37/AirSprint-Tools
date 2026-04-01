@@ -10,10 +10,6 @@ try:
     from st_keyup import st_keyup
 except Exception:  # pragma: no cover
     st_keyup = None
-try:
-    from streamlit_searchbox import st_searchbox
-except Exception:  # pragma: no cover
-    st_searchbox = None
 
 from feasibility.operational_notes import fetch_airport_notes
 from flight_leg_utils import FlightDataError, build_fl3xx_api_config
@@ -23,6 +19,7 @@ from airport_proximity import (
     best_suggestion_index,
     geocode_address_mapbox,
     nearest_airports,
+    sort_suggestions_for_query,
     suggest_addresses_mapbox,
 )
 
@@ -199,60 +196,32 @@ if not isinstance(mapbox_token, str) or not mapbox_token.strip():
 
 selected_address = ""
 
-if st_searchbox is not None:
-    def _search_addresses(searchterm: str) -> list[str]:
-        query = str(searchterm or "").strip()
-        st.session_state["airport_proximity_raw_address"] = query
-        if len(query) < 3:
-            return []
-        try:
-            suggestions = suggest_addresses_mapbox(query, token=mapbox_token, limit=8)
-        except Exception:
-            return []
-        labels = [suggestion.label for suggestion in suggestions]
-        if labels:
-            preferred_index = best_suggestion_index(query, suggestions)
-            st.session_state["airport_proximity_default_suggestion"] = labels[preferred_index]
-        else:
-            st.session_state.pop("airport_proximity_default_suggestion", None)
-        return labels
-
-    picked = st_searchbox(
-        _search_addresses,
-        key="airport-proximity-address-searchbox",
-        label="Address",
+if st_keyup is not None:
+    address = st_keyup(
+        "Address",
         placeholder="1600 Amphitheatre Parkway, Mountain View, CA",
+        key="airport-proximity-address-keyup",
     )
-    if isinstance(picked, str) and picked.strip():
-        selected_address = picked.strip()
-    else:
-        selected_address = str(st.session_state.get("airport_proximity_raw_address", "")).strip()
 else:
-    if st_keyup is not None:
-        address = st_keyup(
-            "Address",
-            placeholder="1600 Amphitheatre Parkway, Mountain View, CA",
-            key="airport-proximity-address-keyup",
-        )
-    else:
-        address = st.text_input("Address", placeholder="1600 Amphitheatre Parkway, Mountain View, CA")
-        st.caption("Install `streamlit-searchbox` for true single-field autocomplete dropdown behavior.")
-    selected_address = address
+    address = st.text_input("Address", placeholder="1600 Amphitheatre Parkway, Mountain View, CA")
+    st.caption("Install `streamlit-keyup` for live suggestions on each keystroke.")
+selected_address = address
 
-    if len(address.strip()) >= 3:
-        try:
-            suggestions = suggest_addresses_mapbox(address, token=mapbox_token, limit=6)
-        except Exception as exc:  # pragma: no cover
-            st.caption(f"Address suggestions unavailable: {exc}")
-        else:
-            if suggestions:
-                suggestion_options = [s.label for s in suggestions]
-                selected_address = st.selectbox(
-                    "Suggested matches",
-                    options=suggestion_options,
-                    index=best_suggestion_index(address, suggestions),
-                    help="Pick a suggestion or keep your typed address.",
-                )
+if len(address.strip()) >= 3:
+    try:
+        suggestions = suggest_addresses_mapbox(address, token=mapbox_token, limit=8)
+    except Exception as exc:  # pragma: no cover
+        st.caption(f"Address suggestions unavailable: {exc}")
+    else:
+        if suggestions:
+            ranked_suggestions = sort_suggestions_for_query(address, suggestions)
+            suggestion_options = [s.label for s in ranked_suggestions]
+            selected_address = st.selectbox(
+                "Suggested matches",
+                options=suggestion_options,
+                index=best_suggestion_index(address, ranked_suggestions),
+                help="Closest textual match is preselected at the top.",
+            )
 
 with st.form("airport-proximity-form"):
     col1, col2, col3 = st.columns(3)
