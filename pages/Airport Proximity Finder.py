@@ -14,7 +14,13 @@ except Exception:  # pragma: no cover
 from feasibility.operational_notes import fetch_airport_notes
 from flight_leg_utils import FlightDataError, build_fl3xx_api_config
 from Home import configure_page, password_gate, render_sidebar
-from airport_proximity import GeocodingError, nearest_airports, geocode_address_mapbox, suggest_addresses_mapbox
+from airport_proximity import (
+    GeocodingError,
+    best_suggestion_index,
+    geocode_address_mapbox,
+    nearest_airports,
+    suggest_addresses_mapbox,
+)
 
 configure_page(page_title="Nearby Airport Finder")
 password_gate()
@@ -209,7 +215,7 @@ if len(address.strip()) >= 3:
             selected_address = st.selectbox(
                 "Suggested matches",
                 options=suggestion_options,
-                index=0,
+                index=best_suggestion_index(address, suggestions),
                 help="Pick a suggestion or keep your typed address.",
             )
 

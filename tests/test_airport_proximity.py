@@ -80,3 +80,15 @@ def test_suggest_addresses_mapbox_parses_results(monkeypatch: pytest.MonkeyPatch
     ]
     assert suggestions[0].latitude == pytest.approx(51.0447)
     assert suggestions[0].longitude == pytest.approx(-114.0719)
+
+
+def test_best_suggestion_index_prefers_startswith_match() -> None:
+    suggestions = [
+        ap.AddressSuggestion("36 Macewan Terrace NW, Calgary, Alberta, Canada", 51.1, -114.1),
+        ap.AddressSuggestion("36 Macewan Drive NW, Calgary, Alberta, Canada", 51.2, -114.2),
+        ap.AddressSuggestion("36 Macewan Park Way NW, Calgary, Alberta, Canada", 51.3, -114.3),
+    ]
+
+    index = ap.best_suggestion_index("36 macewan drive nw, calgary", suggestions)
+
+    assert index == 1

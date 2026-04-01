@@ -7,6 +7,7 @@ from functools import lru_cache
 from math import asin, cos, radians, sin, sqrt
 from pathlib import Path
 from typing import Iterable, List, Mapping, Optional, Sequence, Tuple
+import re
 
 import pandas as pd
 import requests
@@ -147,6 +148,29 @@ def suggest_addresses_mapbox(
             )
         )
     return suggestions
+
+
+def best_suggestion_index(query: str, suggestions: Sequence[AddressSuggestion]) -> int:
+    """Pick the best default suggestion for a typed query."""
+
+    if not suggestions:
+        return 0
+    normalized_query = re.sub(r"\s+", " ", str(query or "").strip().lower())
+    if not normalized_query:
+        return 0
+
+    def _rank(suggestion: AddressSuggestion, index: int) -> tuple[int, int, int]:
+        normalized_label = re.sub(r"\s+", " ", suggestion.label.strip().lower())
+        if normalized_label == normalized_query:
+            return (0, len(normalized_label), index)
+        if normalized_label.startswith(normalized_query):
+            return (1, len(normalized_label), index)
+        if normalized_query in normalized_label:
+            return (2, len(normalized_label), index)
+        return (3, len(normalized_label), index)
+
+    ranked = [_rank(suggestion, idx) for idx, suggestion in enumerate(suggestions)]
+    return min(ranked)[2]
 
 
 @lru_cache(maxsize=1)
