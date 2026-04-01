@@ -56,3 +56,39 @@ def test_nearest_airports_filters_and_sorts(monkeypatch: pytest.MonkeyPatch) -> 
 
     assert [item.icao for item in result] == ["CYYY", "CYYC"]
     assert all(item.airport_category in {"A", "B"} for item in result)
+
+
+def test_suggest_addresses_mapbox_parses_results(monkeypatch: pytest.MonkeyPatch) -> None:
+    mock_response = Mock()
+    mock_response.content = b"{}"
+    mock_response.json.return_value = {
+        "features": [
+            {"place_name": "Calgary, Alberta, Canada", "center": [-114.0719, 51.0447]},
+            {"place_name": "Calgary International Airport", "center": [-114.019, 51.1215]},
+        ]
+    }
+    mock_response.raise_for_status.return_value = None
+
+    mock_get = Mock(return_value=mock_response)
+    monkeypatch.setattr(ap.requests, "get", mock_get)
+
+    suggestions = ap.suggest_addresses_mapbox("calg", token="test-token", limit=2)
+
+    assert [item.label for item in suggestions] == [
+        "Calgary, Alberta, Canada",
+        "Calgary International Airport",
+    ]
+    assert suggestions[0].latitude == pytest.approx(51.0447)
+    assert suggestions[0].longitude == pytest.approx(-114.0719)
+
+
+def test_best_suggestion_index_prefers_startswith_match() -> None:
+    suggestions = [
+        ap.AddressSuggestion("36 Macewan Terrace NW, Calgary, Alberta, Canada", 51.1, -114.1),
+        ap.AddressSuggestion("36 Macewan Drive NW, Calgary, Alberta, Canada", 51.2, -114.2),
+        ap.AddressSuggestion("36 Macewan Park Way NW, Calgary, Alberta, Canada", 51.3, -114.3),
+    ]
+
+    index = ap.best_suggestion_index("36 macewan drive nw, calgary", suggestions)
+
+    assert index == 1

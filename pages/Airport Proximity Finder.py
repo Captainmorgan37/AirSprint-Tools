@@ -6,11 +6,25 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 from streamlit.errors import StreamlitSecretNotFoundError
+try:
+    from st_keyup import st_keyup
+except Exception:  # pragma: no cover
+    st_keyup = None
+try:
+    from streamlit_searchbox import st_searchbox
+except Exception:  # pragma: no cover
+    st_searchbox = None
 
 from feasibility.operational_notes import fetch_airport_notes
 from flight_leg_utils import FlightDataError, build_fl3xx_api_config
 from Home import configure_page, password_gate, render_sidebar
-from airport_proximity import GeocodingError, nearest_airports, geocode_address_mapbox
+from airport_proximity import (
+    GeocodingError,
+    best_suggestion_index,
+    geocode_address_mapbox,
+    nearest_airports,
+    suggest_addresses_mapbox,
+)
 
 configure_page(page_title="Nearby Airport Finder")
 password_gate()
@@ -183,8 +197,64 @@ if not isinstance(mapbox_token, str) or not mapbox_token.strip():
     st.error("Mapbox token is missing in Streamlit secrets (`mapbox_token`).")
     st.stop()
 
+selected_address = ""
+
+if st_searchbox is not None:
+    def _search_addresses(searchterm: str) -> list[str]:
+        query = str(searchterm or "").strip()
+        st.session_state["airport_proximity_raw_address"] = query
+        if len(query) < 3:
+            return []
+        try:
+            suggestions = suggest_addresses_mapbox(query, token=mapbox_token, limit=8)
+        except Exception:
+            return []
+        labels = [suggestion.label for suggestion in suggestions]
+        if labels:
+            preferred_index = best_suggestion_index(query, suggestions)
+            st.session_state["airport_proximity_default_suggestion"] = labels[preferred_index]
+        else:
+            st.session_state.pop("airport_proximity_default_suggestion", None)
+        return labels
+
+    picked = st_searchbox(
+        _search_addresses,
+        key="airport-proximity-address-searchbox",
+        label="Address",
+        placeholder="1600 Amphitheatre Parkway, Mountain View, CA",
+    )
+    if isinstance(picked, str) and picked.strip():
+        selected_address = picked.strip()
+    else:
+        selected_address = str(st.session_state.get("airport_proximity_raw_address", "")).strip()
+else:
+    if st_keyup is not None:
+        address = st_keyup(
+            "Address",
+            placeholder="1600 Amphitheatre Parkway, Mountain View, CA",
+            key="airport-proximity-address-keyup",
+        )
+    else:
+        address = st.text_input("Address", placeholder="1600 Amphitheatre Parkway, Mountain View, CA")
+        st.caption("Install `streamlit-searchbox` for true single-field autocomplete dropdown behavior.")
+    selected_address = address
+
+    if len(address.strip()) >= 3:
+        try:
+            suggestions = suggest_addresses_mapbox(address, token=mapbox_token, limit=6)
+        except Exception as exc:  # pragma: no cover
+            st.caption(f"Address suggestions unavailable: {exc}")
+        else:
+            if suggestions:
+                suggestion_options = [s.label for s in suggestions]
+                selected_address = st.selectbox(
+                    "Suggested matches",
+                    options=suggestion_options,
+                    index=best_suggestion_index(address, suggestions),
+                    help="Pick a suggestion or keep your typed address.",
+                )
+
 with st.form("airport-proximity-form"):
-    address = st.text_input("Address", placeholder="1600 Amphitheatre Parkway, Mountain View, CA")
     col1, col2, col3 = st.columns(3)
     with col1:
         max_results = st.number_input("Max results", min_value=1, max_value=25, value=5, step=1)
@@ -203,7 +273,7 @@ with st.form("airport-proximity-form"):
 
 if submitted:
     try:
-        lat, lon = geocode_address_mapbox(address, token=mapbox_token)
+        lat, lon = geocode_address_mapbox(selected_address, token=mapbox_token)
         results = nearest_airports(
             lat,
             lon,
