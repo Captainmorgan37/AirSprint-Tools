@@ -60,6 +60,7 @@ if not result.days:
     st.stop()
 
 all_rows = []
+export_rows = []
 for day in result.days:
     date_label = day.date.strftime("%Y-%m-%d")
     st.subheader(date_label)
@@ -80,12 +81,33 @@ for day in result.days:
 
     df = pd.DataFrame(day.rows)
     all_rows.extend(day.rows)
+    export_rows.extend(day.rows)
+    export_rows.append(
+        {
+            "Date": date_label,
+            "Dep Time (MT)": "",
+            "Flight Ref": f"DAY TOTAL ({date_label})",
+            "Owner": "",
+            "PAX": len(day.rows),
+            "Customs Workflow": "",
+        }
+    )
     st.dataframe(df, width="stretch", hide_index=True)
 
 if all_rows:
     st.markdown("---")
     st.subheader("Combined export")
-    combined_df = pd.DataFrame(all_rows)
+    export_rows.append(
+        {
+            "Date": str(selected_year),
+            "Dep Time (MT)": "",
+            "Flight Ref": "COMBINED TOTAL",
+            "Owner": "",
+            "PAX": len(all_rows),
+            "Customs Workflow": "",
+        }
+    )
+    combined_df = pd.DataFrame(export_rows)
     st.dataframe(combined_df, width="stretch", hide_index=True)
     csv_data = combined_df.to_csv(index=False).encode("utf-8")
     st.download_button(
