@@ -35,6 +35,15 @@ class AirportCandidate:
     airport_category: Optional[str]
 
 
+@dataclass(frozen=True)
+class AddressSuggestion:
+    """Autocomplete suggestion returned by Mapbox for a partially typed address."""
+
+    label: str
+    latitude: float
+    longitude: float
+
+
 def haversine_nm(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """Return great-circle distance between two points in nautical miles."""
 
@@ -85,6 +94,59 @@ def geocode_address_mapbox(
     lon = float(center[0])
     lat = float(center[1])
     return lat, lon
+
+
+def suggest_addresses_mapbox(
+    query: str,
+    *,
+    token: str,
+    limit: int = 5,
+    timeout_seconds: float = 10.0,
+) -> List[AddressSuggestion]:
+    """Return address suggestions from Mapbox for autocomplete-style UI."""
+
+    cleaned = str(query or "").strip()
+    if not cleaned:
+        return []
+    if not token or not token.strip():
+        raise GeocodingError("Mapbox token is missing.")
+
+    url = "https://api.mapbox.com/geocoding/v5/mapbox.places/{}.json".format(requests.utils.quote(cleaned))
+    response = requests.get(
+        url,
+        params={
+            "access_token": token.strip(),
+            "autocomplete": "true",
+            "types": "address,place,postcode,locality,neighborhood",
+            "limit": max(1, min(int(limit), 10)),
+        },
+        timeout=timeout_seconds,
+    )
+    response.raise_for_status()
+
+    payload = response.json() if response.content else {}
+    features = payload.get("features") if isinstance(payload, Mapping) else None
+    if not isinstance(features, list):
+        return []
+
+    suggestions: List[AddressSuggestion] = []
+    for feature in features:
+        if not isinstance(feature, Mapping):
+            continue
+        place_name = feature.get("place_name")
+        center = feature.get("center")
+        if not isinstance(place_name, str) or not place_name.strip():
+            continue
+        if not isinstance(center, list) or len(center) < 2:
+            continue
+        suggestions.append(
+            AddressSuggestion(
+                label=place_name.strip(),
+                longitude=float(center[0]),
+                latitude=float(center[1]),
+            )
+        )
+    return suggestions
 
 
 @lru_cache(maxsize=1)
