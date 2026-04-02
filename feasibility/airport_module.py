@@ -241,6 +241,12 @@ IGNORED_SLOT_PPR_NOTES = {
     "ALASKA AIRPORT TREATED AS SSA; SSA HANDLING ONLY.",
     "NUNAVUT AIRPORT TREATED AS SSA; SSA HANDLING ONLY.",
 }
+SLOT_TRIGGER_WINDOW_DAYS_BY_AIRPORT: Mapping[str, int] = {
+    "CYUL": 10,
+    "CYYZ": 30,
+    "CYYC": 30,
+    "CYVR": 3,
+}
 
 _RUNWAYS_PATH = Path(__file__).resolve().parents[1] / "runways.csv"
 _STATUS_PRIORITY: Mapping[CategoryStatus, int] = {
@@ -871,6 +877,7 @@ def evaluate_suitability(
         if (
             "customs" in body
             or _is_fbo_information_note(body)
+            or _is_tower_closure_reference(body)
             or _is_fuel_service_closure(body, closure_fail_keywords + closure_caution_keywords)
         ):
             continue
@@ -925,6 +932,14 @@ def _is_closure_caution_exempt(icao: str, body: str) -> bool:
         normalized_exemption and normalized_exemption in body_normalized
         for normalized_exemption in (_normalize_text(exemption) for exemption in exemptions)
     )
+
+
+def _is_tower_closure_reference(body: str) -> bool:
+    if not body:
+        return False
+    if "tower" not in body or "closed" not in body:
+        return False
+    return "clearance number" in body or "clearance" in body
 
 
 def _get_leg_date(leg: LegContext, side: str) -> date | None:
@@ -1545,6 +1560,15 @@ def evaluate_slot_ppr(
     ppr_lead_days = restrictions.get("ppr_lead_days") or slot_ppr_profile.ppr_lead_days
     ppr_lead_hours = restrictions.get("ppr_lead_hours")
 
+    airport_slot_window_days = SLOT_TRIGGER_WINDOW_DAYS_BY_AIRPORT.get(slot_ppr_profile.icao.upper())
+    if airport_slot_window_days is not None:
+        slot_lead_days = airport_slot_window_days
+        slot_lead_hours = None
+
+    # PPR should alert at any time (not gated by a booking window).
+    ppr_lead_days = None
+    ppr_lead_hours = None
+
     slot_notes = restrictions.get("slot_notes") if slot_required else []
     ppr_notes = restrictions.get("ppr_notes") if ppr_required else []
 
@@ -1581,7 +1605,6 @@ def evaluate_slot_ppr(
         issues.append(f"{label} required for {slot_ppr_profile.icao}.")
 
         if lead_hours_total is not None and hours_until_event is not None and hours_until_event < lead_hours_total:
-            status = _combine_status(status, "FAIL")
             window_descriptor = window_label or "published"
             issues.append(f"Inside {window_descriptor} {label.lower()} window; action immediately.")
 

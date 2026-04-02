@@ -26,7 +26,7 @@ def _build_slot_profile(icao: str) -> SlotPprProfile:
 
 def test_slot_outside_lead_window_reports_future_opening() -> None:
     leg = _build_leg(15)
-    profile = _build_slot_profile("CYYC")
+    profile = _build_slot_profile("KTEB")
     parsed_restrictions = {
         "slot_required": True,
         "slot_lead_days": 10,
@@ -40,9 +40,9 @@ def test_slot_outside_lead_window_reports_future_opening() -> None:
     assert "Slot required (10 day lead)" in result.issues
 
 
-def test_slot_inside_lead_window_flags_failure() -> None:
+def test_slot_inside_lead_window_flags_caution() -> None:
     leg = _build_leg(5)
-    profile = _build_slot_profile("CYYZ")
+    profile = _build_slot_profile("KTEB")
     parsed_restrictions = {
         "slot_required": True,
         "slot_lead_days": 10,
@@ -50,9 +50,38 @@ def test_slot_inside_lead_window_flags_failure() -> None:
 
     result = evaluate_slot_ppr(profile, leg, "DEP", None, parsed_restrictions)
 
-    assert result.status == "FAIL"
+    assert result.status == "CAUTION"
     assert result.summary == "Slot required"
     assert any("Inside 10-day" in issue for issue in result.issues)
+
+
+def test_cyvr_slot_override_only_triggers_within_three_days() -> None:
+    profile = _build_slot_profile("CYVR")
+
+    outside_window = evaluate_slot_ppr(profile, _build_leg(5), "DEP", None, {"slot_required": True})
+    inside_window = evaluate_slot_ppr(profile, _build_leg(2), "DEP", None, {"slot_required": True})
+
+    assert outside_window.status == "PASS"
+    assert outside_window.summary == "Slot can only be obtained 3 days out"
+    assert inside_window.status == "CAUTION"
+    assert any("Inside 3-day slot window" in issue for issue in inside_window.issues)
+
+
+def test_ppr_required_always_triggers_caution_even_outside_lead_window() -> None:
+    leg = _build_leg(30)
+    profile = SlotPprProfile(
+        icao="KTEB",
+        slot_required=False,
+        ppr_required=True,
+        slot_lead_days=None,
+        ppr_lead_days=2,
+        notes=None,
+    )
+
+    result = evaluate_slot_ppr(profile, leg, "DEP", None, {"ppr_required": True, "ppr_lead_days": 2})
+
+    assert result.status == "CAUTION"
+    assert result.summary == "PPR required"
 
 
 def test_ssa_category_does_not_infer_slot_or_ppr() -> None:

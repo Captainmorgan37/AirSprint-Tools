@@ -262,3 +262,26 @@ def test_customs_closure_note_not_treated_as_operational_closure() -> None:
     assert result.status == "PASS"
     assert result.summary == "Fl3xx category A approved"
     assert result.issues == []
+
+
+def test_tower_closed_clearance_note_not_treated_as_operational_closure() -> None:
+    profile = _default_profile()
+    leg = {"aircraft_category": "SUPER_MIDSIZE_JET"}
+    notes = [
+        {
+            "note": (
+                "NOTES: Clearance number when tower is closed: 800-448-3724."
+            )
+        }
+    ]
+
+    result = evaluate_suitability(
+        airport_profile=profile,
+        leg=leg,
+        operational_notes=notes,
+        side="arrival",
+    )
+
+    assert result.status == "PASS"
+    assert result.summary == "Fl3xx category A approved"
+    assert result.issues == []
